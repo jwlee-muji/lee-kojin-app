@@ -7,7 +7,8 @@ echo ===================================
 pip install pyinstaller pyinstaller-hooks-contrib
 
 rmdir /s /q build 2>nul
-rmdir /s /q dist 2>nul
+rmdir /s /q dist  2>nul
+del /f /q "LEE電力モニター.spec" 2>nul
 
 pyinstaller ^
   --onefile ^

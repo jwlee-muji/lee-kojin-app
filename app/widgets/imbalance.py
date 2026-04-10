@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import requests
 import pyqtgraph as pg
+from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QTableWidgetItem, QMessageBox, QHeaderView,
@@ -529,8 +530,7 @@ class ImbalanceWidget(QWidget):
         )
 
     def _check_high_price_alerts(self):
-        from datetime import datetime as dt_now
-        today_yyyymmdd = int(dt_now.now().strftime("%Y%m%d"))
+        today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
         try:
             conn = sqlite3.connect('imbalance_data.db')
             try:

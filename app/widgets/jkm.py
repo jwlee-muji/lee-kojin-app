@@ -11,6 +11,7 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QMessageBox, QHeaderView, QApplication, QSplitter,
+    QTableWidgetItem,
 )
 from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont
@@ -263,7 +264,6 @@ class JkmWidget(QWidget):
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
 
     def _update_table(self, highs, lows):
-        from PySide6.QtWidgets import QTableWidgetItem
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(self._dates))
 

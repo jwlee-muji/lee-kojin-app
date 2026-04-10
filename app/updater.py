@@ -11,8 +11,11 @@
 """
 import os
 import sys
+import shutil
+import time
 import subprocess
 import requests
+import winreg
 from pathlib import Path
 from packaging.version import Version
 from version import __version__
@@ -83,8 +86,6 @@ def handle_finish_update(target_exe: Path):
     자신을 target_exe 에 복사 → target_exe 를 --cleanup <자기경로> 로 실행 → 종료.
     QApplication 을 전혀 생성하지 않으므로 DLL 충돌 없음.
     """
-    import shutil, time
-
     current_exe = Path(sys.executable)
     time.sleep(2)   # 구버전 프로세스 완전 종료 대기
 
@@ -111,7 +112,6 @@ def cleanup_update_file(update_exe: Path):
     --cleanup <update_exe> 인수로 기동됐을 때 호출.
     _update.exe 는 이미 종료된 상태이므로 파일 잠금 없이 삭제 가능.
     """
-    import time
     time.sleep(1)   # _update.exe 프로세스 완전 종료 대기
     for _ in range(10):
         try:
@@ -125,7 +125,6 @@ def cleanup_update_file(update_exe: Path):
 # ── 다운로드 폴더 실행 감지 ───────────────────────────────────────────────
 def _get_downloads_folder() -> Path:
     try:
-        import winreg
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
@@ -158,7 +157,6 @@ def handle_downloads_launch():
         return
 
     try:
-        import shutil
         shutil.copy2(str(current_exe), str(install_path))
         subprocess.Popen([str(install_path)])
         sys.exit(0)
