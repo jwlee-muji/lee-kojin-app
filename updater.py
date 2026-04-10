@@ -73,20 +73,41 @@ def apply_update(new_exe_path: Path):
     """
     バッチスクリプト経由で exe を自己置換し、再起動する。
     呼び出し後は QApplication.quit() でアプリを終了すること。
-    (Windows: 実行中の exe は自分自身を上書きできないため bat 経由で行う)
-    """
-    current_exe = Path(sys.executable)
 
-    # 旧プロセス終了を待ってから置換・再起動・自己削除するバッチ
+    改善点:
+    - 現在プロセスの PID を渡し、完全に終了するまで待機してから move を実行
+    - move 失敗時はリトライ（ファイルロック解除待ち）
+    - 新 exe 起動前に追加の待機（DLL 展開猶予）
+    """
+    import os
+    current_exe = Path(sys.executable)
+    current_pid = os.getpid()
+
     bat = (
         "@echo off\n"
-        "timeout /t 2 /nobreak >nul\n"
-        f'move /y "{new_exe_path}" "{current_exe}"\n'
+        # 1. 旧プロセスが完全に終了するまで PID で確認しながら待つ
+        ":wait_exit\n"
+        f'tasklist /fi "PID eq {current_pid}" 2>nul | find /i "{current_pid}" >nul\n'
+        "if not errorlevel 1 (\n"
+        "  timeout /t 1 /nobreak >nul\n"
+        "  goto wait_exit\n"
+        ")\n"
+        # 2. OS がファイルを完全に解放するまで追加で 3 秒待つ
+        "timeout /t 3 /nobreak >nul\n"
+        # 3. ファイル置換（失敗したら 1 秒後にリトライ）
+        ":try_move\n"
+        f'move /y "{new_exe_path}" "{current_exe}" >nul 2>&1\n'
+        "if errorlevel 1 (\n"
+        "  timeout /t 1 /nobreak >nul\n"
+        "  goto try_move\n"
+        ")\n"
+        # 4. 新 exe 起動
         f'start "" "{current_exe}"\n'
+        # 5. バッチ自己削除
         'del "%~f0"\n'
     )
     bat_path = current_exe.parent / "_update_apply.bat"
-    bat_path.write_text(bat, encoding='shift_jis')
+    bat_path.write_text(bat, encoding='cp932')
 
     subprocess.Popen(
         ['cmd', '/c', str(bat_path)],
