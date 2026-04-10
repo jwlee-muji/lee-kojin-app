@@ -211,10 +211,13 @@ class PowerReserveWidget(QWidget):
 
         self.worker = None
 
-        # 30分（1,800,000 ms）ごとに自動更新するタイマーを設定
+        # 新しい低予備率コマを追跡するセット（セッション中の重複通知防止）
+        self._alerted_low_reserve = set()
+
+        # 5分（300,000 ms）ごとに自動更新するタイマーを設定
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.fetch_data)
-        self.timer.start(1800000)
+        self.timer.start(300000)
 
         self.fetch_data()
 
@@ -298,8 +301,47 @@ class PowerReserveWidget(QWidget):
                     item.setBackground(QBrush(QColor("#e0e0e0"))) # 過去の時間は薄いグレーで塗りつぶす
                 self.table.setItem(row_idx, col_idx, item)
                 
-        self.refresh_btn.setEnabled(True)
+            self.refresh_btn.setEnabled(True)
         self.status_label.setText("更新完了")
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
-        
-        self.table.setUpdatesEnabled(True) # UI 업데이트 재개
+
+        self.table.setUpdatesEnabled(True)
+
+        # 今日のデータのみ低予備率アラートをチェック
+        if is_today:
+            self._check_low_reserve_alerts(headers, rows)
+
+    def _check_low_reserve_alerts(self, headers, rows):
+        """現在時刻以降のコマで新たに予備率8%以下が出現した場合に警告する"""
+        now = datetime.now()
+        new_alerts = []
+
+        for row_data in rows:
+            if not row_data:
+                continue
+            try:
+                row_time_obj = datetime.strptime(row_data[0], "%H:%M").time()
+                row_dt = datetime.combine(now.date(), row_time_obj)
+                if row_dt <= now:
+                    continue  # 現在時刻以前のコマは無視
+            except ValueError:
+                continue
+
+            for col_idx in range(1, len(row_data)):
+                try:
+                    val = float(row_data[col_idx].replace('%', '').strip())
+                    if val <= 8.0:
+                        area = headers[col_idx] if col_idx < len(headers) else f"エリア{col_idx}"
+                        key = (row_data[0], area)
+                        if key not in self._alerted_low_reserve:
+                            self._alerted_low_reserve.add(key)
+                            new_alerts.append((row_data[0], area, row_data[col_idx]))
+                except ValueError:
+                    pass
+
+        if new_alerts:
+            lines = "\n".join(f"  {t}  |  {area}:  {val}" for t, area, val in new_alerts)
+            QMessageBox.warning(
+                self, "⚠ 予備率警告",
+                f"現在時刻以降に予備率8%以下のコマが発生しています。\n\n{lines}"
+            )

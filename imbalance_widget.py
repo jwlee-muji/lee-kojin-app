@@ -323,10 +323,13 @@ class ImbalanceWidget(QWidget):
             slot=self.on_hover,
         )
 
-        # 30분 자동 갱신 타이머 (DB 업데이트 후 화면도 갱신)
+        # 40円超コマの通知済みセット（セッション中の重複通知防止）
+        self._alerted_high_prices = set()
+
+        # 5分ごとに自動更新するタイマー (DB 업데이트 후 화면도 갱신)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_database)
-        self.timer.start(1_800_000)
+        self.timer.start(300_000)
 
     def _init_plot_style(self):
         self.plot_widget.setBackground('#ffffff')
@@ -368,6 +371,7 @@ class ImbalanceWidget(QWidget):
         self.status_label.setText(msg)
         self.status_label.setStyleSheet("color: green;")
         self.display_data()
+        self._check_high_price_alerts()
 
     def on_update_error(self, err):
         self.update_btn.setEnabled(True)
@@ -603,3 +607,61 @@ class ImbalanceWidget(QWidget):
             self, "完了",
             "グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"
         )
+
+    def _check_high_price_alerts(self):
+        """DB更新後、本日データで40円超のコマが新たに出現した場合に警告する"""
+        from datetime import datetime as dt_now
+        now = dt_now.now()
+        today_yyyymmdd = int(now.strftime("%Y%m%d"))  # 常に今日のデータを対象
+
+        try:
+            conn = sqlite3.connect('imbalance_data.db')
+            try:
+                cursor = conn.execute('SELECT * FROM imbalance_prices LIMIT 0')
+                col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
+                date_col = col_names[DATE_COL_IDX]
+                df = pd.read_sql(
+                    f'SELECT * FROM imbalance_prices WHERE CAST("{date_col}" AS INTEGER) = ?',
+                    conn, params=[today_yyyymmdd]
+                )
+                df.columns = [c.strip().replace('\ufeff', '') for c in df.columns]
+            finally:
+                conn.close()
+        except Exception:
+            return
+
+        if df.empty:
+            return
+
+        # 余剰・不足 両方のエリア列をチェック
+        check_cols = [
+            col for idx, col in enumerate(df.columns)
+            if (YOJO_START_COL_IDX <= idx <= YOJO_END_COL_IDX
+                or idx >= FUSOKU_START_COL_IDX)
+            and '変更S' not in str(col)
+        ]
+        time_col = df.columns[TIME_COL_IDX]
+
+        new_alerts = []
+        for _, row in df.iterrows():
+            slot_label = str(row[time_col])
+            for col in check_cols:
+                try:
+                    val = float(str(row[col]).replace(',', ''))
+                    if val >= 40:
+                        key = (today_yyyymmdd, slot_label, col)
+                        if key not in self._alerted_high_prices:
+                            self._alerted_high_prices.add(key)
+                            new_alerts.append((slot_label, col, val))
+                except (ValueError, TypeError):
+                    pass
+
+        if new_alerts:
+            lines = "\n".join(
+                f"  コマ {slot}  |  {area}:  {val:,.1f} 円"
+                for slot, area, val in new_alerts
+            )
+            QMessageBox.warning(
+                self, "⚠ インバランス単価 警告",
+                f"本日データに40円超のインバランス単価が発生しました。\n\n{lines}"
+            )

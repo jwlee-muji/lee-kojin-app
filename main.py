@@ -7,6 +7,38 @@ from main_window import MainWindow
 from version import __version__
 
 
+# ── アップデート完了処理 (_update.exe として起動された場合) ───────────────
+def _finish_update(target_exe: Path):
+    """
+    _update.exe として --finish-update <target_exe> 引数で起動された時に呼ばれる。
+    自分自身 (sys.executable = _update.exe) を target_exe に上書きコピーして
+    target_exe を起動し、_update.exe を終了する。
+    Qt を一切起動しないため DLL の競合が発生しない。
+    """
+    import shutil
+    import time
+
+    current_exe = Path(sys.executable)
+    time.sleep(2)  # 旧プロセスが完全に終了するまで待機
+
+    # コピー成功まで最大 30 秒リトライ
+    for _ in range(30):
+        try:
+            shutil.copy2(str(current_exe), str(target_exe))
+            break
+        except OSError:
+            time.sleep(1)
+    else:
+        # コピー失敗 → _update.exe のまま起動してお茶を濁す
+        subprocess.Popen([str(current_exe)])
+        sys.exit(0)
+
+    # 正規パスで新バージョンを起動
+    import subprocess
+    subprocess.Popen([str(target_exe)])
+    sys.exit(0)
+
+
 # ── バックグラウンドでアップデートを確認するスレッド ──────────────────────
 class UpdateCheckWorker(QThread):
     result = Signal(dict)
@@ -107,7 +139,8 @@ class UpdateManager(QObject):
             "ダウンロードが完了しました。\nアプリを再起動します。"
         )
         from updater import apply_update
-        apply_update(Path(new_exe_path))
+        # _update.exe を --finish-update 引数付きで起動して旧アプリを終了
+        apply_update(Path(new_exe_path), Path(sys.executable))
         QApplication.quit()
 
     def _on_download_error(self, err: str):
@@ -121,13 +154,17 @@ class UpdateManager(QObject):
 
 # ── エントリーポイント ────────────────────────────────────────────────────
 def main():
+    # _update.exe として起動された場合 → Qt 初期化前に完了処理だけ行って終了
+    if len(sys.argv) == 3 and sys.argv[1] == '--finish-update':
+        _finish_update(Path(sys.argv[2]))
+        return
+
     app = QApplication(sys.argv)
     app.setFont(QFont("Meiryo", 9))
 
     window = MainWindow()
     window.show()
 
-    # UpdateManager を app の子にしてライフサイクルを管理
     update_manager = UpdateManager(app)
     update_manager.start_check()
 
