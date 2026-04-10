@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
@@ -6,16 +7,85 @@ from PySide6.QtCore import QThread, Signal, Qt, QObject
 from main_window import MainWindow
 from version import __version__
 
+# 설치 경로를 기억해두는 파일 (AppData\Roaming\LEE電力モニター\install_path.txt)
+_APPDATA_DIR  = Path(os.environ.get('APPDATA', Path.home())) / 'LEE電力モニター'
+_INSTALL_FILE = _APPDATA_DIR / 'install_path.txt'
+
+
+def _get_downloads_folder() -> Path:
+    """Windows 다운로드 폴더 경로 반환"""
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        ) as key:
+            return Path(winreg.QueryValueEx(
+                key, "{374DE290-123F-4565-9164-39C4925E467B}"
+            )[0])
+    except Exception:
+        return Path.home() / "Downloads"
+
+
+def _save_install_path(exe_path: Path):
+    _APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+    _INSTALL_FILE.write_text(str(exe_path), encoding='utf-8')
+
+
+def _load_install_path() -> Path | None:
+    try:
+        p = Path(_INSTALL_FILE.read_text(encoding='utf-8').strip())
+        return p if p.parent.exists() else None
+    except Exception:
+        return None
+
+
+def _handle_downloads_folder_launch():
+    """
+    다운로드 폴더에서 실행된 경우 이전 설치 경로로 복사 후 그 경로를 실행.
+    이전 경로가 없으면 다운로드 폴더에서 그대로 실행하고 경로를 저장.
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+
+    import shutil
+    import subprocess
+
+    current_exe = Path(sys.executable)
+    downloads   = _get_downloads_folder()
+
+    if current_exe.parent.resolve() != downloads.resolve():
+        # 다운로드 폴더가 아님 → 현재 경로를 "설치 경로"로 저장
+        _save_install_path(current_exe)
+        return
+
+    # 다운로드 폴더에서 실행됨
+    install_path = _load_install_path()
+    if not install_path:
+        # 이전 경로 미등록 → 여기를 설치 경로로 저장하고 그냥 실행
+        _save_install_path(current_exe)
+        return
+
+    # 이전 설치 경로로 복사 후 실행
+    try:
+        shutil.copy2(str(current_exe), str(install_path))
+        subprocess.Popen([str(install_path)])
+        sys.exit(0)
+    except Exception:
+        # 복사 실패 시 다운로드 폴더에서 그냥 실행
+        _save_install_path(current_exe)
+
 
 # ── アップデート完了処理 (_update.exe として起動された場合) ───────────────
 def _finish_update(target_exe: Path):
     """
     _update.exe として --finish-update <target_exe> 引数で起動された時に呼ばれる。
     自分自身 (sys.executable = _update.exe) を target_exe に上書きコピーして
-    target_exe を起動し、_update.exe を終了する。
+    target_exe を起動し、_update.exe を削除して終了する。
     Qt を一切起動しないため DLL の競合が発生しない。
     """
     import shutil
+    import subprocess
     import time
 
     current_exe = Path(sys.executable)
@@ -34,8 +104,14 @@ def _finish_update(target_exe: Path):
         sys.exit(0)
 
     # 正規パスで新バージョンを起動
-    import subprocess
     subprocess.Popen([str(target_exe)])
+
+    # _update.exe (자기 자신) 삭제
+    try:
+        current_exe.unlink()
+    except Exception:
+        pass
+
     sys.exit(0)
 
 
@@ -158,6 +234,9 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] == '--finish-update':
         _finish_update(Path(sys.argv[2]))
         return
+
+    # 다운로드 폴더에서 실행된 경우 이전 설치 경로로 이동
+    _handle_downloads_folder_launch()
 
     app = QApplication(sys.argv)
     app.setFont(QFont("Meiryo", 9))
