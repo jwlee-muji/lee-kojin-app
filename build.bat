@@ -15,6 +15,7 @@ pyinstaller ^
   --name "LEE電力モニター" ^
   --collect-all selenium ^
   --collect-all webdriver_manager ^
+  --collect-all yfinance ^
   --hidden-import "pandas" ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^

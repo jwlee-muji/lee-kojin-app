@@ -2,6 +2,7 @@ from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QListWidget, QS
 from PySide6.QtCore import Qt
 from power_reserve_widget import PowerReserveWidget
 from imbalance_widget import ImbalanceWidget
+from jkm_widget import JkmWidget
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -42,3 +43,7 @@ class MainWindow(QMainWindow):
         # 4. インバランス単価ウィジェットの接続
         self.content_stack.addWidget(ImbalanceWidget())
         self.sidebar.addItem("インバランス単価")
+
+        # 5. JKM LNG スポット価格ウィジェットの接続
+        self.content_stack.addWidget(JkmWidget())
+        self.sidebar.addItem("JKM LNG 価格")
