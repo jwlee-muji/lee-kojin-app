@@ -106,11 +106,13 @@ def _finish_update(target_exe: Path):
     # 正規パスで新バージョンを起動
     subprocess.Popen([str(target_exe)])
 
-    # _update.exe (자기 자신) 삭제
-    try:
-        current_exe.unlink()
-    except Exception:
-        pass
+    # _update.exe (자기 자신) 삭제 — Windows는 실행 중인 exe를 삭제할 수 없으므로
+    # cmd로 별도 프로세스를 띄워서 이 프로세스 종료 후 파일 삭제
+    subprocess.Popen(
+        f'cmd /c ping -n 4 127.0.0.1 >nul && del /f /q "{current_exe}"',
+        shell=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
 
     sys.exit(0)
 

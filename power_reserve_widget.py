@@ -181,7 +181,7 @@ class PowerReserveWidget(QWidget):
 
         # 上部レイアウト（タイトル + 更新ボタン）
         top_layout = QHBoxLayout()
-        self.title_label = QLabel("エリア別 予備率 (30分自動更新)")
+        self.title_label = QLabel("エリア別 予備率 (5分自動更新)")
 
         # 날짜 선택용 캘린더 위젯
         self.date_edit = QDateEdit()
