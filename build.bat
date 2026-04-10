@@ -6,11 +6,19 @@ echo ===================================
 
 pip install pyinstaller pyinstaller-hooks-contrib
 
+rmdir /s /q build 2>nul
+rmdir /s /q dist 2>nul
+
 pyinstaller ^
   --onefile ^
   --windowed ^
   --name "LEE電力モニター" ^
-  --add-data "version.py;." ^
+  --collect-all selenium ^
+  --collect-all webdriver_manager ^
+  --hidden-import "pandas" ^
+  --hidden-import "pyqtgraph" ^
+  --hidden-import "packaging.version" ^
+  --hidden-import "sqlite3" ^
   main.py
 
 echo.
