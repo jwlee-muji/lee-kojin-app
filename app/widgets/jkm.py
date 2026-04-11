@@ -173,9 +173,9 @@ class JkmWidget(QWidget):
         self.plot_widget = pg.PlotWidget()
         self._init_plot_style()
         splitter.addWidget(self.plot_widget)
-        splitter.setSizes([300, 700])
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 7)
+        splitter.setSizes([450, 550])
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 6)
 
         # 호버 툴팁
         self.tooltip_label = QLabel(self.plot_widget.viewport())
@@ -263,30 +263,31 @@ class JkmWidget(QWidget):
         )
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
 
+    def _create_table_item(self, text):
+        it = QTableWidgetItem(text)
+        it.setTextAlignment(Qt.AlignCenter)
+        return it
+
     def _update_table(self, highs, lows):
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(self._dates))
 
         rev = list(zip(reversed(self._dates), reversed(self._closes), reversed(highs), reversed(lows)))
         for i, (d, c, h, l) in enumerate(rev):
-            def _item(text):
-                it = QTableWidgetItem(text)
-                it.setTextAlignment(Qt.AlignCenter)
-                return it
-            self.table.setItem(i, 0, _item(d))
-            self.table.setItem(i, 1, _item(f"{c:.3f}" if c is not None else "—"))
-            self.table.setItem(i, 2, _item(f"{h:.3f}" if h is not None else "—"))
-            self.table.setItem(i, 3, _item(f"{l:.3f}" if l is not None else "—"))
+            self.table.setItem(i, 0, self._create_table_item(d))
+            self.table.setItem(i, 1, self._create_table_item(f"{c:.3f}" if c is not None else "—"))
+            self.table.setItem(i, 2, self._create_table_item(f"{h:.3f}" if h is not None else "—"))
+            self.table.setItem(i, 3, self._create_table_item(f"{l:.3f}" if l is not None else "—"))
 
             orig_i = len(self._dates) - 1 - i
             if orig_i > 0:
                 prev = self._closes[orig_i - 1]
                 pct  = (c - prev) / prev * 100 if prev else 0
-                chg  = _item(f"{pct:+.2f}%")
+                chg  = self._create_table_item(f"{pct:+.2f}%")
                 chg.setForeground(QBrush(QColor('#cc0000') if pct < 0 else QColor('#006600')))
                 self.table.setItem(i, 4, chg)
             else:
-                self.table.setItem(i, 4, _item("—"))
+                self.table.setItem(i, 4, self._create_table_item("—"))
 
         self.table.setUpdatesEnabled(True)
 

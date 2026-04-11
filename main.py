@@ -19,12 +19,18 @@ def main():
     handle_downloads_launch()
 
     from PySide6.QtWidgets import QApplication
-    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QFont, QIcon
     from app.main_window import MainWindow
     from app.updater import UpdateManager
 
     app = QApplication(sys.argv)
     app.setFont(QFont("Meiryo", 9))
+
+    # PyInstaller --onefile 환경에서는 리소스가 sys._MEIPASS 에 풀림
+    base_dir  = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
+    icon_path = base_dir / "img" / "icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()

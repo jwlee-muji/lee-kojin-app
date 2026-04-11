@@ -16,9 +16,13 @@ import time
 import subprocess
 import requests
 import winreg
+import logging
 from pathlib import Path
+from typing import Optional
 from packaging.version import Version
 from version import __version__
+
+logger = logging.getLogger(__name__)
 
 GITHUB_REPO   = "jwlee-muji/lee-kojin-app"
 RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -43,8 +47,8 @@ def check_for_update(timeout: int = 5):
                     url = asset["browser_download_url"]
                     break
             return {"version": latest, "url": url}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"업데이트 확인 중 오류 발생: {e}")
     return None
 
 
@@ -130,7 +134,8 @@ def _get_downloads_folder() -> Path:
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
         ) as key:
             return Path(winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")[0])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"다운로드 폴더 레지스트리 조회 실패, 기본 경로 반환: {e}")
         return Path.home() / "Downloads"
 
 
@@ -160,7 +165,8 @@ def handle_downloads_launch():
         shutil.copy2(str(current_exe), str(install_path))
         subprocess.Popen([str(install_path)])
         sys.exit(0)
-    except Exception:
+    except Exception as e:
+        logger.error(f"설치 경로로 복사 후 실행 실패: {e}")
         _save_install_path(current_exe)
 
 
@@ -169,11 +175,12 @@ def _save_install_path(exe_path: Path):
     _INSTALL_FILE.write_text(str(exe_path), encoding='utf-8')
 
 
-def _load_install_path() -> 'Path | None':
+def _load_install_path() -> Optional[Path]:
     try:
         p = Path(_INSTALL_FILE.read_text(encoding='utf-8').strip())
         return p if p.parent.exists() else None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"설치 경로 파일 로드 실패 (최초 실행일 수 있음): {e}")
         return None
 
 
@@ -190,8 +197,8 @@ class UpdateCheckWorker(QThread):
             info = check_for_update()
             if info:
                 self.result.emit(info)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"UpdateCheckWorker 실행 중 오류: {e}")
 
 
 class DownloadWorker(QThread):
@@ -231,10 +238,10 @@ class UpdateManager(QObject):
             f"（現在: v{__version__}）\n\n"
             "今すぐ更新しますか？\n"
             "（ダウンロード後、アプリが自動的に再起動します）",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._start_download(info['url'])
 
     def _start_download(self, url: str):

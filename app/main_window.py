@@ -3,6 +3,8 @@ from PySide6.QtCore import Qt
 from .widgets.power_reserve import PowerReserveWidget
 from .widgets.imbalance import ImbalanceWidget
 from .widgets.jkm import JkmWidget
+from .widgets.weather import WeatherWidget
+from .widgets.hjks import HjksWidget
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +39,8 @@ class MainWindow(QMainWindow):
         self._add_page(PowerReserveWidget(), "電力予備率 (OCCTO)")
         self._add_page(ImbalanceWidget(),    "インバランス単価")
         self._add_page(JkmWidget(),          "JKM LNG 価格")
+        self._add_page(WeatherWidget(),      "全国天気 (天気予報)")
+        self._add_page(HjksWidget(),         "発電停止状況 (HJKS)")
 
     def _add_page(self, widget, label: str):
         """위젯과 사이드바 항목을 한 번에 등록. 새 페이지 추가 시 이 메서드만 호출."""

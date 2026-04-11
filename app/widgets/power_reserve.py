@@ -228,6 +228,7 @@ class PowerReserveWidget(QWidget):
         is_today      = selected_date.date() == now.date()
         is_past_day   = selected_date.date() <  now.date()
         threshold     = now - timedelta(minutes=30)
+        new_alerts    = []
 
         for row_idx, row_data in enumerate(rows):
             self.table.insertRow(row_idx)
@@ -243,6 +244,7 @@ class PowerReserveWidget(QWidget):
             for col_idx, cell_data in enumerate(row_data):
                 item = QTableWidgetItem(cell_data)
                 item.setTextAlignment(Qt.AlignCenter)
+                val = None
 
                 reserve_level = None
                 if col_idx > 0:
@@ -257,6 +259,14 @@ class PowerReserveWidget(QWidget):
                 elif reserve_level == 'warning':  item.setBackground(QBrush(QColor("#ffeb3b")))
                 elif is_past:                     item.setBackground(QBrush(QColor("#e0e0e0")))
                 self.table.setItem(row_idx, col_idx, item)
+                
+                # 현재 시간 이후 & 예비율 8% 이하인 경우 알림 목록에 추가 (중복 검사 방지)
+                if is_today and not is_past and reserve_level == 'low' and val is not None:
+                    area = headers[col_idx] if col_idx < len(headers) else f"エリア{col_idx}"
+                    key  = (row_data[0], area)
+                    if key not in self._alerted_low_reserve:
+                        self._alerted_low_reserve.add(key)
+                        new_alerts.append((row_data[0], area, val))
 
             self.refresh_btn.setEnabled(True)
 
@@ -264,32 +274,6 @@ class PowerReserveWidget(QWidget):
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
         self.table.setUpdatesEnabled(True)
 
-        if is_today:
-            self._check_low_reserve_alerts(headers, rows)
-
-    def _check_low_reserve_alerts(self, headers, rows):
-        now        = datetime.now()
-        new_alerts = []
-        for row_data in rows:
-            if not row_data:
-                continue
-            try:
-                row_dt = datetime.combine(now.date(), datetime.strptime(row_data[0], "%H:%M").time())
-                if row_dt <= now:
-                    continue
-            except ValueError:
-                continue
-            for col_idx in range(1, len(row_data)):
-                try:
-                    val = float(row_data[col_idx].replace('%', '').strip())
-                    if val <= 8.0:
-                        area = headers[col_idx] if col_idx < len(headers) else f"エリア{col_idx}"
-                        key  = (row_data[0], area)
-                        if key not in self._alerted_low_reserve:
-                            self._alerted_low_reserve.add(key)
-                            new_alerts.append((row_data[0], area, row_data[col_idx]))
-                except ValueError:
-                    pass
         if new_alerts:
             lines = "\n".join(f"  {t}  |  {area}:  {val}" for t, area, val in new_alerts)
             QMessageBox.warning(

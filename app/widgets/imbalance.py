@@ -327,7 +327,6 @@ class ImbalanceWidget(QWidget):
         self.status_label.setText(msg)
         self.status_label.setStyleSheet("color: green;")
         self.display_data()
-        self._check_high_price_alerts()
 
     def _on_update_error(self, err):
         self.update_btn.setEnabled(True)
@@ -461,6 +460,11 @@ class ImbalanceWidget(QWidget):
         self.plot_widget.enableAutoRange()
         self.status_label.setText(f"{target_date} 表示完了")
         self.status_label.setStyleSheet("color: green;")
+        
+        # 조회한 데이터가 오늘 날짜인 경우에만 40엔 초과 경고 검사 (DB 재조회 방지)
+        today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
+        if target_yyyymmdd == today_yyyymmdd:
+            self._check_high_price_alerts(df, today_yyyymmdd)
 
     def _on_legend_toggle(self, col_name, visible):
         if col_name in self.curves:
@@ -529,23 +533,7 @@ class ImbalanceWidget(QWidget):
             "グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"
         )
 
-    def _check_high_price_alerts(self):
-        today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
-        try:
-            conn = sqlite3.connect('imbalance_data.db')
-            try:
-                cursor    = conn.execute('SELECT * FROM imbalance_prices LIMIT 0')
-                col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
-                date_col  = col_names[DATE_COL_IDX]
-                df        = pd.read_sql(
-                    f'SELECT * FROM imbalance_prices WHERE CAST("{date_col}" AS INTEGER) = ?',
-                    conn, params=[today_yyyymmdd]
-                )
-                df.columns = [c.strip().replace('\ufeff', '') for c in df.columns]
-            finally:
-                conn.close()
-        except Exception:
-            return
+    def _check_high_price_alerts(self, df, today_yyyymmdd: int):
         if df.empty:
             return
 
