@@ -90,21 +90,26 @@ def handle_finish_update(target_exe: Path):
     QApplication 을 전혀 생성하지 않으므로 DLL 충돌 없음.
     """
     current_exe = Path(sys.executable)
+    logger.info(f"アップデート適用開始: {current_exe} → {target_exe}")
     time.sleep(2)   # 구버전 프로세스 완전 종료 대기
 
-    for _ in range(30):
+    for attempt in range(30):
         try:
             shutil.copy2(str(current_exe), str(target_exe))
+            logger.info(f"ファイルコピー成功 (試行 {attempt + 1}回目)")
             break
-        except OSError:
+        except OSError as e:
+            logger.warning(f"コピー失敗 (試行 {attempt + 1}回目): {e}")
             time.sleep(1)
     else:
         # 복사 실패 시 _update.exe 그대로 기동
+        logger.error("30回試行してもコピーに失敗。_update.exe をそのまま起動します。")
         subprocess.Popen([str(current_exe)])
         sys.exit(0)
 
     # 정상 exe 를 --cleanup <_update.exe경로> 로 실행
     # → _update.exe(자신)는 이미 종료 예정이므로 정상 exe 가 파일 잠금 없이 삭제 가능
+    logger.info(f"新バージョンを起動します: {target_exe}")
     subprocess.Popen([str(target_exe), '--cleanup', str(current_exe)])
     sys.exit(0)
 
@@ -275,6 +280,13 @@ class UpdateManager(QObject):
             self._progress_dialog.close()
         QMessageBox.information(None, "アップデート完了", "ダウンロードが完了しました。\nアプリを再起動します。")
         apply_update(Path(new_exe_path), Path(sys.executable))
+        # closeEvent の「トレイ最小化／キャンセル」ダイアログが出ないよう、
+        # MainWindow の終了フラグを立ててから強制終了する
+        for widget in QApplication.topLevelWidgets():
+            if hasattr(widget, '_is_quitting'):
+                widget._is_quitting = True
+            if hasattr(widget, 'network_monitor'):
+                widget.network_monitor.stop()
         QApplication.quit()
 
     def _on_download_error(self, err: str):

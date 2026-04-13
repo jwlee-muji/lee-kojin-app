@@ -24,9 +24,17 @@ class SettingsWidget(BaseWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
         
+        from version import __version__
+        header = QHBoxLayout()
         title = QLabel(self.tr("⚙️ 設定 (Settings)"))
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
-        layout.addWidget(title)
+        ver_lbl = QLabel(f"v{__version__}")
+        ver_lbl.setStyleSheet("color: #888888; font-size: 12px;")
+        ver_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(ver_lbl)
+        layout.addLayout(header)
         layout.addSpacing(10)
         
         scroll = QScrollArea()

@@ -63,7 +63,8 @@ class MainWindow(QMainWindow):
         self._is_quitting = False
         self._setup_tray_icon()
 
-        self.setWindowTitle(self.tr("LEE 個人アプリ")) # 다국어 지원(i18n) 대응
+        from version import __version__
+        self.setWindowTitle(f"LEE 個人アプリ  v{__version__}")
         self.resize(1050, 650)
 
         central = QWidget()
