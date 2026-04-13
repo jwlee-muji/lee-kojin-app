@@ -4,12 +4,25 @@ echo ===================================
 echo LEE電力モニター - ビルドスクリプト
 echo ===================================
 
-pip install pyinstaller pyinstaller-hooks-contrib
+REM venv のアクティベート (依存ライブラリをvenv に統一)
+call .venv\Scripts\activate.bat
 
+REM __pycache__ を完全削除して古い .pyc キャッシュを排除
+echo [1/4] __pycache__ を削除中...
+for /d /r . %%d in (__pycache__) do (
+    if exist "%%d" rmdir /s /q "%%d" 2>nul
+)
+
+REM 前回のビルド成果物を削除
+echo [2/4] 前回のビルドを削除中...
 rmdir /s /q build 2>nul
 rmdir /s /q dist  2>nul
 del /f /q "LEE電力モニター.spec" 2>nul
 
+echo [3/4] PyInstaller をインストール中...
+pip install pyinstaller pyinstaller-hooks-contrib -q
+
+echo [4/4] ビルド開始...
 pyinstaller ^
   --onefile ^
   --windowed ^
