@@ -1,3 +1,3 @@
-from .common import ExcelCopyTableWidget, get_chrome_driver_path
+from app.ui.common import ExcelCopyTableWidget, BaseWidget
 
-__all__ = ['ExcelCopyTableWidget', 'get_chrome_driver_path']
+__all__ = ['ExcelCopyTableWidget', 'BaseWidget']

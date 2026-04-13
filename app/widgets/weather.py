@@ -1,24 +1,16 @@
 import requests
+import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QSplitter, QTableWidgetItem, QHeaderView, QMessageBox, QFrame, QPushButton,
+    QApplication,
 )
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush
-from .common import ExcelCopyTableWidget
+from app.ui.common import ExcelCopyTableWidget, BaseWidget
+from app.core.config import WEATHER_REGIONS, load_settings, API_OPEN_METEO
 
-# 요청하신 9개 주요 지역의 대표 위경도 (순서대로 표시됨)
-REGIONS = [
-    {"name": "北海道 (札幌)", "lat": 43.0642, "lon": 141.3469},
-    {"name": "東北 (仙台)",   "lat": 38.2682, "lon": 140.8694},
-    {"name": "東京",          "lat": 35.6895, "lon": 139.6917},
-    {"name": "中部 (名古屋)", "lat": 35.1815, "lon": 136.9064},
-    {"name": "北陸 (新潟)",   "lat": 37.9161, "lon": 139.0364},
-    {"name": "関西 (大阪)",   "lat": 34.6937, "lon": 135.5023},
-    {"name": "中国 (広島)",   "lat": 34.3853, "lon": 132.4553},
-    {"name": "四国 (高松)",   "lat": 34.3401, "lon": 134.0434},
-    {"name": "九州 (福岡)",   "lat": 33.5902, "lon": 130.4017},
-]
+logger = logging.getLogger(__name__)
 
 # WMO 날씨 코드를 일본어 및 이모지로 변환하는 매핑 함수
 def get_weather_info(code):
@@ -60,34 +52,40 @@ class FetchWeatherWorker(QThread):
     error    = Signal(str)
 
     def run(self):
-        try:
-            lats = ",".join(str(r["lat"]) for r in REGIONS)
-            lons = ",".join(str(r["lon"]) for r in REGIONS)
-            
-            url = "https://api.open-meteo.com/v1/forecast"
-            params = {
-                "latitude": lats,
-                "longitude": lons,
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,cloud_cover_mean,wind_speed_10m_max",
-                "timezone": "Asia/Tokyo"
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            
-            # 단일 지역 조회일 경우 dict로 반환되므로 리스트로 변환
-            if isinstance(data, dict):
-                data = [data]
+        with requests.Session() as session:
+            session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            try:
+                logger.info("Open-Meteo から全国天気予報のデータ取得を開始します。")
+                lats = ",".join(str(r["lat"]) for r in WEATHER_REGIONS)
+                lons = ",".join(str(r["lon"]) for r in WEATHER_REGIONS)
                 
-            self.finished.emit(data)
-        except Exception as e:
-            self.error.emit(f"天気の取得に失敗しました: {str(e)}")
+                params = {
+                    "latitude": lats,
+                    "longitude": lons,
+                    "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,cloud_cover_mean,wind_speed_10m_max",
+                    "timezone": "Asia/Tokyo"
+                }
+                
+                response = session.get(API_OPEN_METEO, params=params, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+                logger.info("天気予報データの取得に成功しました。")
+                
+                # 단일 지역 조회일 경우 dict로 반환되므로 리스트로 변환
+                if isinstance(data, dict):
+                    data = [data]
+                    
+                self.finished.emit(data)
+            except Exception as e:
+                logger.error(f"天気予報データの取得中にエラーが発生しました: {str(e)}")
+                self.error.emit(f"天気の取得に失敗しました: {str(e)}")
 
 
 class RegionCard(QFrame):
     """좌측 목록에 표시될 각 지역별 요약 카드"""
-    def __init__(self, region_name, today_data):
+    def __init__(self, region_name, today_data, is_dark=True):
         super().__init__()
         self.setStyleSheet("QFrame { background: transparent; }")
         layout = QVBoxLayout(self)
@@ -96,7 +94,7 @@ class RegionCard(QFrame):
 
         # 지역명
         name_lbl = QLabel(region_name)
-        name_lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: #333;")
+        name_lbl.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {'#eeeeee' if is_dark else '#333333'}; background: transparent;")
         layout.addWidget(name_lbl)
 
         # 오늘 날씨 정보 파싱 (빈 리스트 방어 처리)
@@ -110,15 +108,22 @@ class RegionCard(QFrame):
         # 날씨 및 기온
         info_layout = QHBoxLayout()
         weather_lbl = QLabel(w_text)
-        weather_lbl.setStyleSheet(f"font-size: 13px; color: {w_color}; font-weight: bold;")
+        weather_lbl.setStyleSheet(f"font-size: 11pt; color: {w_color}; font-weight: bold; background: transparent;")
         
         t_max_str = f"{t_max}℃" if t_max is not None else "—"
         t_min_str = f"{t_min}℃" if t_min is not None else "—"
-        temp_lbl = QLabel(f"<span style='color:#E53935;'>{t_max_str}</span> / <span style='color:#1E88E5;'>{t_min_str}</span>")
-        temp_lbl.setStyleSheet("font-size: 13px;")
+        
+        tc = '#eeeeee' if is_dark else '#333333'
+        temp_lbl = QLabel(f"<span style='color:#ef5350;'>{t_max_str}</span> <span style='color:{tc};'>/</span> <span style='color:#42a5f5;'>{t_min_str}</span>")
+        temp_lbl.setStyleSheet("font-size: 11pt; background: transparent;")
         
         pop_lbl = QLabel(f"☔ {pop}%")
-        pop_lbl.setStyleSheet("font-size: 12px; color: #555;")
+        pop_lbl.setStyleSheet("font-size: 10pt; color: #aaaaaa; background: transparent;")
+
+        # HTML(Rich Text) 렌더링 시 높이 계산 오류로 인한 하단 잘림 방지
+        weather_lbl.setMinimumHeight(24)
+        temp_lbl.setMinimumHeight(24)
+        pop_lbl.setMinimumHeight(20)
 
         info_layout.addWidget(weather_lbl)
         info_layout.addStretch()
@@ -128,7 +133,9 @@ class RegionCard(QFrame):
         layout.addWidget(pop_lbl, alignment=Qt.AlignRight)
 
 
-class WeatherWidget(QWidget):
+class WeatherWidget(BaseWidget):
+    summary_updated = Signal(list)
+
     def __init__(self):
         super().__init__()
         self.weather_data = []
@@ -137,27 +144,27 @@ class WeatherWidget(QWidget):
         
         # 실행 시 날씨 갱신 (이후 1시간마다 자동 갱신)
         self.fetch_weather()
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.fetch_weather)
-        self.timer.start(60 * 60 * 1000)
+        self.setup_timer(self.settings.get("weather_interval", 60), self.fetch_weather)
+        
+    def apply_settings_custom(self):
+        self.update_timer_interval(self.settings.get("weather_interval", 60))
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
         
         # 상단 타이틀 바
         top = QHBoxLayout()
-        title = QLabel("全国天気予報 (Open-Meteo)")
+        title = QLabel(self.tr("全国天気予報 (Open-Meteo)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self.status_label = QLabel("待機中...")
-        self.status_label.setStyleSheet("color: gray;")
+        self.status_label = QLabel(self.tr("待機中..."))
+        self.status_label.setStyleSheet("color: #aaaaaa;")
         
         top.addWidget(title)
         top.addSpacing(15)
         top.addWidget(self.status_label)
         top.addStretch()
         
-        self.refresh_btn = QPushButton("更新 (再取得)")
-        self.refresh_btn.setStyleSheet("background-color: #e6f7ff;")
+        self.refresh_btn = QPushButton(self.tr("更新 (再取得)"))
         self.refresh_btn.clicked.connect(self.fetch_weather)
         top.addWidget(self.refresh_btn)
         
@@ -169,11 +176,6 @@ class WeatherWidget(QWidget):
         
         # 좌측 지역 리스트
         self.region_list = QListWidget()
-        self.region_list.setStyleSheet("""
-            QListWidget { border: 1px solid #ddd; background-color: #fcfcfc; }
-            QListWidget::item { border-bottom: 1px solid #eee; }
-            QListWidget::item:selected { background-color: #e3f2fd; color: black; }
-        """)
         self.region_list.currentRowChanged.connect(self._on_region_selected)
         self.splitter.addWidget(self.region_list)
         
@@ -182,20 +184,19 @@ class WeatherWidget(QWidget):
         detail_layout = QVBoxLayout(detail_container)
         detail_layout.setContentsMargins(10, 0, 0, 0)
         
-        self.detail_title = QLabel("👈 左側の地域を選択してください")
-        self.detail_title.setStyleSheet("font-size: 16px; font-weight: bold; padding-bottom: 10px;")
+        self.detail_title = QLabel(self.tr("👈 左側の地域を選択してください"))
+        self.detail_title.setStyleSheet("font-size: 16px; font-weight: bold; padding-bottom: 10px; color: #eeeeee;")
         detail_layout.addWidget(self.detail_title)
         
         self.detail_table = ExcelCopyTableWidget()
         self.detail_table.setColumnCount(8)
-        self.detail_table.setHorizontalHeaderLabels(["日付", "天気", "最高気温", "最低気温", "降水確率", "降水量", "雲量", "最大風速"])
+        self.detail_table.setHorizontalHeaderLabels([self.tr("日付"), self.tr("天気"), self.tr("最高気温"), self.tr("最低気温"), self.tr("降水確率"), self.tr("降水量"), self.tr("雲量"), self.tr("最大風速")])
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         # 행 높이를 위젯 높이에 맞춰 자동으로 조절
         self.detail_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.detail_table.setAlternatingRowColors(True)
-        self.detail_table.setStyleSheet("alternate-background-color: #f9f9f9; background-color: #ffffff;")
         
         detail_layout.addWidget(self.detail_table)
         self.splitter.addWidget(detail_container)
@@ -203,13 +204,38 @@ class WeatherWidget(QWidget):
         self.splitter.setSizes([250, 650])
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 7)
+        
+        self.apply_theme_custom()
+
+    def apply_theme_custom(self):
+        is_dark = self.is_dark
+        self.detail_title.setStyleSheet(f"font-size: 16px; font-weight: bold; padding-bottom: 10px; color: {'#eeeeee' if is_dark else '#333333'};")
+        
+        if is_dark:
+            self.region_list.setStyleSheet("""
+                QListWidget { background-color: #1e1e1e; border: none; border-right: 1px solid #3e3e42; outline: 0; }
+                QListWidget::item { border-bottom: 1px solid #2d2d30; margin: 0px; border-radius: 0px; }
+                QListWidget::item:hover { background-color: #252526; }
+                QListWidget::item:selected { background-color: #2d2d30; border-left: 4px solid #094771; }
+            """)
+        else:
+            self.region_list.setStyleSheet("""
+                QListWidget { background-color: #ffffff; border: none; border-right: 1px solid #dddddd; outline: 0; }
+                QListWidget::item { border-bottom: 1px solid #eeeeee; margin: 0px; border-radius: 0px; }
+                QListWidget::item:hover { background-color: #fafafa; }
+                QListWidget::item:selected { background-color: #f4f8ff; border-left: 4px solid #2196f3; }
+            """)
+
+        self._populate_region_list()
+        self._on_region_selected(self.region_list.currentRow())
 
     def fetch_weather(self):
+        if not self.check_online_status(): return
         if self.worker and self.worker.isRunning():
             return
         self.refresh_btn.setEnabled(False)
         self.status_label.setText("天気データを取得中...")
-        self.status_label.setStyleSheet("color: blue;")
+        self.status_label.setStyleSheet("color: #64b5f6;")
         
         self.worker = FetchWeatherWorker()
         self.worker.finished.connect(self._on_fetch_success)
@@ -220,19 +246,36 @@ class WeatherWidget(QWidget):
         self.refresh_btn.setEnabled(True)
         self.weather_data = data_list
         self.status_label.setText("取得完了")
-        self.status_label.setStyleSheet("color: green;")
+        self.status_label.setStyleSheet("color: #4caf50;")
         self._populate_region_list()
+
+        # ダッシュボード用に全国の天気を送信
+        weather_summary = []
+        for i, region in enumerate(WEATHER_REGIONS):
+            if i >= len(self.weather_data): break
+            daily = self.weather_data[i].get("daily", {})
+            if daily:
+                w_code = daily.get("weather_code", [0])[0] if daily.get("weather_code") else 0
+                t_max  = daily.get("temperature_2m_max", [None])[0] if daily.get("temperature_2m_max") else None
+                t_min  = daily.get("temperature_2m_min", [None])[0] if daily.get("temperature_2m_min") else None
+                w_text, w_color = get_weather_info(w_code)
+                t_max_str = f"{t_max}℃" if t_max is not None else "—"
+                t_min_str = f"{t_min}℃" if t_min is not None else "—"
+                weather_summary.append((region["name"], w_text, f"{t_max_str} / {t_min_str}", w_color))
+        
+        if weather_summary:
+            self.summary_updated.emit(weather_summary)
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
         self.status_label.setText("取得失敗")
-        self.status_label.setStyleSheet("color: red;")
+        self.status_label.setStyleSheet("color: #ff5252;")
         QMessageBox.warning(self, "エラー", err_msg)
 
     def _populate_region_list(self):
         self.region_list.clear()
         
-        for i, region in enumerate(REGIONS):
+        for i, region in enumerate(WEATHER_REGIONS):
             if i >= len(self.weather_data):
                 break
             
@@ -241,7 +284,7 @@ class WeatherWidget(QWidget):
                 continue
                 
             item = QListWidgetItem(self.region_list)
-            card = RegionCard(region["name"], daily)
+            card = RegionCard(region["name"], daily, self.is_dark)
             item.setSizeHint(card.sizeHint())
             self.region_list.setItemWidget(item, card)
             
@@ -264,7 +307,7 @@ class WeatherWidget(QWidget):
         if index < 0 or index >= len(self.weather_data):
             return
             
-        region_name = REGIONS[index]["name"]
+        region_name = WEATHER_REGIONS[index]["name"]
         self.detail_title.setText(f"📍 {region_name} の詳細天気 (7日間)")
         
         daily = self.weather_data[index].get("daily", {})
@@ -288,16 +331,16 @@ class WeatherWidget(QWidget):
             
             self.detail_table.setItem(row, 0, self._create_table_item(date_str))
             self.detail_table.setItem(row, 1, self._create_table_item(w_text))
-            self.detail_table.setItem(row, 2, self._create_table_item(f"{t_maxs[row]} ℃", "#D32F2F", bold=True))
-            self.detail_table.setItem(row, 3, self._create_table_item(f"{t_mins[row]} ℃", "#1976D2", bold=True))
+            self.detail_table.setItem(row, 2, self._create_table_item(f"{t_maxs[row]} ℃", "#ef5350", bold=True))
+            self.detail_table.setItem(row, 3, self._create_table_item(f"{t_mins[row]} ℃", "#42a5f5", bold=True))
             
             pop_val = pops[row]
-            pop_color = "#388E3C" if pop_val < 30 else "#F57C00" if pop_val < 60 else "#D32F2F"
+            pop_color = "#66bb6a" if pop_val < 30 else "#ffa726" if pop_val < 60 else "#ef5350"
             self.detail_table.setItem(row, 4, self._create_table_item(f"{pop_val} %", pop_color, bold=True))
             
             psum_val = p_sums[row]
             psum_str = f"{psum_val} mm" if psum_val > 0 else "-"
-            self.detail_table.setItem(row, 5, self._create_table_item(psum_str, "#0288D1" if psum_val > 0 else "#9E9E9E"))
+            self.detail_table.setItem(row, 5, self._create_table_item(psum_str, "#29b6f6" if psum_val > 0 else "#9E9E9E"))
 
             cloud_val = clouds[row] if row < len(clouds) else 'N/A'
             self.detail_table.setItem(row, 6, self._create_table_item(f"{cloud_val} %", "#78909C"))

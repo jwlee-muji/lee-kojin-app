@@ -1,0 +1,105 @@
+import os
+import json
+from pathlib import Path
+
+# --- 기본 경로 설정 ---
+APP_NAME = 'LEE電力モニター'
+APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
+APP_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_FILE     = APP_DIR / 'app.log'
+INSTALL_FILE = APP_DIR / 'install_path.txt'
+SETTINGS_FILE = APP_DIR / 'settings.json'
+
+# --- 데이터베이스 파일 경로 ---
+DB_IMBALANCE = APP_DIR / 'imbalance_data.db'
+DB_HJKS      = APP_DIR / 'hjks_data.db'
+DB_JKM       = APP_DIR / 'jkm_data.db'
+
+BACKUP_DIR   = APP_DIR / 'backups'
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- 외부 API 엔드포인트 (API Endpoints) ---
+API_IMBALANCE_BASE = "https://www.imbalanceprices-cs.jp"
+API_OCCTO_RESERVE  = "https://web-kohyo.occto.or.jp/kks-web-public/home/dailyData"
+API_OPEN_METEO     = "https://api.open-meteo.com/v1/forecast"
+API_HJKS_MAIN      = "https://hjks.jepx.or.jp/hjks/unit_status"
+API_HJKS_AJAX      = "https://hjks.jepx.or.jp/hjks/unit_status_ajax"
+
+# --- 위젯별 설정 (Constants) ---
+JKM_TICKER = 'JKM=F'
+
+WEATHER_REGIONS = [
+    {"name": "北海道 (札幌)", "lat": 43.0642, "lon": 141.3469},
+    {"name": "東北 (仙台)",   "lat": 38.2682, "lon": 140.8694},
+    {"name": "東京",          "lat": 35.6895, "lon": 139.6917},
+    {"name": "中部 (名古屋)", "lat": 35.1815, "lon": 136.9064},
+    {"name": "北陸 (新潟)",   "lat": 37.9161, "lon": 139.0364},
+    {"name": "関西 (大阪)",   "lat": 34.6937, "lon": 135.5023},
+    {"name": "中国 (広島)",   "lat": 34.3853, "lon": 132.4553},
+    {"name": "四国 (高松)",   "lat": 34.3401, "lon": 134.0434},
+    {"name": "九州 (福岡)",   "lat": 33.5902, "lon": 130.4017},
+]
+
+HJKS_REGIONS = ["北海道", "東北", "東京", "中部", "北陸", "関西", "中国", "四国", "九州", "沖縄"]
+HJKS_METHODS = ["火力（石炭）", "火力（ガス）", "火力（石油）", "原子力", "水力", "その他"]
+HJKS_COLORS = {
+    "火力（石炭）": "#795548", "火力（ガス）": "#EF5350", "火力（石油）": "#FF9800",
+    "原子力": "#9C27B0",       "水力": "#42A5F5",         "その他": "#9E9E9E"
+}
+
+IMBALANCE_COLORS = [
+    '#2196F3', '#F44336', '#4CAF50', '#FF9800', '#9C27B0',
+    '#00BCD4', '#FF5722', '#8BC34A', '#FFC107', '#3F51B5',
+    '#E91E63', '#009688', '#96CEB4', '#673AB7', '#795548',
+    '#607D8B', '#FF6B6B', '#4ECDC4', '#45B7D1', '#CDDC39',
+]
+
+# --- 인밸런스 CSV 컬럼 인덱스 (Imbalance column indices) ---
+DATE_COL_IDX         = 1
+TIME_COL_IDX         = 3
+YOJO_START_COL_IDX   = 5
+YOJO_END_COL_IDX     = 21
+FUSOKU_START_COL_IDX = 23
+
+# --- 설정 관리 (Settings) ---
+DEFAULT_SETTINGS = {
+    "imbalance_alert": 40.0,
+    "reserve_low": 8.0,
+    "reserve_warn": 10.0,
+    "imbalance_interval": 5,
+    "reserve_interval": 5,
+    "weather_interval": 60,
+    "hjks_interval": 180,
+    "jkm_interval": 180,
+    "retention_days": 1460,
+    "auto_start": False
+}
+
+def load_settings():
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return {**DEFAULT_SETTINGS, **json.load(f)}
+        except Exception: pass
+    return DEFAULT_SETTINGS.copy()
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=4)
+
+def get_theme_qss(theme_name: str) -> str:
+    """분리된 .qss 파일에서 테마 데이터를 읽어옵니다."""
+    import sys
+    if getattr(sys, 'frozen', False):
+        base_dir = Path(sys._MEIPASS) / "app"
+    else:
+        base_dir = Path(__file__).parent.parent
+        
+    qss_file = base_dir / "ui" / "themes" / f"{theme_name}.qss"
+        
+    try:
+        return qss_file.read_text(encoding='utf-8')
+    except Exception as e:
+        print(f"Theme load error: {e}")
+        return ""

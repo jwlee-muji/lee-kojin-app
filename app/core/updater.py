@@ -21,13 +21,12 @@ from pathlib import Path
 from typing import Optional
 from packaging.version import Version
 from version import __version__
+from app.core.config import APP_DIR, INSTALL_FILE
 
 logger = logging.getLogger(__name__)
 
 GITHUB_REPO   = "jwlee-muji/lee-kojin-app"
 RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-_APPDATA_DIR  = Path(os.environ.get('APPDATA', Path.home())) / 'LEE電力モニター'
-_INSTALL_FILE = _APPDATA_DIR / 'install_path.txt'
 
 
 # ── 버전 확인 ─────────────────────────────────────────────────────────────
@@ -171,13 +170,13 @@ def handle_downloads_launch():
 
 
 def _save_install_path(exe_path: Path):
-    _APPDATA_DIR.mkdir(parents=True, exist_ok=True)
-    _INSTALL_FILE.write_text(str(exe_path), encoding='utf-8')
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    INSTALL_FILE.write_text(str(exe_path), encoding='utf-8')
 
 
 def _load_install_path() -> Optional[Path]:
     try:
-        p = Path(_INSTALL_FILE.read_text(encoding='utf-8').strip())
+        p = Path(INSTALL_FILE.read_text(encoding='utf-8').strip())
         return p if p.parent.exists() else None
     except Exception as e:
         logger.debug(f"설치 경로 파일 로드 실패 (최초 실행일 수 있음): {e}")

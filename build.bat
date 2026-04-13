@@ -14,9 +14,9 @@ pyinstaller ^
   --onefile ^
   --windowed ^
   --name "LEE電力モニター" ^
+  --icon "img/icon.ico" ^
   --add-data "img/icon.png;img" ^
-  --collect-all selenium ^
-  --collect-all webdriver_manager ^
+  --add-data "img/icon.ico;img" ^
   --collect-all yfinance ^
   --hidden-import "pandas" ^
   --hidden-import "pyqtgraph" ^
