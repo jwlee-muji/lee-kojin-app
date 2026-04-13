@@ -9,6 +9,7 @@ from PySide6.QtCore import Signal, Qt, QTimer, QThread
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
 from app.ui.common import BaseWidget
+from app.core.events import bus
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,6 @@ class _RetentionWorker(QThread):
             self.error.emit(str(e))
 
 class SettingsWidget(BaseWidget):
-    settings_saved = Signal()
-    
     def __init__(self):
         super().__init__()
         self._current_settings = {}
@@ -194,6 +193,7 @@ class SettingsWidget(BaseWidget):
         self._retention_worker.error.connect(self._on_retention_error)
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)
         self._retention_worker.start()
+        self.track_worker(self._retention_worker)
 
     def _on_retention_finished(self):
         QApplication.restoreOverrideCursor()
@@ -250,7 +250,7 @@ class SettingsWidget(BaseWidget):
         self._current_settings = new_settings
         
         self._show_toast("✅ 保存しました")
-        self.settings_saved.emit()
+        bus.settings_saved.emit()
         
     def _show_toast(self, msg):
         self.toast_label.setText(msg)

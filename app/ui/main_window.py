@@ -1,5 +1,3 @@
-import socket
-import time
 import logging
 import sys
 from pathlib import Path
@@ -9,7 +7,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QGraphicsOpacityEffect
 )
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QColor
+from PySide6.QtNetwork import QNetworkInformation
 from app.widgets.power_reserve import PowerReserveWidget
 from app.widgets.imbalance import ImbalanceWidget
 from app.widgets.jkm import JkmWidget
@@ -19,6 +18,7 @@ from app.widgets.log_viewer import LogViewerWidget
 from app.widgets.settings import SettingsWidget
 from app.widgets.dashboard import DashboardWidget
 from app.ui.common import FadeStackedWidget, get_tinted_icon
+from app.core.events import bus
 
 logger = logging.getLogger(__name__)
 
@@ -29,34 +29,6 @@ class RetentionWorker(QThread):
         from app.core.database import run_retention_policy
         settings = load_settings()
         run_retention_policy(settings.get("retention_days", 1460))
-
-class NetworkMonitor(QThread):
-    status_changed = Signal(bool)
-
-    def __init__(self):
-        super().__init__()
-        self._is_running = True
-        self._last_status = True
-
-    def run(self):
-        while self._is_running:
-            current_status = self._check_connection()
-            if current_status != self._last_status:
-                self._last_status = current_status
-                self.status_changed.emit(current_status)
-            # 5초 간격으로 체크 (UI 블로킹 방지)
-            for _ in range(50):
-                if not self._is_running: break
-                time.sleep(0.1)
-
-    def _check_connection(self):
-        try:
-            socket.create_connection(("1.1.1.1", 53), timeout=2)
-            return True
-        except OSError: return False
-
-    def stop(self):
-        self._is_running = False
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -114,6 +86,8 @@ class MainWindow(QMainWindow):
         self.w_notifications = QListWidget()
         self.w_notifications.setWordWrap(True)
         self.w_notifications.setStyleSheet("QListWidget::item { border-bottom: 1px solid #333; padding: 15px; font-size: 13px; }")
+        self.w_notifications.itemClicked.connect(self._mark_notification_read)
+        self.w_notifications.itemDoubleClicked.connect(self._remove_notification)
 
         self.w_dashboard = DashboardWidget()
 
@@ -125,19 +99,15 @@ class MainWindow(QMainWindow):
         self.w_log = LogViewerWidget()
 
         self.w_settings = SettingsWidget()
-        self.w_settings.settings_saved.connect(self._apply_settings_all)
 
         # 아이콘 목록을 저장하여 테마 변경 시 동기화에 사용
         self._page_icons = [
             "board", "power", "won", "fire", "weather", "plant", "notice", "setting", "log"
         ]
 
-        self.w_reserve.summary_updated.connect(self.w_dashboard.update_occto)
-        self.w_imbalance.data_updated.connect(self.w_dashboard.refresh_imbalance)
-        self.w_jkm.data_updated.connect(self.w_dashboard.refresh_jkm)
-        self.w_hjks.data_updated.connect(self.w_dashboard.refresh_hjks)
-        self.w_weather.summary_updated.connect(self.w_dashboard.update_weather)
-        self.w_dashboard.page_requested.connect(self.sidebar.setCurrentRow)
+        # Event Bus 구독 (기존 하드코딩 연결 제거)
+        bus.settings_saved.connect(self._apply_settings_all)
+        bus.page_requested.connect(self.sidebar.setCurrentRow)
 
         self._add_page(self.w_dashboard, self.tr("ダッシュボード"), "board")
         self._add_page(self.w_reserve, self.tr("電力予備率"), "power")
@@ -159,13 +129,25 @@ class MainWindow(QMainWindow):
         self._retention_worker = RetentionWorker(self)
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)
         QTimer.singleShot(10000, self._retention_worker.start)
+        bus.app_quitting.connect(self._safe_stop_retention)
+
+    def _safe_stop_retention(self):
+        try:
+            if hasattr(self, '_retention_worker') and self._retention_worker.isRunning():
+                self._retention_worker.quit()
+                self._retention_worker.wait(1000)
+        except RuntimeError:
+            pass
         
-        # 네트워크 모니터링 시작
+        # OS 레벨 네트워크 모니터링 시작 (스레드 및 무한 루프 제거)
         QApplication.instance().is_online = True
-        self.network_monitor = NetworkMonitor()
-        self.network_monitor.status_changed.connect(self._on_network_changed)
-        self.network_monitor.finished.connect(self.network_monitor.deleteLater)
-        self.network_monitor.start()
+        QNetworkInformation.loadBackendByFeatures(QNetworkInformation.Feature.Reachability)
+        self.net_info = QNetworkInformation.instance()
+        if self.net_info:
+            self.net_info.reachabilityChanged.connect(self._on_reachability_changed)
+            # 초기 상태 반영
+            is_online = self.net_info.reachability() == QNetworkInformation.Reachability.Online
+            self._update_network_ui(is_online)
 
     def _center_window(self):
         """앱 시작 시 우하단으로 튀는 현상을 방지하기 위해 절대 좌표로 중앙을 계산합니다."""
@@ -179,12 +161,34 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         item = QListWidgetItem(f"[{time_str}] {title}\n{message}")
-        self.w_notifications.insertItem(0, item)
         
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        item.setData(Qt.UserRole, False)  # False = 읽지 않음 (Unread)
+        
+        self.w_notifications.insertItem(0, item)
+        self._update_notification_badge()
+
+    def _mark_notification_read(self, item):
+        if not item.data(Qt.UserRole):
+            item.setData(Qt.UserRole, True)  # 읽음 처리
+            font = item.font()
+            font.setBold(False)
+            item.setFont(font)
+            item.setForeground(QColor("#888888"))
+            self._update_notification_badge()
+
+    def _remove_notification(self, item):
+        row = self.w_notifications.row(item)
+        self.w_notifications.takeItem(row)
+        self._update_notification_badge()
+        
+    def _update_notification_badge(self):
+        unread_count = sum(1 for i in range(self.w_notifications.count()) if not self.w_notifications.item(i).data(Qt.UserRole))
         for i in range(self.sidebar.count()):
-            # 번역된 텍스트와 비교 및 f-string 대신 format 사용
             if self.tr("通知センター") in self.sidebar.item(i).text():
-                self.sidebar.item(i).setText(self.tr("通知センター ({0})").format(self.w_notifications.count()))
+                self.sidebar.item(i).setText(self.tr("通知センター ({0})").format(unread_count))
                 break
 
     def _apply_settings_all(self):
@@ -232,7 +236,11 @@ class MainWindow(QMainWindow):
         self._theme_anim.finished.connect(self._theme_overlay.deleteLater)
         self._theme_anim.start()
         
-    def _on_network_changed(self, is_online):
+    def _on_reachability_changed(self, reachability):
+        is_online = reachability == QNetworkInformation.Reachability.Online
+        self._update_network_ui(is_online)
+
+    def _update_network_ui(self, is_online):
         QApplication.instance().is_online = is_online
         if is_online:
             self.network_lbl.setText(self.tr("🟢 オンライン"))
@@ -252,10 +260,7 @@ class MainWindow(QMainWindow):
         # 사이드바 아이콘 테마 동기화
         for i, icon_name in enumerate(self._page_icons):
             if icon_name and i < self.sidebar.count():
-                base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
-                icon_path = base_dir / "img" / f"{icon_name}.svg"
-                if icon_path.exists():
-                    self.sidebar.item(i).setIcon(get_tinted_icon(str(icon_path), self.is_dark))
+                self.sidebar.item(i).setIcon(get_tinted_icon(f":/img/{icon_name}.svg", self.is_dark))
 
     def _setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -287,8 +292,7 @@ class MainWindow(QMainWindow):
 
     def _quit_app(self):
         self._is_quitting = True
-        if hasattr(self, 'network_monitor'):
-            self.network_monitor.stop()
+        bus.app_quitting.emit()
         QApplication.instance().quit()
 
     def closeEvent(self, event):
@@ -326,13 +330,11 @@ class MainWindow(QMainWindow):
         self.content_stack.addWidget(widget)
         # 알림 센터 추가 시 위젯 초기화 중에 쌓인 알림 수를 배지에 반영
         if widget is self.w_notifications and self.w_notifications.count() > 0:
-            label = self.tr("通知センター ({0})").format(self.w_notifications.count())
+            unread_count = sum(1 for i in range(self.w_notifications.count()) if not self.w_notifications.item(i).data(Qt.UserRole))
+            label = self.tr("通知センター ({0})").format(unread_count)
             
         item = QListWidgetItem(label)
         if icon_name:
-            base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
-            icon_path = base_dir / "img" / f"{icon_name}.svg"
-            if icon_path.exists():
-                item.setIcon(get_tinted_icon(str(icon_path), self.is_dark))
+            item.setIcon(get_tinted_icon(f":/img/{icon_name}.svg", self.is_dark))
                 
         self.sidebar.addItem(item)

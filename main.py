@@ -48,9 +48,12 @@ def main():
     from PySide6.QtCore import QTranslator, QLocale
     from app.ui.main_window import MainWindow
     from app.core.updater import UpdateManager
+    
+    # 고해상도(HiDPI) 모니터 스케일링 지원 명시 (글자/그래프 흐림 방지)
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 
     app = QApplication(sys.argv)
-    
+
     # PyInstaller --onefile環境ではリソースが sys._MEIPASS に展開される
     base_dir  = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
 
@@ -61,18 +64,29 @@ def main():
     # 추후 translations 폴더에 app_ko_KR.qm 등을 넣으면 자동으로 로드됩니다.
     if translator.load(f"app_{locale_name}", str(base_dir / "translations")):
         app.installTranslator(translator)
-        
-    app.setFont(QFont("Meiryo", 9))
+
+    app.setFont(QFont("Meiryo, Segoe UI, sans-serif", 9))
     app.setStyle("Fusion")
-    
+
     from app.ui.theme import get_global_qss
     app.setStyleSheet(get_theme_qss("dark") + "\n" + get_global_qss("dark"))
-    
+
     app.setQuitOnLastWindowClosed(False)  # 트레이 아이콘을 위해 마지막 창이 닫혀도 앱 유지
 
-    icon_path = base_dir / "img" / "icon.png"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    # 앱 아이콘: Qt 가상 리소스(resources_rc) 우선, 없으면 파일 경로로 폴백
+    _resources_rc_loaded = False
+    try:
+        import resources_rc  # noqa: F401
+        _resources_rc_loaded = True
+    except ImportError:
+        logger.debug("resources_rc.py が見つかりません。ファイルパスで代替します。")
+
+    if _resources_rc_loaded:
+        app.setWindowIcon(QIcon(":/img/icon.png"))
+    else:
+        icon_path = base_dir / "img" / "icon.png"
+        if icon_path.exists():
+            app.setWindowIcon(QIcon(str(icon_path)))
 
     is_tray = '--tray' in sys.argv
 

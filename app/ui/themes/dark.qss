@@ -94,3 +94,8 @@ QCalendarWidget QAbstractItemView:disabled { color: #555555; }
 QCalendarWidget QToolButton { background-color: #333333; color: #d4d4d4; border: none; border-radius: 3px; padding: 3px 6px; }
 QCalendarWidget QToolButton:hover { background-color: #444444; }
 QCalendarWidget #qt_calendar_navigationbar { background-color: #2d2d30; padding: 4px; }
+QPushButton:focus { border: 1px solid #0e639c; outline: none; }
+QDateEdit:focus, QComboBox:focus { border: 1px solid #0e639c; outline: none; }
+QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #0e639c; outline: none; }
+QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid #0e639c; outline: none; }
+QListWidget::item:focus { background-color: #2a2d2e; color: #dddddd; }

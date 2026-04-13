@@ -1,5 +1,5 @@
-import pandas as pd
 import logging
+import math
 import sqlite3
 import pyqtgraph as pg
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QSystemTrayIcon,
 )
 from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QFont, QBrush, QColor
+from PySide6.QtGui import QFont, QBrush, QColor, QLinearGradient
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import (
@@ -18,11 +18,77 @@ from app.core.config import (
     DATE_COL_IDX, TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 from app.core.database import get_db_connection
-from app.core.api_client import UpdateImbalanceWorker
+from app.api.imbalance_api import UpdateImbalanceWorker
+from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
 
 logger = logging.getLogger(__name__)
+
+
+class LoadImbalanceDataWorker(QThread):
+    """UI 스레드 프리징을 막기 위해 sqlite3 직접 조회 및 정제(List 변환)를 수행하는 워커"""
+    finished = Signal(list, list, str, int)  # rows, target_cols, time_col, target_yyyymmdd
+    error = Signal(str)
+    no_data = Signal(str)
+
+    def __init__(self, target_date, target_yyyymmdd, is_yojo):
+        super().__init__()
+        self.target_date = target_date
+        self.target_yyyymmdd = target_yyyymmdd
+        self.is_yojo = is_yojo
+
+    def run(self):
+        try:
+            with get_db_connection(DB_IMBALANCE) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM imbalance_prices LIMIT 0')
+                col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
+                date_col = col_names[DATE_COL_IDX]
+                
+                cursor.execute(
+                    f'SELECT * FROM imbalance_prices WHERE "{date_col}" = ? OR "{date_col}" = ?',
+                    (self.target_yyyymmdd, str(self.target_yyyymmdd))
+                )
+                rows = cursor.fetchall()
+
+            if not rows:
+                with get_db_connection(DB_IMBALANCE) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER)) FROM imbalance_prices')
+                    row = cursor.fetchone()
+                if row and row[0] is not None:
+                    min_d, max_d = str(int(row[0])), str(int(row[1]))
+                    msg = (f"{self.target_date} のデータがありません。\n(DBに保存されている期間: "
+                           f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]} ~ {max_d[:4]}/{max_d[4:6]}/{max_d[6:]})")
+                else:
+                    msg = "DBに有効なデータがありません。"
+                self.no_data.emit(msg)
+                return
+
+            time_col = col_names[TIME_COL_IDX]
+            yojo_cols = [c for i, c in enumerate(col_names) if YOJO_START_COL_IDX <= i <= YOJO_END_COL_IDX and '変更S' not in c]
+            fusoku_cols = [c for i, c in enumerate(col_names) if i >= FUSOKU_START_COL_IDX and '変更S' not in c]
+            target_cols = yojo_cols if self.is_yojo else fusoku_cols
+
+            display_cols = [time_col] + target_cols
+            col_indices = {name: idx for idx, name in enumerate(col_names)}
+            
+            # List 메모리 캐스팅을 통한 Pandas 오버헤드 완벽 제거
+            processed_rows = []
+            for row in rows:
+                processed_row = []
+                for col in display_cols:
+                    val = row[col_indices[col]]
+                    if col != time_col and val is not None and str(val).strip() != "":
+                        try: val = float(val)
+                        except ValueError: val = None
+                    processed_row.append(val)
+                processed_rows.append(processed_row)
+
+            self.finished.emit(processed_rows, target_cols, time_col, self.target_yyyymmdd)
+        except (sqlite3.Error, Exception) as e:
+            self.error.emit(str(e))
 
 
 class LegendButton(QFrame):
@@ -67,22 +133,21 @@ class LegendButton(QFrame):
         self._apply_style()
 
     def _apply_style(self):
+        p_colors = UIColors.get_panel_colors(self.is_dark)
         self.setStyleSheet(
             "QFrame { background: transparent; border-radius: 4px; }"
-            f"QFrame:hover {{ background: {'#333333' if self.is_dark else '#d0d0d0'}; }}"
+            f"QFrame:hover {{ background: {p_colors['hover']}; }}"
         )
         if self.active:
             self.indicator.setStyleSheet(f"background-color: {self.color}; border-radius: 2px;")
-            self.text_label.setStyleSheet(f"color: {'#d4d4d4' if self.is_dark else '#000000'}; font-weight: {'normal' if self.is_dark else 'bold'};")
+            self.text_label.setStyleSheet(f"color: {p_colors['text']}; font-weight: {'normal' if self.is_dark else 'bold'};")
         else:
             self.indicator.setStyleSheet("background-color: #cccccc; border-radius: 2px;")
-            self.text_label.setStyleSheet(f"color: {'#666666' if self.is_dark else '#555555'}; text-decoration: line-through; font-weight: normal;")
+            self.text_label.setStyleSheet(f"color: {p_colors['text_dim']}; text-decoration: line-through; font-weight: normal;")
 
 
 
 class ImbalanceWidget(BaseWidget):
-    data_updated = Signal()
-
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
@@ -151,7 +216,11 @@ class ImbalanceWidget(BaseWidget):
         toolbar.setContentsMargins(6, 4, 6, 2)
         self.btn_copy_graph = QPushButton(self.tr("グラフ画像をコピー"))
         self.btn_copy_graph.clicked.connect(self._copy_graph)
+        
+        self.btn_reset_zoom = QPushButton(self.tr("ビュー初期化"))
+        self.btn_reset_zoom.clicked.connect(lambda: self.plot_widget.enableAutoRange())
         toolbar.addStretch()
+        toolbar.addWidget(self.btn_reset_zoom)
         toolbar.addWidget(self.btn_copy_graph)
         graph_col_layout.addLayout(toolbar)
 
@@ -228,11 +297,15 @@ class ImbalanceWidget(BaseWidget):
         self.tooltip_label.setGraphicsEffect(self.tooltip_shadow)
         self.tooltip_label.hide()
 
+        self.hover_points = pg.PlotDataItem(pen=None, symbol='o', symbolSize=12, zValue=10)
+        self.plot_widget.addItem(self.hover_points)
+
         self.curves         = {}
         self.legend_buttons = {}
         self._x_labels      = []
         self._alerted_high_prices = set()
         self.worker = None
+        self._load_worker = None
 
         self.hover_proxy = pg.SignalProxy(
             self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_hover
@@ -255,6 +328,8 @@ class ImbalanceWidget(BaseWidget):
 
     def apply_theme_custom(self):
         is_dark = self.is_dark
+        p_colors = UIColors.get_panel_colors(is_dark)
+        g_colors = UIColors.get_graph_colors(is_dark)
         
         cb_style = f"""
             QCheckBox {{
@@ -262,38 +337,41 @@ class ImbalanceWidget(BaseWidget):
                 padding: 6px 10px; 
                 border-radius: 6px; 
                 background: transparent; 
-                color: {'#d4d4d4' if is_dark else '#333333'};
+                color: {p_colors['text']};
                 font-size: 13px;
             }}
             QCheckBox:hover {{
-                background-color: {'#333333' if is_dark else '#e8e8e8'};
+                background-color: {p_colors['hover']};
             }}
         """
         self.show_table_cb.setStyleSheet(cb_style)
         self.show_graph_cb.setStyleSheet(cb_style)
         
-        self.legend_panel.setStyleSheet(f"background-color: {'#252526' if is_dark else '#e8e8e8'}; border-left: 1px solid {'#3e3e42' if is_dark else '#cccccc'};")
-        self.legend_title.setStyleSheet(f"font-size: 10px; font-weight: bold; color: {'#888888' if is_dark else '#000000'}; letter-spacing: 1px; padding-bottom: 6px; background: transparent;")
-        self.sep.setStyleSheet(f"color: {'#3e3e42' if is_dark else '#cccccc'};")
-        self.sep2.setStyleSheet(f"color: {'#3e3e42' if is_dark else '#cccccc'};")
+        self.legend_panel.setStyleSheet(f"background-color: {p_colors['bg']}; border-left: 1px solid {p_colors['border']};")
+        self.legend_title.setStyleSheet(f"font-size: 10px; font-weight: bold; color: {p_colors['text_dim']}; letter-spacing: 1px; padding-bottom: 6px; background: transparent;")
+        self.sep.setStyleSheet(f"color: {p_colors['border']};")
+        self.sep2.setStyleSheet(f"color: {p_colors['border']};")
         self.tooltip_label.setStyleSheet(
-            f"QLabel {{ background-color: {'#252526' if is_dark else '#ffffff'}; border: 1px solid {'#444444' if is_dark else '#cccccc'}; border-radius: 6px; padding: 7px 10px; color: {'#d4d4d4' if is_dark else '#333333'}; }}"
+            f"QLabel {{ background-color: {p_colors['bg']}; border: 1px solid {p_colors['border']}; border-radius: 6px; padding: 7px 10px; color: {p_colors['text']}; }}"
         )
-        self.plot_widget.setBackground('#1e1e1e' if is_dark else '#ffffff')
-        ax_pen = pg.mkPen(color='#555555' if is_dark else '#dddddd', width=1)
-        text_pen = pg.mkPen('#aaaaaa' if is_dark else '#666666')
+        self.plot_widget.setBackground(g_colors['bg'])
+        ax_pen = pg.mkPen(color=g_colors['axis'], width=1)
+        text_pen = pg.mkPen(g_colors['text'])
         for ax_name in ('left', 'bottom'):
             ax = self.plot_widget.getAxis(ax_name)
             ax.setPen(ax_pen)
             ax.setTextPen(text_pen)
-        self.plot_widget.setLabel('left', '単価 [円/kWh]', color='#aaaaaa' if is_dark else '#666666', size='9pt')
-        self.plot_widget.setLabel('bottom', '時刻コード', color='#aaaaaa' if is_dark else '#666666', size='9pt')
+        self.plot_widget.setLabel('left', '単価 [円/kWh]', color=g_colors['text'], size='9pt')
+        self.plot_widget.setLabel('bottom', '時刻コード', color=g_colors['text'], size='9pt')
         
         if hasattr(self, 'tooltip_shadow'):
             self.tooltip_shadow.setColor(QColor(0, 0, 0, 160) if is_dark else QColor(0, 0, 0, 60))
         
         for btn in self.legend_buttons.values():
             btn.set_theme(is_dark)
+            
+        for curve in self.curves.values():
+            curve.setSymbolPen(pg.mkPen(g_colors['bg'], width=1.5))
 
         # Update Colors in Table and Graph Title (초기화 중에는 스킵)
         if not getattr(self, '_is_initializing', False):
@@ -326,6 +404,7 @@ class ImbalanceWidget(BaseWidget):
         self.worker.error.connect(self._on_update_error)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+        self.track_worker(self.worker)
 
     def _on_update_success(self, msg):
         self.update_btn.setEnabled(True)
@@ -333,7 +412,7 @@ class ImbalanceWidget(BaseWidget):
         self.status_label.setText(msg)
         self.status_label.setStyleSheet("color: #4caf50;")
         self.display_data()
-        self.data_updated.emit()
+        bus.imbalance_updated.emit()
 
     def _on_update_error(self, err):
         self.update_btn.setEnabled(True)
@@ -345,86 +424,68 @@ class ImbalanceWidget(BaseWidget):
     def display_data(self):
         target_date    = self.date_edit.date().toString("yyyy/MM/dd")
         target_yyyymmdd = int(self.date_edit.date().toString("yyyyMMdd"))
+        is_yojo = self.type_combo.currentText() == "余剰インバランス料金単価"
 
         try:
-            with get_db_connection(DB_IMBALANCE) as conn:
-                cursor    = conn.execute('SELECT * FROM imbalance_prices LIMIT 0')
-                col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
-                date_col  = col_names[DATE_COL_IDX]
-                df        = pd.read_sql(
-                    # CAST演算を排除し、インデックスをフル活用する高速クエリ
-                    f'SELECT * FROM imbalance_prices WHERE "{date_col}" = ? OR "{date_col}" = ?',
-                    conn, params=[target_yyyymmdd, str(target_yyyymmdd)]
-                )
-                df.columns = [c.strip().replace('\ufeff', '') for c in df.columns]
-        except (sqlite3.Error, pd.errors.DatabaseError) as e:
-            logger.warning(f"インバランスDBの読み込みに失敗しました: {e}")
-            self.status_label.setText("DBが存在しません。まず更新してください。")
-            self.status_label.setStyleSheet("color: #ff5252;")
-            self.table.clear()
-            self.table.setRowCount(0)
-            self.plot_widget.clear()
-            self._clear_legend()
-            return
+            if getattr(self, '_load_worker', None) and self._load_worker.isRunning():
+                return
+        except RuntimeError:
+            self._load_worker = None
+            
+        self.set_loading(True)
+        self.status_label.setText("データ読込中...")
+        self.status_label.setStyleSheet("color: #64b5f6;")
+        
+        self._load_worker = LoadImbalanceDataWorker(target_date, target_yyyymmdd, is_yojo)
+        self._load_worker.finished.connect(self._on_load_finished)
+        self._load_worker.no_data.connect(self._on_load_no_data)
+        self._load_worker.error.connect(self._on_load_error)
+        self._load_worker.finished.connect(self._load_worker.deleteLater)
+        self._load_worker.start()
+        self.track_worker(self._load_worker)
 
-        time_col    = df.columns[TIME_COL_IDX]
-        yojo_cols   = [c for i, c in enumerate(df.columns)
-                       if YOJO_START_COL_IDX <= i <= YOJO_END_COL_IDX and '変更S' not in str(c)]
-        fusoku_cols = [c for i, c in enumerate(df.columns)
-                       if i >= FUSOKU_START_COL_IDX and '変更S' not in str(c)]
+    def _on_load_no_data(self, msg):
+        self.set_loading(False)
+        self.table.clear()
+        self.table.setRowCount(0)
+        self.plot_widget.clear()
+        self._clear_legend()
+        self.status_label.setText("データなし")
+        self.status_label.setStyleSheet("color: #ff5252;")
+        QMessageBox.information(self, "通知", msg)
+        
+    def _on_load_error(self, err):
+        self.set_loading(False)
+        self.table.clear()
+        self.table.setRowCount(0)
+        self.plot_widget.clear()
+        self._clear_legend()
+        self.status_label.setText("読込エラー")
+        self.status_label.setStyleSheet("color: #ff5252;")
+        logger.warning(f"インバランスDBの読み込みに失敗しました: {err}")
 
-        if df.empty:
-            self.table.clear()
-            self.table.setRowCount(0)
-            self.plot_widget.clear()
-            self._clear_legend()
-            try:
-                with get_db_connection(DB_IMBALANCE) as conn:
-                    row = conn.execute(
-                        f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER))'
-                        f' FROM imbalance_prices'
-                    ).fetchone()
-                if row and row[0] is not None:
-                    min_d, max_d = str(int(row[0])), str(int(row[1]))
-                    msg = (f"{target_date} のデータがありません。\n"
-                           f"(DBに保存されている期間: "
-                           f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]} ~ "
-                           f"{max_d[:4]}/{max_d[4:6]}/{max_d[6:]})")
-                else:
-                    msg = "DBに有効なデータがありません。"
-            except sqlite3.Error:
-                msg = "DBに有効なデータがありません。"
-            self.status_label.setText("データなし")
-            self.status_label.setStyleSheet("color: #ff5252;")
-            QMessageBox.information(self, "通知", msg)
-            return
-
-        target_cols   = yojo_cols if self.type_combo.currentText() == "余剰インバランス料金単価" else fusoku_cols
+    def _on_load_finished(self, rows, target_cols, time_col, target_yyyymmdd):
+        self.set_loading(False)
+        target_date = self.date_edit.date().toString("yyyy/MM/dd")
         display_cols  = [time_col] + target_cols
-
-        # Pandas 데이터 변환 최적화: 루프 전에 문자열을 숫자로 일괄 변환하여 속도/메모리 크게 향상
-        all_numeric_cols = yojo_cols + fusoku_cols
-        for col in all_numeric_cols:
-            if df[col].dtype == object:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
 
         # 테이블
         self.table.setUpdatesEnabled(False)
         self.table.clear()
         self.table.setColumnCount(len(display_cols))
         self.table.setHorizontalHeaderLabels(display_cols)
-        self.table.setRowCount(len(df))
+        self.table.setRowCount(len(rows))
         
         alert_val = self.settings.get("imbalance_alert", 40.0)
 
-        for row_idx, (_, row_data) in enumerate(df[display_cols].iterrows()):
+        for row_idx, row_data in enumerate(rows):
             for col_idx, value in enumerate(row_data):
-                item_text = str(value) if col_idx == 0 else (str(value) if pd.notna(value) else "-")
+                item_text = str(value) if col_idx == 0 else (str(value) if value is not None else "-")
                 item = QTableWidgetItem(item_text)
                 item.setTextAlignment(Qt.AlignCenter)
                 if col_idx > 0:
                     val = value
-                    if pd.notna(val):
+                    if val is not None:
                         if   val >= alert_val: 
                             bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 5)
                             item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg))); f = item.font(); f.setBold(True); item.setFont(f)
@@ -452,9 +513,15 @@ class ImbalanceWidget(BaseWidget):
         self.plot_widget.clear()
         self._clear_legend()
         self.curves    = {}
-        self._x_labels = df[time_col].astype(str).tolist()
+        
+        # 최적화: 데이터가 많아질 경우 버벅임 방지
+        self.plot_widget.setClipToView(True)
+        self.plot_widget.setDownsampling(mode='peak', auto=True)
+        
+        self._x_labels = [str(r[0]) for r in rows]
         x_indices      = list(range(len(self._x_labels)))
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
+        self.plot_widget.getPlotItem().setContentsMargins(10, 10, 10, 10)
 
         step  = 4
         ticks = [(i, s) for i, s in enumerate(self._x_labels) if i % step == 0]
@@ -463,17 +530,31 @@ class ImbalanceWidget(BaseWidget):
             f"{self.type_combo.currentText()}  ({target_date})",
             color='#cccccc' if self.is_dark else '#333333', size='11pt',
         )
+        
+        g_colors = UIColors.get_graph_colors(self.is_dark)
 
         for idx, col in enumerate(target_cols):
             color = IMBALANCE_COLORS[idx % len(IMBALANCE_COLORS)]
+            
+            # 현대화: QLinearGradient를 사용한 수직 그라데이션 Area 필링
+            grad = QLinearGradient(0, 0, 0, 1)
+            grad.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
+            c1 = QColor(color); c1.setAlpha(80)
+            c2 = QColor(color); c2.setAlpha(5)
+            grad.setColorAt(0.0, c1)
+            grad.setColorAt(1.0, c2)
+            
             try:
-                y_vals = df[col].tolist()
+                col_idx = display_cols.index(col)
+                # None일 경우 float('nan') 처리하여 그래프가 자연스럽게 끊기도록 함
+                y_vals = [float('nan') if r[col_idx] is None else r[col_idx] for r in rows]
                 curve  = self.plot_widget.plot(
                     x_indices, y_vals,
                     pen=pg.mkPen(color=color, width=2.5),
-                    symbol='o', symbolSize=5,
+                    fillLevel=0, brush=QBrush(grad),
+                    symbol='o', symbolSize=6,
                     symbolBrush=pg.mkBrush(color),
-                    symbolPen=pg.mkPen('white', width=1.5),
+                    symbolPen=pg.mkPen(g_colors['bg'], width=1.5),
                 )
                 self.curves[col] = curve
                 btn = LegendButton(col, color)
@@ -487,6 +568,9 @@ class ImbalanceWidget(BaseWidget):
         # X축과 Y축이 데이터 영역 밖으로 과도하게 스크롤되지 않도록 뷰포트 제한
         self.plot_widget.getViewBox().setLimits(xMin=-1, xMax=max(1, len(self._x_labels)), yMin=0)
         
+        # clear()로 인해 캔버스에서 삭제된 호버 마커를 다시 추가
+        self.plot_widget.addItem(self.hover_points)
+
         self.plot_widget.enableAutoRange()
         self.status_label.setText(f"{target_date} 表示完了")
         self.status_label.setStyleSheet("color: #4caf50;")
@@ -494,7 +578,7 @@ class ImbalanceWidget(BaseWidget):
         # 조회한 데이터가 오늘 날짜인 경우에만 40엔 초과 경고 검사 (DB 재조회 방지)
         today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
         if target_yyyymmdd == today_yyyymmdd:
-            self._check_high_price_alerts(df, today_yyyymmdd)
+            self._check_high_price_alerts(rows, target_cols, today_yyyymmdd)
 
     def _on_legend_toggle(self, col_name, visible):
         if col_name in self.curves:
@@ -505,12 +589,16 @@ class ImbalanceWidget(BaseWidget):
         vb  = self.plot_widget.plotItem.vb
         if not vb.sceneBoundingRect().contains(pos):
             self.tooltip_label.hide()
+            self.hover_points.setData([], [])
+            self._last_hover_state = None
             return
 
         mouse_pt = vb.mapSceneToView(pos)
         x_idx    = round(mouse_pt.x())
         if not self._x_labels or not (0 <= x_idx < len(self._x_labels)):
             self.tooltip_label.hide()
+            self.hover_points.setData([], [])
+            self._last_hover_state = None
             return
 
         best_col, best_y, best_dist = None, None, float('inf')
@@ -521,20 +609,33 @@ class ImbalanceWidget(BaseWidget):
             if yd is None or x_idx >= len(yd):
                 continue
             y_val = float(yd[x_idx])
-            if pd.isna(y_val):
+            if math.isnan(y_val):
                 continue
+
             dist = abs(y_val - mouse_pt.y())
             if dist < best_dist:
                 best_dist, best_col, best_y = dist, col, y_val
 
         if best_col is None:
             self.tooltip_label.hide()
+            self.hover_points.setData([], [])
+            self._last_hover_state = None
             return
 
-        self.tooltip_label.setText(
-            f"エリア: {best_col}\n時刻: {self._x_labels[x_idx]}\n単価: {best_y:,.2f} 円"
-        )
-        self.tooltip_label.adjustSize()
+        # 현재 마우스 위치의 (X인덱스, 가까운 선) 상태가 이전과 다를 때만 무거운 UI 갱신 로직 실행
+        current_state = (x_idx, best_col)
+        if getattr(self, '_last_hover_state', None) != current_state:
+            self._last_hover_state = current_state
+            
+            g_colors = UIColors.get_graph_colors(self.is_dark)
+            best_color = self.legend_buttons[best_col].color
+            self.hover_points.setData([x_idx], [best_y])
+            self.hover_points.setSymbolBrush(pg.mkBrush(best_color))
+            self.hover_points.setSymbolPen(pg.mkPen(g_colors['bg'], width=1.5))
+            self.tooltip_label.setText(
+                f"エリア: {best_col}\n時刻: {self._x_labels[x_idx]}\n単価: {best_y:,.2f} 円"
+            )
+            self.tooltip_label.adjustSize()
 
         vp       = self.plot_widget.viewport()
         wpos     = vp.mapFromGlobal(self.plot_widget.mapToGlobal(self.plot_widget.mapFromScene(pos)))
@@ -563,33 +664,21 @@ class ImbalanceWidget(BaseWidget):
             "グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"
         )
 
-    def _check_high_price_alerts(self, df, today_yyyymmdd: int):
-        if df.empty:
-            return
-
-        check_cols = [
-            c for i, c in enumerate(df.columns)
-            if (YOJO_START_COL_IDX <= i <= YOJO_END_COL_IDX or i >= FUSOKU_START_COL_IDX)
-            and '変更S' not in str(c)
-        ]
-        time_col   = df.columns[TIME_COL_IDX]
+    def _check_high_price_alerts(self, rows, target_cols, today_yyyymmdd: int):
+        if not rows: return
+        
         new_alerts = []
         alert_val  = self.settings.get("imbalance_alert", 40.0)
         
-        if not check_cols:
-            return
-            
-        # NaN 이슈를 방지하기 위해 컬럼 단위로 안전하게 필터링
-        for col in check_cols:
-            series = df[col]
-            # 임계값을 초과하는 순수 수치만 필터링 (NaN 자동 제외)
-            over_series = series[series >= alert_val]
-            for row_idx, val in over_series.items():
-                slot = str(df.loc[row_idx, time_col])
-                key = (today_yyyymmdd, slot, col)
-                if key not in self._alerted_high_prices:
-                    self._alerted_high_prices.add(key)
-                    new_alerts.append((slot, col, float(val)))
+        for row in rows:
+            slot = str(row[0])
+            for i, col in enumerate(target_cols, start=1):
+                val = row[i]
+                if val is not None and val >= alert_val:
+                    key = (today_yyyymmdd, slot, col)
+                    if key not in self._alerted_high_prices:
+                        self._alerted_high_prices.add(key)
+                        new_alerts.append((slot, col, float(val)))
 
         if new_alerts:
             display_alerts = new_alerts[:5]

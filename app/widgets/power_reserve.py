@@ -12,14 +12,13 @@ from PySide6.QtGui import QBrush, QColor
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import load_settings
-from app.core.api_client import FetchPowerReserveWorker
+from app.api.power_reserve_api import FetchPowerReserveWorker
+from app.core.events import bus
 
 logger = logging.getLogger(__name__)
 
 
 class PowerReserveWidget(BaseWidget):
-    summary_updated = Signal(str, str, float)
-
     def __init__(self):
         super().__init__()
         self._last_headers = []
@@ -87,6 +86,7 @@ class PowerReserveWidget(BaseWidget):
         self.worker.error_occurred.connect(self._handle_error)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+        self.track_worker(self.worker)
 
     def _handle_error(self, err):
         self.set_loading(False)
@@ -177,7 +177,7 @@ class PowerReserveWidget(BaseWidget):
             self.refresh_btn.setEnabled(True)
 
         if min_val != 999.0:
-            self.summary_updated.emit(min_time, min_area, min_val)
+            bus.occto_updated.emit(min_time, min_area, min_val)
 
         self.status_label.setText("更新完了")
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")

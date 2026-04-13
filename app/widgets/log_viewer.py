@@ -83,6 +83,7 @@ class LogViewerWidget(QWidget):
         self.log_text.setFont(QFont("Consolas", 11))  # 텍스트 크기 키움
         self.log_text.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; padding: 10px; border: none;")
         self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)  # 줄바꿈 끄기 (가로 스크롤 허용)
+        self.log_text.document().setMaximumBlockCount(1000)   # 메모리 누수 방지 (최대 1000줄 유지)
         layout.addWidget(self.log_text)
 
     def apply_theme_custom(self):

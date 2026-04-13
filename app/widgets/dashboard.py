@@ -14,7 +14,9 @@ from app.core.config import (
     TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 import sqlite3
+from app.core.database import get_db_connection
 from app.ui.common import BaseWidget, get_tinted_pixmap
+from app.core.events import bus
 
 logger = logging.getLogger(__name__)
 
@@ -72,29 +74,46 @@ class SummaryCard(QFrame):
         # 初期化時に1回だけスケルトンローディングを開始
         self.set_loading(True)
 
+    def _is_effect_alive(self, attr: str) -> bool:
+        """저장된 QGraphicsEffect C++ 객체가 아직 유효한지 확인합니다."""
+        try:
+            if hasattr(self, attr):
+                getattr(self, attr).opacity()
+                return True
+        except RuntimeError:
+            try:
+                delattr(self, attr)
+            except AttributeError:
+                pass
+        return False
+
     def set_loading(self, is_loading: bool):
         """스켈레톤(Skeleton) 로딩 애니메이션 활성화/비활성화"""
         if is_loading:
             self.value_lbl.setText("----")
             self.sub_lbl.setText(self.tr("データ取得中..."))
-            
-            if not hasattr(self, '_skel_effect'):
-                # 위젯이 아닌 카드 자체를 부모로 하여 이펙트의 생명주기를 관리합니다.
-                self._skel_effect = QGraphicsOpacityEffect(self)
+
+            # C++ 객체 유효성 검사 후 필요 시 재생성
+            if not self._is_effect_alive('_skel_effect'):
+                # setGraphicsEffect()가 소유권을 가져가므로 부모를 지정하지 않습니다.
+                self._skel_effect = QGraphicsOpacityEffect()
                 self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity")
                 self._skel_anim.setDuration(800)
                 self._skel_anim.setStartValue(0.3)
                 self._skel_anim.setEndValue(1.0)
-                self._skel_anim.setLoopCount(-1) # 무한 반복
-                
-            # 다른 애니메이션(페이드)이 실행 중일 수 있으므로, 스켈레톤 이펙트를 명시적으로 설정합니다.
+                self._skel_anim.setLoopCount(-1)
+
+            # 페이드 이펙트가 붙어있으면 스켈레톤으로 교체
             self.value_lbl.setGraphicsEffect(self._skel_effect)
             self._skel_anim.start()
         else:
             if hasattr(self, '_skel_anim'):
-                self._skel_anim.stop()
-            # 다른 이펙트(페이드)를 실수로 제거하지 않도록, 스켈레톤 이펙트일 경우에만 제거합니다.
-            if hasattr(self, '_skel_effect') and self.value_lbl.graphicsEffect() == self._skel_effect:
+                try:
+                    self._skel_anim.stop()
+                except RuntimeError:
+                    pass
+            # 스켈레톤 이펙트가 현재 적용 중일 때만 제거 (페이드 이펙트는 건드리지 않음)
+            if self._is_effect_alive('_skel_effect') and self.value_lbl.graphicsEffect() is self._skel_effect:
                 self.value_lbl.setGraphicsEffect(None)
 
     def set_value(self, val_str, sub_str, val_color=None, target_val=None, format_str=None, animate_fade=False):
@@ -139,14 +158,9 @@ class SummaryCard(QFrame):
             self.value_lbl.setText(self._anim_format.format(self._anim_target))
             
     def _start_fade_out(self):
-        # C++ 객체가 삭제되었을 경우를 대비하여 안전하게 재성성하는 로직
-        try:
-            if hasattr(self, '_fade_opacity_effect'): self._fade_opacity_effect.opacity()
-        except RuntimeError:
-            delattr(self, '_fade_opacity_effect')
-            
-        if not hasattr(self, '_fade_opacity_effect'):
-            self._fade_opacity_effect = QGraphicsOpacityEffect(self)
+        # C++ 객체 유효성 검사 후 필요 시 재생성
+        if not self._is_effect_alive('_fade_opacity_effect'):
+            self._fade_opacity_effect = QGraphicsOpacityEffect()  # 소유권은 setGraphicsEffect에게
             self._fade_out_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity")
             self._fade_out_anim.setDuration(180)
             self._fade_out_anim.setEasingCurve(QEasingCurve.InQuad)
@@ -155,7 +169,7 @@ class SummaryCard(QFrame):
             self._fade_in_anim.setDuration(180)
             self._fade_in_anim.setEasingCurve(QEasingCurve.OutQuad)
 
-        if self.value_lbl.graphicsEffect() != self._fade_opacity_effect:
+        if self.value_lbl.graphicsEffect() is not self._fade_opacity_effect:
             self.value_lbl.setGraphicsEffect(self._fade_opacity_effect)
 
         self._fade_in_anim.stop()
@@ -175,12 +189,16 @@ class SummaryCard(QFrame):
         super().mousePressEvent(event)
 
     def enterEvent(self, event):
+        # 애니메이션 중복 트리거 및 큐 꼬임 방지
+        self._hover_anim.stop()
         self._hover_anim.setStartValue(self._hover_offset)
         self._hover_anim.setEndValue(1.0)
         self._hover_anim.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        # 애니메이션 중복 트리거 및 큐 꼬임 방지
+        self._hover_anim.stop()
         self._hover_anim.setStartValue(self._hover_offset)
         self._hover_anim.setEndValue(0.0)
         self._hover_anim.start()
@@ -203,25 +221,25 @@ class SummaryCard(QFrame):
 
     def set_theme(self, is_dark):
         self.is_dark = is_dark
+        # Dynamic Property 상태를 Qt 스타일 엔진에 전파
+        self.setProperty("theme", "dark" if is_dark else "light")
+        self.style().unpolish(self)
+        self.style().polish(self)
         self._apply_style()
         
     def _apply_style(self):
-        bg = "#252526" if self.is_dark else "#ffffff"
-        bg_hover = "#2d2d30" if self.is_dark else "#f4f8ff"
-        border = "#3e3e42" if self.is_dark else "#dddddd"
         tc = "#eeeeee" if self.is_dark else "#333333"
 
-        icon_path = BASE_DIR / "img" / f"{self.icon_name}.svg"
-        if icon_path.exists():
-            self.icon_lbl.setPixmap(get_tinted_pixmap(str(icon_path), self.is_dark))
-        else:
+        try:
+            # Qt 리소스 시스템에서 메모리로 직접 아이콘 로드
+            self.icon_lbl.setPixmap(get_tinted_pixmap(f":/img/{self.icon_name}.svg", self.is_dark))
+        except Exception:
             self.icon_lbl.setText(self.icon_name)
             self.icon_lbl.setStyleSheet("font-size: 26px; background: transparent;")
 
+        # 배경/테두리는 theme.py의 동적 속성에 맡기고, 인스턴스 고유 컬러인 border-left만 별도 적용
         self.setStyleSheet(
-            f"SummaryCard {{ background-color: {bg}; border: 1px solid {border}; "
-            f"border-radius: 8px; border-left: 6px solid {self.card_color}; }}"
-            f"SummaryCard:hover {{ background-color: {bg_hover}; }}"
+            f"SummaryCard {{ border-left: 6px solid {self.card_color}; }}"
         )
         self.title_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; background: transparent; color: {'#aaaaaa' if self.is_dark else '#666666'};")
         self.sub_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; background: transparent; color: {'#888888' if self.is_dark else '#888888'};")
@@ -248,15 +266,6 @@ class DashboardDataService(QObject):
 
     def __init__(self):
         super().__init__()
-        self._conns = {}
-        
-    def _get_conn(self, db_path):
-        """요청된 쓰레드(현재 서비스 쓰레드)에서 영구적으로 유지되는 DB 커넥션 반환"""
-        path_str = str(db_path)
-        if path_str not in self._conns:
-            self._conns[path_str] = sqlite3.connect(path_str, timeout=15.0)
-            self._conns[path_str].execute('PRAGMA journal_mode=WAL;')
-        return self._conns[path_str]
 
     def fetch_data(self, fetch_type):
         if fetch_type in ("all", "imbalance"):
@@ -266,26 +275,19 @@ class DashboardDataService(QObject):
         if fetch_type in ("all", "hjks"):
             self._fetch_hjks()
 
-    def close_connections(self):
-        """앱 종료 시 할당된 모든 커넥션 안전 종료"""
-        for conn in self._conns.values():
-            try:
-                conn.close()
-            except: pass
-        self._conns.clear()
 
     def _fetch_imbalance(self):
         try:
             today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
-            conn = self._get_conn(DB_IMBALANCE)
-            cursor = conn.execute("SELECT name FROM pragma_table_info('imbalance_prices')")
-            cols = [r[0] for r in cursor.fetchall()]
-            if not cols: return self.imb_empty.emit()
-            
-            rows = conn.execute(f'SELECT * FROM imbalance_prices WHERE "{cols[1]}" = ? OR "{cols[1]}" = ?', 
-                                (today_yyyymmdd, str(today_yyyymmdd))).fetchall()
-            
-            if not rows: return self.imb_empty.emit()
+            with get_db_connection(DB_IMBALANCE) as conn:
+                cursor = conn.execute("SELECT name FROM pragma_table_info('imbalance_prices')")
+                cols = [r[0] for r in cursor.fetchall()]
+                if not cols: return self.imb_empty.emit()
+                
+                rows = conn.execute(f'SELECT * FROM imbalance_prices WHERE "{cols[1]}" = ? OR "{cols[1]}" = ?', 
+                                    (today_yyyymmdd, str(today_yyyymmdd))).fetchall()
+                
+                if not rows: return self.imb_empty.emit()
             
             max_val = None
             max_col = ""
@@ -318,12 +320,12 @@ class DashboardDataService(QObject):
             
     def _fetch_jkm(self):
         try:
-            conn = self._get_conn(DB_JKM)
-            rows = conn.execute("SELECT date, close FROM jkm_prices ORDER BY date DESC LIMIT 2").fetchall()
-            if not rows: return self.jkm_empty.emit()
-            latest_date, latest_price = rows[0]
-            pct = ((latest_price - rows[1][1]) / rows[1][1] * 100) if len(rows) > 1 else 0.0
-            self.jkm_result.emit(latest_price, latest_date, pct)
+            with get_db_connection(DB_JKM) as conn:
+                rows = conn.execute("SELECT date, close FROM jkm_prices ORDER BY date DESC LIMIT 2").fetchall()
+                if not rows: return self.jkm_empty.emit()
+                latest_date, latest_price = rows[0]
+                pct = ((latest_price - rows[1][1]) / rows[1][1] * 100) if len(rows) > 1 else 0.0
+                self.jkm_result.emit(latest_price, latest_date, pct)
         except sqlite3.Error as e:
             logger.warning(f"JKM DBのクエリ中にエラー: {e}")
             self.jkm_empty.emit()
@@ -334,10 +336,10 @@ class DashboardDataService(QObject):
     def _fetch_hjks(self):
         try:
             today_str = datetime.now().strftime("%Y-%m-%d")
-            conn = self._get_conn(DB_HJKS)
-            row = conn.execute("SELECT SUM(operating_kw), SUM(stopped_kw) FROM hjks_capacity WHERE date = ?", (today_str,)).fetchone()
-            if not row or row[0] is None: return self.hjks_empty.emit()
-            self.hjks_result.emit(float(row[0]) / 1000.0, float(row[1]) / 1000.0)
+            with get_db_connection(DB_HJKS) as conn:
+                row = conn.execute("SELECT SUM(operating_kw), SUM(stopped_kw) FROM hjks_capacity WHERE date = ?", (today_str,)).fetchone()
+                if not row or row[0] is None: return self.hjks_empty.emit()
+                self.hjks_result.emit(float(row[0]) / 1000.0, float(row[1]) / 1000.0)
         except sqlite3.Error as e:
             logger.warning(f"HJKS DBのクエリ中にエラー: {e}")
             self.hjks_empty.emit()
@@ -348,7 +350,6 @@ class DashboardDataService(QObject):
 
 class DashboardWidget(BaseWidget):
     request_fetch = Signal(str)
-    page_requested = Signal(int)
     
     def __init__(self):
         super().__init__()
@@ -375,8 +376,14 @@ class DashboardWidget(BaseWidget):
 
         self._build_ui()
         
-        self.setup_timer(1, self.refresh_data) # 1분마다 DB 체크
-        self.refresh_data()
+        # Event Bus 구독 (Sub)
+        bus.occto_updated.connect(self.update_occto)
+        bus.imbalance_updated.connect(self.refresh_imbalance)
+        bus.jkm_updated.connect(self.refresh_jkm)
+        bus.hjks_updated.connect(self.refresh_hjks)
+        bus.weather_updated.connect(self.update_weather)
+        
+        self.refresh_data() # 최초 1회 로드, 이후에는 각 위젯이 보내는 EventBus 시그널로만 갱신됨
         
         self.weather_cycle_timer = QTimer(self)
         self.weather_cycle_timer.timeout.connect(self._cycle_weather)
@@ -406,11 +413,11 @@ class DashboardWidget(BaseWidget):
         grid.addWidget(self.card_hjks, 1, 1)
 
         # 카드 클릭 → 해당 탭으로 이동
-        self.card_occto.clicked.connect(lambda: self.page_requested.emit(1))
-        self.card_imb.clicked.connect(lambda: self.page_requested.emit(2))
-        self.card_jkm.clicked.connect(lambda: self.page_requested.emit(3))
-        self.card_wea.clicked.connect(lambda: self.page_requested.emit(4))
-        self.card_hjks.clicked.connect(lambda: self.page_requested.emit(5))
+        self.card_occto.clicked.connect(lambda: bus.page_requested.emit(1))
+        self.card_imb.clicked.connect(lambda: bus.page_requested.emit(2))
+        self.card_jkm.clicked.connect(lambda: bus.page_requested.emit(3))
+        self.card_wea.clicked.connect(lambda: bus.page_requested.emit(4))
+        self.card_hjks.clicked.connect(lambda: bus.page_requested.emit(5))
 
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
@@ -431,8 +438,6 @@ class DashboardWidget(BaseWidget):
         self.card_hjks.set_theme(is_dark)
 
     def _cleanup_thread(self):
-        # 스레드 종료 전 서비스의 DB 커넥션 닫기 요청
-        self._service.close_connections()
         self._service_thread.quit()
         self._service_thread.wait()
         

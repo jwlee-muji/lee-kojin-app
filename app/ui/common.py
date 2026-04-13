@@ -3,7 +3,9 @@ from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon
 from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt
 import pyqtgraph as pg
 from app.core.config import load_settings
+from app.ui.theme import UIColors
 from typing import Optional
+from app.core.events import bus
 
 
 def get_tinted_icon(icon_path: str, is_dark: bool) -> QIcon:
@@ -11,8 +13,7 @@ def get_tinted_icon(icon_path: str, is_dark: bool) -> QIcon:
     pixmap = QPixmap(icon_path)
     painter = QPainter(pixmap)
     painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    color = QColor("#cccccc") if is_dark else QColor("#555555")
-    painter.fillRect(pixmap.rect(), color)
+    painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
     painter.end()
     return QIcon(pixmap)
 
@@ -22,8 +23,7 @@ def get_tinted_pixmap(icon_path: str, is_dark: bool, width: int = 26, height: in
     pixmap = QPixmap(icon_path).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     painter = QPainter(pixmap)
     painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    color = QColor("#cccccc") if is_dark else QColor("#555555")
-    painter.fillRect(pixmap.rect(), color)
+    painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
     painter.end()
     return pixmap
 
@@ -131,11 +131,37 @@ class BaseWidget(QWidget):
         self.is_dark = True
         self.settings = load_settings()
         self.timer = QTimer(self)
+        self._active_workers = []
+        bus.app_quitting.connect(self._safe_terminate_workers)
 
-    def setup_timer(self, interval_minutes: int, timeout_slot):
+    def track_worker(self, worker):
+        """워커 스레드를 등록하여 앱 종료 시 안전하게 해제되도록 관리합니다."""
+        if worker not in self._active_workers:
+            self._active_workers.append(worker)
+            worker.finished.connect(lambda: self._remove_worker(worker))
+
+    def _remove_worker(self, worker):
+        if worker in self._active_workers:
+            self._active_workers.remove(worker)
+
+    def _safe_terminate_workers(self):
+        """앱 종료 시 실행 중인 스레드를 안전하게 종료합니다."""
+        for worker in self._active_workers:
+            if worker.isRunning():
+                worker.quit()
+                worker.wait(1000)
+
+    def setup_timer(self, interval_minutes: int, timeout_slot, stagger_seconds: int = 0):
+        """타이머를 설정합니다.
+        stagger_seconds > 0 이면 첫 실행을 해당 초만큼 지연하여
+        여러 위젯의 API 요청이 동시에 집중되는 것을 방지합니다."""
         self.timer.timeout.connect(timeout_slot)
         self.update_timer_interval(interval_minutes)
-        self.timer.start()
+        if stagger_seconds > 0:
+            # 첫 tick을 지연시킨 후 정규 간격으로 시작
+            QTimer.singleShot(stagger_seconds * 1000, self.timer.start)
+        else:
+            self.timer.start()
 
     def update_timer_interval(self, interval_minutes: int):
         self.timer.setInterval(interval_minutes * 60 * 1000)

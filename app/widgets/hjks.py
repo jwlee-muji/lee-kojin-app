@@ -1,223 +1,21 @@
-import ssl
-import time
-import requests
-import sqlite3
-import urllib3
-import pandas as pd
 import logging
 import pyqtgraph as pg
-from urllib3.util.ssl_ import create_urllib3_context
-from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QSplitter, QFrame, QMessageBox, QApplication, QGraphicsDropShadowEffect
 )
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QColor
-from app.core.config import DB_HJKS, HJKS_REGIONS, HJKS_METHODS, HJKS_COLORS, load_settings
-from app.core.database import get_db_connection
+from app.core.config import HJKS_REGIONS, HJKS_METHODS, HJKS_COLORS, load_settings
+from app.api.hjks_api import FetchHjksWorker, AggregateHjksWorker
 from app.ui.common import BaseWidget
+from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
 
-# SSL 인증서 경고 무시 (JEPX 사이트 SSL 우회용)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 logger = logging.getLogger(__name__)
 
-
-class LegacySSLAdapter(requests.adapters.HTTPAdapter):
-    """JEPX等の古いSSL設定を回避するためのアダプター"""
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        ctx = create_urllib3_context()
-        try:
-            ctx.set_ciphers('DEFAULT@SECLEVEL=1')
-        except ssl.SSLError:
-            pass
-            
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        pool_kwargs['ssl_context'] = ctx
-        return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-
-class FetchHjksWorker(QThread):
-    finished = Signal(str)
-    error    = Signal(str)
-
-    def run(self):
-        try:
-            logger.info("HJKS 発電所稼働状況のAPIデータ取得を開始します。")
-            
-            records = []
-            with requests.Session() as session:
-                session.verify = False
-                session.mount("https://", LegacySSLAdapter())
-                
-                # 1. 初回アクセス（Cookie取得とエリア一覧の取得）
-                session.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                })
-                
-                main_url = "https://hjks.jepx.or.jp/hjks/unit_status"
-                res_main = session.get(main_url, timeout=15)
-                soup = BeautifulSoup(res_main.content, 'html.parser')
-                
-                area_select = soup.find('select', attrs={'name': 'area'})
-                area_options = []
-                if area_select:
-                    for opt in area_select.find_all('option'):
-                        val = opt.get('value')
-                        txt = opt.text.strip()
-                        if val and txt != 'すべて':
-                            mapped_name = next((r for r in HJKS_REGIONS if r in txt), txt)
-                            area_options.append((mapped_name, val))
-                if not area_options:
-                    area_options = [(r, str(i)) for i, r in enumerate(HJKS_REGIONS, 1)]
-
-                ajax_url = "https://hjks.jepx.or.jp/hjks/unit_status_ajax"
-                
-                # 3. 順次取得 (同一セッションのKeep-Aliveを使うため10回でも非常に高速です)
-                for region_name, area_val in area_options:
-                    # HTML用ヘッダーに戻してメインページにアクセスし、セキュリティトークンを取得
-                    if "X-Requested-With" in session.headers:
-                        del session.headers["X-Requested-With"]
-                    session.headers.update({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
-                    
-                    res_m = session.get(main_url, timeout=10)
-                    soup_m = BeautifulSoup(res_m.content, 'html.parser')
-                    
-                    form_data = {}
-                    for inp in soup_m.find_all('input'):
-                        name = inp.get('name')
-                        if name:
-                            form_data[name] = inp.get('value', '')
-                    form_data['area'] = area_val
-                    
-                    # サーバー側のセッションに選択エリアを認識させるための完全なPOST送信
-                    session.post(main_url, data=form_data, timeout=10)
-                    
-                    # AJAX通信用にヘッダーを切り替え
-                    session.headers.update({
-                        "Accept": "application/json, text/javascript, */*; q=0.01",
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Referer": main_url
-                    })
-                    
-                    cb = int(time.time() * 1000)
-                    res = session.get(ajax_url, params={"_": cb}, timeout=10)
-                    
-                    try:
-                        data = res.json()
-                    except Exception:
-                        continue
-                        
-                    if not data or 'startdtList' not in data:
-                        continue
-                        
-                    dates = data['startdtList']
-                    op_series = {item['name']: item['data'] for item in data.get('unitStatusSeriesList', [])}
-                    st_series = {item['name']: item['data'] for item in data.get('unitStopStatusSeriesList', [])}
-                    
-                    for i, dt_str in enumerate(dates):
-                        try:
-                            parsed_dt = datetime.strptime(dt_str, "%Y/%m/%d").strftime("%Y-%m-%d")
-                        except ValueError:
-                            continue
-                            
-                        for api_method in op_series.keys():
-                            op_kw = op_series[api_method][i] if i < len(op_series[api_method]) else 0
-                            st_kw_list = st_series.get(api_method, [])
-                            st_kw = st_kw_list[i] if i < len(st_kw_list) else 0
-                            
-                            method = api_method if api_method in HJKS_METHODS else "その他"
-                            
-                            records.append({
-                                "date": parsed_dt,
-                                "region": region_name,
-                                "method": method,
-                                "operating_kw": op_kw,
-                                "stopped_kw": st_kw
-                            })
-                    # WAF対策の微小スリープ
-                    time.sleep(0.1)
-
-            if not records:
-                raise ValueError("APIから取得したデータが0件です。(通信拒否またはデータなし)")
-
-            df = pd.DataFrame(records)
-            df = df.groupby(['date', 'region', 'method'], as_index=False).sum()
-            
-            with get_db_connection(DB_HJKS) as conn:
-                df.to_sql('hjks_capacity', conn, if_exists='replace', index=False)
-
-            logger.info("HJKS DB更新が完了しました。")
-            self.finished.emit("データ取得およびDB更新完了")
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"HJKS データ取得中の通信エラー: {str(e)}")
-            self.error.emit(f"通信エラー: {str(e)}")
-        except (ValueError, KeyError) as e:
-            logger.error(f"HJKS API応答の解析エラー: {str(e)}")
-            self.error.emit(f"API応答の解析エラー: {str(e)}")
-        except sqlite3.Error as e:
-            logger.error(f"HJKS DB保存エラー: {str(e)}")
-            self.error.emit(f"DB保存エラー: {str(e)}")
-        except Exception as e:
-            logger.error(f"HJKS データ取得中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
-            self.error.emit(f"予期せぬエラー: {str(e)}")
-
-
-class AggregateHjksWorker(QThread):
-    finished = Signal(list, list)
-
-    def run(self):
-        base_daily_data = []
-        dates_str = []
-        try:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            with get_db_connection(DB_HJKS) as conn:
-                # LIMIT 140 を排除し、日付ベースで正確に14日分を取得
-                query = """
-                    SELECT * FROM hjks_capacity WHERE date IN (
-                        SELECT DISTINCT date FROM hjks_capacity WHERE date >= ? ORDER BY date LIMIT 14
-                    ) ORDER BY date
-                """
-                df = pd.read_sql(query, conn, params=[today_str])
-        except sqlite3.Error as e:
-            logger.error(f"HJKS DB 집계 데이터 로드 실패: {e}")
-            df = pd.DataFrame()
-        except Exception as e:
-            logger.error(f"HJKS 집계 중 예기치 않은 오류: {e}", exc_info=True)
-            df = pd.DataFrame()
-
-        if not df.empty and 'region' in df.columns:
-            unique_dates = sorted(df['date'].unique())
-            dates_str = unique_dates
-            for dt in unique_dates:
-                day_df = df[df['date'] == dt]
-                day_dict = {r: {m: {"op": 0, "st": 0} for m in HJKS_METHODS} for r in HJKS_REGIONS}
-                for _, row in day_df.iterrows():
-                    r = row['region']
-                    m = row['method']
-                    if r in day_dict and m in day_dict[r]:
-                        day_dict[r][m]["op"] += row['operating_kw']
-                        day_dict[r][m]["st"] += row['stopped_kw']
-                base_daily_data.append(day_dict)
-        else:
-            base_date = datetime.now().date()
-            dates_str = [(base_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]
-            base_daily_data = [{r: {m: {"op": 0, "st": 0} for m in HJKS_METHODS} for r in HJKS_REGIONS} for _ in range(14)]
-
-        self.finished.emit(base_daily_data, dates_str)
-
-
 class HjksWidget(BaseWidget):
-    data_updated = Signal()
-
     def __init__(self):
         super().__init__()
         self.worker = None
@@ -228,7 +26,8 @@ class HjksWidget(BaseWidget):
         self._build_ui()
         self.fetch_data()
 
-        self.setup_timer(self.settings.get("hjks_interval", 180), self.fetch_data)
+        # 다른 위젯과 API 요청이 겹치지 않도록 15초 지연 후 정규 타이머 시작
+        self.setup_timer(self.settings.get("hjks_interval", 180), self.fetch_data, stagger_seconds=15)
         
     def apply_settings_custom(self):
         self.update_timer_interval(self.settings.get("hjks_interval", 180))
@@ -257,6 +56,10 @@ class HjksWidget(BaseWidget):
         self.copy_btn = QPushButton(self.tr("グラフ画像をコピー"))
         self.copy_btn.clicked.connect(self._copy_graph)
         top.addWidget(self.copy_btn)
+        
+        self.reset_zoom_btn = QPushButton(self.tr("ビュー初期化"))
+        self.reset_zoom_btn.clicked.connect(lambda: self.plot_widget.enableAutoRange())
+        top.addWidget(self.reset_zoom_btn)
         
         layout.addLayout(top)
 
@@ -340,6 +143,9 @@ class HjksWidget(BaseWidget):
         self.tooltip_shadow.setOffset(2, 3)
         self.tooltip_label.setGraphicsEffect(self.tooltip_shadow)
         self.tooltip_label.hide()
+
+        self.hover_point = pg.PlotDataItem(pen=None, symbol='o', symbolSize=12, zValue=10)
+        self.plot_widget.addItem(self.hover_point)
 
         self.hover_proxy = pg.SignalProxy(
             self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_hover
@@ -427,6 +233,7 @@ class HjksWidget(BaseWidget):
         self.worker.error.connect(self._on_fetch_error)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+        self.track_worker(self.worker)
 
     def _on_fetch_success(self, msg):
         self.refresh_btn.setEnabled(True)
@@ -435,7 +242,7 @@ class HjksWidget(BaseWidget):
         self._base_daily_data = None  # 데이터가 갱신되었으므로 캐시 초기화
         self._dates_str = []          # 캐시 초기화에 맞춰 날짜 목록도 리셋
         self._update_chart()
-        self.data_updated.emit()
+        bus.hjks_updated.emit()
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
@@ -455,6 +262,7 @@ class HjksWidget(BaseWidget):
             self._agg_worker.finished.connect(self._on_aggregate_finished)
             self._agg_worker.finished.connect(self._agg_worker.deleteLater)
             self._agg_worker.start()
+            self.track_worker(self._agg_worker)
             return
             
         self._render_chart()
@@ -520,6 +328,9 @@ class HjksWidget(BaseWidget):
         # 뷰포트 제한
         self.plot_widget.getViewBox().setLimits(xMin=-1, xMax=max(1, len(self._dates_str)), yMin=0)
         
+        # clear()로 인해 캔버스에서 삭제된 호버 마커를 다시 추가
+        self.plot_widget.addItem(self.hover_point)
+
         self.plot_widget.enableAutoRange()
 
     def _on_hover(self, evt):
@@ -527,35 +338,48 @@ class HjksWidget(BaseWidget):
         vb = self.plot_widget.plotItem.vb
         if not vb.sceneBoundingRect().contains(pos):
             self.tooltip_label.hide()
+            self.hover_point.setData([], [])
+            self._last_hover_x = None
             return
 
         x_idx = round(vb.mapSceneToView(pos).x())
         if not self.aggregated_data or not (0 <= x_idx < len(self.aggregated_data)):
             self.tooltip_label.hide()
+            self.hover_point.setData([], [])
+            self._last_hover_x = None
             return
 
-        data = self.aggregated_data[x_idx]
-        total_op_mw = data['total_op'] / 1000.0
-        total_st_mw = data['total_st'] / 1000.0
-        tooltip_text = f"<b>{data['date']}</b><br>稼働可能容量: {total_op_mw:,.0f} MW<br><span style='color:#aaaaaa; font-size:11px;'> (停止中: {total_st_mw:,.0f} MW)</span><hr style='margin:4px 0;'>"
-        
-        tooltip_text += f"<span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【発電方式別】</span><br>"
-        for method in HJKS_METHODS:
-            val_kw = data['methods'].get(method, {}).get("op", 0)
-            if val_kw > 0:
-                val_mw = val_kw / 1000.0
-                color = HJKS_COLORS[method]
-                tooltip_text += f"<span style='color:{color};'>■</span> {method}: {val_mw:,.0f} MW<br>"
+        # 동일한 X축 상에서 마우스가 움직일 때는 데이터 갱신 스킵
+        if getattr(self, '_last_hover_x', None) != x_idx:
+            self._last_hover_x = x_idx
+            data = self.aggregated_data[x_idx]
+            total_op_mw = data['total_op'] / 1000.0
 
-        tooltip_text += f"<hr style='margin:4px 0; border-color:{'#555' if self.is_dark else '#ccc'};'><span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【選択エリア別】</span><br>"
-        for region in HJKS_REGIONS:
-            val_kw = data.get('regions', {}).get(region, {}).get("op", 0)
-            if val_kw > 0:
-                val_mw = val_kw / 1000.0
-                tooltip_text += f" • {region}: {val_mw:,.0f} MW<br>"
+            bg_color = '#1e1e1e' if getattr(self, 'is_dark', True) else '#ffffff'
+            self.hover_point.setData([x_idx], [total_op_mw])
+            self.hover_point.setSymbolBrush(pg.mkBrush('#FF9800'))
+            self.hover_point.setSymbolPen(pg.mkPen(bg_color, width=1.5))
 
-        self.tooltip_label.setText(tooltip_text)
-        self.tooltip_label.adjustSize()
+            total_st_mw = data['total_st'] / 1000.0
+            tooltip_text = f"<b>{data['date']}</b><br>稼働可能容量: {total_op_mw:,.0f} MW<br><span style='color:#aaaaaa; font-size:11px;'> (停止中: {total_st_mw:,.0f} MW)</span><hr style='margin:4px 0;'>"
+            
+            tooltip_text += f"<span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【発電方式別】</span><br>"
+            for method in HJKS_METHODS:
+                val_kw = data['methods'].get(method, {}).get("op", 0)
+                if val_kw > 0:
+                    val_mw = val_kw / 1000.0
+                    color = HJKS_COLORS[method]
+                    tooltip_text += f"<span style='color:{color};'>■</span> {method}: {val_mw:,.0f} MW<br>"
+
+            tooltip_text += f"<hr style='margin:4px 0; border-color:{'#555' if self.is_dark else '#ccc'};'><span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【選択エリア別】</span><br>"
+            for region in HJKS_REGIONS:
+                val_kw = data.get('regions', {}).get(region, {}).get("op", 0)
+                if val_kw > 0:
+                    val_mw = val_kw / 1000.0
+                    tooltip_text += f" • {region}: {val_mw:,.0f} MW<br>"
+
+            self.tooltip_label.setText(tooltip_text)
+            self.tooltip_label.adjustSize()
 
         vp = self.plot_widget.viewport()
         wpos = vp.mapFromGlobal(self.plot_widget.mapToGlobal(self.plot_widget.mapFromScene(pos)))

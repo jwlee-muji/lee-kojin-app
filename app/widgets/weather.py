@@ -1,98 +1,93 @@
-import requests
 import logging
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QSplitter, QTableWidgetItem, QHeaderView, QMessageBox, QFrame, QPushButton,
     QApplication,
 )
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
-from PySide6.QtGui import QFont, QColor, QBrush
+from PySide6.QtGui import QFont, QColor, QBrush, QPixmap
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
-from app.core.config import WEATHER_REGIONS, load_settings, API_OPEN_METEO
+from app.ui.theme import UIColors
+from app.core.config import WEATHER_REGIONS, BASE_DIR, load_settings
+from app.api.weather_api import FetchWeatherWorker
+from app.core.events import bus
 
 logger = logging.getLogger(__name__)
 
-# WMO 날씨 코드를 일본어 및 이모지로 변환하는 매핑 함수
-def get_weather_info(code):
-    mapping = {
-        0:  ("☀️ 晴れ", "#FF9800"),
-        1:  ("🌤️ 概ね晴れ", "#FFB74D"),
-        2:  ("⛅ 一部曇り", "#78909C"),
-        3:  ("☁️ 曇り", "#607D8B"),
-        45: ("🌫️ 霧", "#9E9E9E"),
-        48: ("🌫️ 霧氷", "#9E9E9E"),
-        51: ("🌧️ 弱い霧雨", "#4FC3F7"),
-        53: ("🌧️ 霧雨", "#29B6F6"),
-        55: ("🌧️ 強い霧雨", "#039BE5"),
-        56: ("🌧️ 弱い着氷性霧雨", "#4DD0E1"),
-        57: ("🌧️ 強い着氷性霧雨", "#00BCD4"),
-        61: ("☔ 弱い雨", "#4FC3F7"),
-        63: ("☔ 雨", "#039BE5"),
-        65: ("☔ 強い雨", "#0277BD"),
-        66: ("☔ 弱い着氷性の雨", "#26C6DA"),
-        67: ("☔ 強い着氷性の雨", "#0097A7"),
-        71: ("❄️ 弱い雪", "#E1F5FE"),
-        73: ("❄️ 雪", "#B3E5FC"),
-        75: ("❄️ 強い雪", "#81D4FA"),
-        77: ("❄️ 霧雪", "#E1F5FE"),
-        80: ("🌦️ 弱い小雨", "#4FC3F7"),
-        81: ("🌦️ 小雨", "#039BE5"),
-        82: ("🌦️ 激しい小雨", "#0277BD"),
-        85: ("🌨️ 弱い雪降る", "#B3E5FC"),
-        86: ("🌨️ 強い雪降る", "#81D4FA"),
-        95: ("⛈️ 雷雨", "#F44336"),
-        96: ("⛈️ 弱い雹を伴う雷雨", "#D32F2F"),
-        99: ("⛈️ 強い雹を伴う雷雨", "#B71C1C"),
-    }
-    return mapping.get(code, ("❓ 不明", "#757575"))
+# --- WMO 코드 → (일본어 텍스트, 강조색, SVG 아이콘 이름) 매핑 ---
+_WMO_MAP: dict[int, tuple[str, str, str]] = {
+    0:  ("晴れ",            "#FF9800", "sunny"),
+    1:  ("概ね晴れ",        "#FFB74D", "mostly_sunny"),
+    2:  ("一部曇り",        "#78909C", "partly_cloudy"),
+    3:  ("曇り",            "#607D8B", "cloudy"),
+    45: ("霧",              "#9E9E9E", "fog"),
+    48: ("霧氷",            "#9E9E9E", "fog"),
+    51: ("弱い霧雨",        "#4FC3F7", "drizzle"),
+    53: ("霧雨",            "#29B6F6", "drizzle"),
+    55: ("強い霧雨",        "#039BE5", "drizzle"),
+    56: ("弱い着氷性霧雨",  "#4DD0E1", "freezing_drizzle"),
+    57: ("強い着氷性霧雨",  "#00BCD4", "freezing_drizzle"),
+    61: ("弱い雨",          "#4FC3F7", "light_rain"),
+    63: ("雨",              "#039BE5", "rain"),
+    65: ("強い雨",          "#0277BD", "rain"),
+    66: ("弱い着氷性の雨",  "#26C6DA", "freezing_rain"),
+    67: ("強い着氷性の雨",  "#0097A7", "freezing_rain"),
+    71: ("弱い雪",          "#E1F5FE", "light_snow"),
+    73: ("雪",              "#B3E5FC", "snow"),
+    75: ("強い雪",          "#81D4FA", "snow"),
+    77: ("霧雪",            "#E1F5FE", "light_snow"),
+    80: ("弱い小雨",        "#4FC3F7", "rain_shower"),
+    81: ("小雨",            "#039BE5", "rain_shower"),
+    82: ("激しい小雨",      "#0277BD", "rain_shower"),
+    85: ("弱い雪降る",      "#B3E5FC", "snow_shower"),
+    86: ("強い雪降る",      "#81D4FA", "snow_shower"),
+    95: ("雷雨",            "#F44336", "thunderstorm"),
+    96: ("弱い雹の雷雨",   "#D32F2F", "thunderstorm_hail"),
+    99: ("強い雹の雷雨",   "#B71C1C", "thunderstorm_hail"),
+}
+_UNKNOWN = ("不明", "#757575", "cloudy")
 
+def get_weather_info(code: int) -> tuple[str, str]:
+    """WMO 코드 → (텍스트, 강조색) 반환 (하위 호환)"""
+    t, c, _ = _WMO_MAP.get(code, _UNKNOWN)
+    return t, c
 
-class FetchWeatherWorker(QThread):
-    finished = Signal(list)
-    error    = Signal(str)
+# --- QPixmap 캐시: (icon_name, size) → QPixmap ---
+_PIXMAP_CACHE: dict[tuple[str, int], QPixmap] = {}
 
-    def run(self):
-        with requests.Session() as session:
-            session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-            try:
-                logger.info("Open-Meteo から全国天気予報のデータ取得を開始します。")
-                lats = ",".join(str(r["lat"]) for r in WEATHER_REGIONS)
-                lons = ",".join(str(r["lon"]) for r in WEATHER_REGIONS)
-                
-                params = {
-                    "latitude": lats,
-                    "longitude": lons,
-                    "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,cloud_cover_mean,wind_speed_10m_max",
-                    "timezone": "Asia/Tokyo"
-                }
-                
-                response = session.get(API_OPEN_METEO, params=params, timeout=15)
-                response.raise_for_status()
-                data = response.json()
-                logger.info("天気予報データの取得に成功しました。")
-                
-                # 단일 지역 조회일 경우 dict로 반환되므로 리스트로 변환
-                if isinstance(data, dict):
-                    data = [data]
-                    
-                self.finished.emit(data)
-            except requests.exceptions.RequestException as e:
-                logger.error(f"天気予報データの取得中に通信エラーが発生しました: {str(e)}")
-                self.error.emit(f"天気の取得に失敗しました(通信エラー): {str(e)}")
-            except (ValueError, KeyError) as e:
-                logger.error(f"天気予報APIの応答解析中にエラーが発生しました: {str(e)}")
-                self.error.emit(f"API応答の解析に失敗しました: {str(e)}")
-            except Exception as e:
-                logger.error(f"天気予報データの取得中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
-                self.error.emit(f"天気の取得中に予期せぬエラーが発生しました: {str(e)}")
+def get_weather_pixmap(wmo_code: int, size: int = 28) -> QPixmap:
+    """WMO 코드에 해당하는 SVG 아이콘 QPixmap을 반환합니다.
+    QRC 경로를 우선 시도하고, 없으면 파일 경로로 폴백합니다.
+    결과는 모듈 레벨 캐시에 저장되어 재사용됩니다."""
+    _, _, icon_name = _WMO_MAP.get(wmo_code, _UNKNOWN)
+    cache_key = (icon_name, size)
+    if cache_key in _PIXMAP_CACHE:
+        return _PIXMAP_CACHE[cache_key]
+
+    # 1순위: Qt 가상 리소스 시스템 (EXE 번들용, resources_rc 로드 후 사용 가능)
+    pixmap = QPixmap(f":/img/weather/{icon_name}.svg")
+    if pixmap.isNull():
+        # 2순위: 파일 경로 (개발 환경 또는 resources_rc 미존재 시)
+        svg_path = BASE_DIR / "img" / "weather" / f"{icon_name}.svg"
+        if svg_path.exists():
+            pixmap = QPixmap(str(svg_path))
+
+    if not pixmap.isNull():
+        pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    _PIXMAP_CACHE[cache_key] = pixmap
+    return pixmap
+
 
 
 class RegionCard(QFrame):
     """좌측 목록에 표시될 각 지역별 요약 카드"""
     def __init__(self, region_name, today_data, is_dark=True):
         super().__init__()
+        # QSS 테마 연동: 인라인 스타일 최소화, UIColors 상수 사용
+        tc       = UIColors.text_emphasis(is_dark)
+        tc_dim   = UIColors.text_secondary(is_dark)
         self.setStyleSheet("QFrame { background: transparent; }")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -100,7 +95,9 @@ class RegionCard(QFrame):
 
         # 지역명
         name_lbl = QLabel(region_name)
-        name_lbl.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {'#eeeeee' if is_dark else '#333333'}; background: transparent;")
+        name_lbl.setStyleSheet(
+            f"font-weight: bold; font-size: 14px; color: {tc}; background: transparent;"
+        )
         layout.addWidget(name_lbl)
 
         # 오늘 날씨 정보 파싱 (빈 리스트 방어 처리)
@@ -108,40 +105,57 @@ class RegionCard(QFrame):
         t_max  = today_data.get("temperature_2m_max",           [None])[0] if today_data.get("temperature_2m_max")           else None
         t_min  = today_data.get("temperature_2m_min",           [None])[0] if today_data.get("temperature_2m_min")           else None
         pop    = today_data.get("precipitation_probability_max",   [0])[0] if today_data.get("precipitation_probability_max") else 0
-        
+
         w_text, w_color = get_weather_info(w_code)
 
-        # 날씨 및 기온
+        # 날씨 아이콘 + 텍스트
         info_layout = QHBoxLayout()
-        weather_lbl = QLabel(w_text)
-        weather_lbl.setStyleSheet(f"font-size: 11pt; color: {w_color}; font-weight: bold; background: transparent;")
-        
+
+        icon_lbl = QLabel()
+        icon_pixmap = get_weather_pixmap(w_code, size=28)
+        if not icon_pixmap.isNull():
+            icon_lbl.setPixmap(icon_pixmap)
+        else:
+            # SVG 미존재 시 이모지 폴백
+            icon_lbl.setText(w_text.split(" ")[0])
+            icon_lbl.setStyleSheet("font-size: 18px; background: transparent;")
+        icon_lbl.setFixedSize(32, 28)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+
+        weather_text = " ".join(w_text.split(" ")[1:]) if " " in w_text else w_text
+        weather_lbl = QLabel(weather_text)
+        weather_lbl.setStyleSheet(
+            f"font-size: 10pt; color: {w_color}; font-weight: bold; background: transparent;"
+        )
+
         t_max_str = f"{t_max}℃" if t_max is not None else "—"
         t_min_str = f"{t_min}℃" if t_min is not None else "—"
-        
-        tc = '#eeeeee' if is_dark else '#333333'
-        temp_lbl = QLabel(f"<span style='color:#ef5350;'>{t_max_str}</span> <span style='color:{tc};'>/</span> <span style='color:#42a5f5;'>{t_min_str}</span>")
-        temp_lbl.setStyleSheet("font-size: 11pt; background: transparent;")
-        
+
+        temp_lbl = QLabel(
+            f"<span style='color:#ef5350;'>{t_max_str}</span>"
+            f" <span style='color:{tc};'>/</span>"
+            f" <span style='color:#42a5f5;'>{t_min_str}</span>"
+        )
+        temp_lbl.setStyleSheet("font-size: 10pt; background: transparent;")
+
         pop_lbl = QLabel(f"☔ {pop}%")
-        pop_lbl.setStyleSheet("font-size: 10pt; color: #aaaaaa; background: transparent;")
+        pop_lbl.setStyleSheet(f"font-size: 9pt; color: {tc_dim}; background: transparent;")
 
         # HTML(Rich Text) 렌더링 시 높이 계산 오류로 인한 하단 잘림 방지
-        weather_lbl.setMinimumHeight(24)
-        temp_lbl.setMinimumHeight(24)
-        pop_lbl.setMinimumHeight(20)
+        weather_lbl.setMinimumHeight(22)
+        temp_lbl.setMinimumHeight(22)
+        pop_lbl.setMinimumHeight(18)
 
+        info_layout.addWidget(icon_lbl)
         info_layout.addWidget(weather_lbl)
         info_layout.addStretch()
         info_layout.addWidget(temp_lbl)
-        
+
         layout.addLayout(info_layout)
         layout.addWidget(pop_lbl, alignment=Qt.AlignRight)
 
 
 class WeatherWidget(BaseWidget):
-    summary_updated = Signal(list)
-
     def __init__(self):
         super().__init__()
         self.weather_data = []
@@ -215,7 +229,9 @@ class WeatherWidget(BaseWidget):
 
     def apply_theme_custom(self):
         is_dark = self.is_dark
-        self.detail_title.setStyleSheet(f"font-size: 16px; font-weight: bold; padding-bottom: 10px; color: {'#eeeeee' if is_dark else '#333333'};")
+        self.detail_title.setStyleSheet(
+            f"font-size: 16px; font-weight: bold; padding-bottom: 10px; color: {UIColors.text_emphasis(is_dark)};"
+        )
         
         if is_dark:
             self.region_list.setStyleSheet("""
@@ -251,6 +267,7 @@ class WeatherWidget(BaseWidget):
         self.worker.error.connect(self._on_fetch_error)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+        self.track_worker(self.worker)
 
     def _on_fetch_success(self, data_list):
         self.refresh_btn.setEnabled(True)
@@ -274,7 +291,7 @@ class WeatherWidget(BaseWidget):
                 weather_summary.append((region["name"], w_text, f"{t_max_str} / {t_min_str}", w_color))
         
         if weather_summary:
-            self.summary_updated.emit(weather_summary)
+            bus.weather_updated.emit(weather_summary)
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
@@ -337,7 +354,7 @@ class WeatherWidget(BaseWidget):
         self.detail_table.setRowCount(len(dates))
         
         for row, date_str in enumerate(dates):
-            w_text, _ = get_weather_info(w_codes[row])
+            w_text, _ = get_weather_info(w_codes[row] if row < len(w_codes) else 0)
             
             self.detail_table.setItem(row, 0, self._create_table_item(date_str))
             self.detail_table.setItem(row, 1, self._create_table_item(w_text))

@@ -1,0 +1,31 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file>img/icon.png</file>
+    <file>img/icon.ico</file>
+    <file>img/board.svg</file>
+    <file>img/power.svg</file>
+    <file>img/won.svg</file>
+    <file>img/fire.svg</file>
+    <file>img/weather.svg</file>
+    <file>img/plant.svg</file>
+    <file>img/notice.svg</file>
+    <file>img/setting.svg</file>
+    <file>img/log.svg</file>
+    <file>img/weather/sunny.svg</file>
+    <file>img/weather/mostly_sunny.svg</file>
+    <file>img/weather/partly_cloudy.svg</file>
+    <file>img/weather/cloudy.svg</file>
+    <file>img/weather/fog.svg</file>
+    <file>img/weather/drizzle.svg</file>
+    <file>img/weather/freezing_drizzle.svg</file>
+    <file>img/weather/light_rain.svg</file>
+    <file>img/weather/rain.svg</file>
+    <file>img/weather/freezing_rain.svg</file>
+    <file>img/weather/light_snow.svg</file>
+    <file>img/weather/snow.svg</file>
+    <file>img/weather/rain_shower.svg</file>
+    <file>img/weather/snow_shower.svg</file>
+    <file>img/weather/thunderstorm.svg</file>
+    <file>img/weather/thunderstorm_hail.svg</file>
+</qresource>
+</RCC>

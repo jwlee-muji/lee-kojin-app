@@ -1,6 +1,38 @@
 class UIColors:
     """앱 전체에서 사용되는 하드코딩 색상을 중앙 집중화합니다."""
-    
+
+    # --- 아이콘 틴팅 색상 ---
+    ICON_TINT_DARK  = "#cccccc"
+    ICON_TINT_LIGHT = "#555555"
+
+    # --- 기본 텍스트 색상 ---
+    TEXT_PRIMARY_DARK   = "#d4d4d4"
+    TEXT_PRIMARY_LIGHT  = "#333333"
+    TEXT_SECONDARY_DARK = "#aaaaaa"
+    TEXT_SECONDARY_LIGHT = "#666666"
+    TEXT_EMPHASIS_DARK  = "#eeeeee"
+    TEXT_EMPHASIS_LIGHT = "#111111"
+
+    # --- 강조 색상 ---
+    ACCENT_DARK  = "#094771"
+    ACCENT_LIGHT = "#1565c0"
+
+    @staticmethod
+    def icon_tint(is_dark: bool) -> str:
+        return UIColors.ICON_TINT_DARK if is_dark else UIColors.ICON_TINT_LIGHT
+
+    @staticmethod
+    def text_primary(is_dark: bool) -> str:
+        return UIColors.TEXT_PRIMARY_DARK if is_dark else UIColors.TEXT_PRIMARY_LIGHT
+
+    @staticmethod
+    def text_secondary(is_dark: bool) -> str:
+        return UIColors.TEXT_SECONDARY_DARK if is_dark else UIColors.TEXT_SECONDARY_LIGHT
+
+    @staticmethod
+    def text_emphasis(is_dark: bool) -> str:
+        return UIColors.TEXT_EMPHASIS_DARK if is_dark else UIColors.TEXT_EMPHASIS_LIGHT
+
     @staticmethod
     def get_imbalance_alert_colors(is_dark: bool, level: int):
         """인밸런스 단가 레벨: 1(Normal) ~ 5(Critical)"""
@@ -26,6 +58,22 @@ class UIColors:
             return {
                 'low': ("#ff6666", "#000000"), 'warning': ("#ffeb3b", "#000000"), 'past': ("#e0e0e0", "#888888")
             }.get(status, ("transparent", "#333333"))
+
+    @staticmethod
+    def get_panel_colors(is_dark: bool):
+        """패널 및 リスト 아이템, 툴팁 등에 사용되는 배경/텍스트 색상 모듈화"""
+        if is_dark:
+            return {"bg": "#252526", "border": "#3e3e42", "text": "#d4d4d4", "text_dim": "#888888", "hover": "#333333"}
+        else:
+            return {"bg": "#fcfcfc", "border": "#cccccc", "text": "#333333", "text_dim": "#666666", "hover": "#e8e8e8"}
+
+    @staticmethod
+    def get_graph_colors(is_dark: bool):
+        """PyQtGraph 배경 및 축, 그리드에 사용되는 색상 모듈화"""
+        if is_dark:
+            return {"bg": "#1e1e1e", "axis": "#555555", "text": "#aaaaaa"}
+        else:
+            return {"bg": "#ffffff", "axis": "#dddddd", "text": "#666666"}
 
 def get_global_qss(theme: str) -> str:
     """
@@ -92,4 +140,19 @@ def get_global_qss(theme: str) -> str:
     QCheckBox#settingsCheckbox:hover {{
         background-color: {'#333333' if is_dark else '#e8e8e8'};
     }}
+    
+    /* SummaryCard Dynamic Property 적용 (하드코딩 제거) */
+    SummaryCard[theme="dark"] {{
+        background-color: #252526;
+        border: 1px solid #3e3e42;
+        border-radius: 8px;
+    }}
+    SummaryCard[theme="dark"]:hover {{ background-color: #2d2d30; }}
+    
+    SummaryCard[theme="light"] {{
+        background-color: #ffffff;
+        border: 1px solid #dddddd;
+        border-radius: 8px;
+    }}
+    SummaryCard[theme="light"]:hover {{ background-color: #f4f8ff; }}
     """

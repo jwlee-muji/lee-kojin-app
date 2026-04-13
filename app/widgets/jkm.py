@@ -18,7 +18,8 @@ from PySide6.QtGui import QBrush, QColor, QFont
 from app.ui.common import ExcelCopyTableWidget, BaseWidget, BasePlotWidget
 from app.core.config import JKM_TICKER, DB_JKM, load_settings
 from app.core.database import get_db_connection
-from app.core.api_client import FetchJkmWorker
+from app.api.jkm_api import FetchJkmWorker
+from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
 
@@ -26,8 +27,6 @@ logger = logging.getLogger(__name__)
 
 
 class JkmWidget(BaseWidget):
-    data_updated = Signal()
-
     def __init__(self):
         super().__init__()
         self._worker = None
@@ -39,7 +38,8 @@ class JkmWidget(BaseWidget):
         self._build_ui()
         self._refresh_chart()
 
-        self.setup_timer(self.settings.get("jkm_interval", 180), self._on_fetch)
+        # 다른 위젯과 API 요청이 겹치지 않도록 30초 지연 후 정규 타이머 시작
+        self.setup_timer(self.settings.get("jkm_interval", 180), self._on_fetch, stagger_seconds=30)
         
     def apply_settings_custom(self):
         self.update_timer_interval(self.settings.get("jkm_interval", 180))
@@ -90,7 +90,11 @@ class JkmWidget(BaseWidget):
         toolbar.setContentsMargins(6, 2, 6, 2)
         self.copy_btn = QPushButton(self.tr("グラフ画像をコピー"))
         self.copy_btn.clicked.connect(self._copy_graph)
+        
+        self.reset_zoom_btn = QPushButton(self.tr("ビュー初期化"))
+        self.reset_zoom_btn.clicked.connect(lambda: self.plot_widget.enableAutoRange())
         toolbar.addStretch()
+        toolbar.addWidget(self.reset_zoom_btn)
         toolbar.addWidget(self.copy_btn)
         layout.addLayout(toolbar)
 
@@ -126,6 +130,9 @@ class JkmWidget(BaseWidget):
         self.tooltip_label.setGraphicsEffect(self.tooltip_shadow)
         self.tooltip_label.hide()
 
+        self.hover_point = pg.PlotDataItem(pen=None, symbol='o', symbolSize=12, zValue=10)
+        self.plot_widget.addItem(self.hover_point)
+
         self.hover_proxy = pg.SignalProxy(
             self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_hover
         )
@@ -160,13 +167,14 @@ class JkmWidget(BaseWidget):
         self._worker.error.connect(self._on_fetch_error)
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
+        self.track_worker(self._worker)
 
     def _on_fetch_done(self, count: int):
         self.fetch_btn.setEnabled(True)
         self.status_label.setText(f"取込完了: {count}件")
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         self._refresh_chart()
-        self.data_updated.emit()
+        bus.jkm_updated.emit()
 
     def _on_fetch_error(self, err: str):
         self.fetch_btn.setEnabled(True)
@@ -242,9 +250,13 @@ class JkmWidget(BaseWidget):
         self.plot_widget.clear()
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
         x = list(range(len(self._dates)))
+        
+        brush_color = QColor('#2196F3')
+        brush_color.setAlpha(50)
         self.plot_widget.plot(
             x, self._closes,
             pen=pg.mkPen(color='#2196F3', width=2.5),
+            fillLevel=0, brush=pg.mkBrush(brush_color),
             symbol='o', symbolSize=4,
             symbolBrush=pg.mkBrush('#2196F3'),
             symbolPen=pg.mkPen('white', width=1),
@@ -261,23 +273,38 @@ class JkmWidget(BaseWidget):
         # 뷰포트 제한
         self.plot_widget.getViewBox().setLimits(xMin=-1, xMax=max(1, len(self._dates)), yMin=0)
         self.plot_widget.enableAutoRange()
+        
+        # clear()로 인해 캔버스에서 삭제된 호버 마커를 다시 추가
+        self.plot_widget.addItem(self.hover_point)
 
     def _on_hover(self, evt):
         pos = evt[0]
         vb  = self.plot_widget.plotItem.vb
         if not vb.sceneBoundingRect().contains(pos):
             self.tooltip_label.hide()
+            self.hover_point.setData([], [])
+            self._last_hover_x = None
             return
 
         x_idx = round(vb.mapSceneToView(pos).x())
         if not self._dates or not (0 <= x_idx < len(self._dates)):
             self.tooltip_label.hide()
+            self.hover_point.setData([], [])
+            self._last_hover_x = None
             return
 
-        self.tooltip_label.setText(
-            f"日付: {self._dates[x_idx]}\n終値: {self._closes[x_idx]:.3f} USD/MMBtu"
-        )
-        self.tooltip_label.adjustSize()
+        # 동일한 X축 상에서 마우스가 움직일 때는 데이터 갱신 스킵
+        if getattr(self, '_last_hover_x', None) != x_idx:
+            self._last_hover_x = x_idx
+            y_val = self._closes[x_idx]
+            bg_color = '#1e1e1e' if getattr(self, 'is_dark', True) else '#ffffff'
+            self.hover_point.setData([x_idx], [y_val])
+            self.hover_point.setSymbolBrush(pg.mkBrush('#2196F3'))
+            self.hover_point.setSymbolPen(pg.mkPen(bg_color, width=1.5))
+            self.tooltip_label.setText(
+                f"日付: {self._dates[x_idx]}\n終値: {self._closes[x_idx]:.3f} USD/MMBtu"
+            )
+            self.tooltip_label.adjustSize()
 
         vp  = self.plot_widget.viewport()
         wpos = vp.mapFromGlobal(self.plot_widget.mapToGlobal(self.plot_widget.mapFromScene(pos)))

@@ -67,9 +67,13 @@ def _backup_and_delete_imbalance(threshold_int: int):
         finally:
             conn.execute("DETACH DATABASE backup_db")
             
-        conn.isolation_level = None  # VACUUM을 위해 임시로 Auto-commit 모드로 전환
-        conn.execute("VACUUM")       # 메인 DB 용량 최적화
-        conn.isolation_level = ""
+        try:
+            conn.isolation_level = None  # VACUUM을 위해 임시로 Auto-commit 모드로 전환
+            conn.execute("VACUUM")       # 메인 DB 용량 최적화
+        except sqlite3.OperationalError as e:
+            logger.warning(f"インバランスDBのVACUUMをスキップしました (使用中): {e}")
+        finally:
+            conn.isolation_level = ""
         logger.info(f"インバランス単価の古いデータ({count}件)をバックアップし削除しました。")
 
 def _backup_and_delete_hjks(threshold_str: str):
@@ -89,9 +93,13 @@ def _backup_and_delete_hjks(threshold_str: str):
         finally:
             conn.execute("DETACH DATABASE backup_db")
             
-        conn.isolation_level = None
-        conn.execute("VACUUM")
-        conn.isolation_level = ""
+        try:
+            conn.isolation_level = None
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"HJKS DBのVACUUMをスキップしました (使用中): {e}")
+        finally:
+            conn.isolation_level = ""
         logger.info(f"HJKSの古いデータ({count}件)をバックアップし削除しました。")
 
 def _backup_and_delete_jkm(threshold_str: str):
@@ -111,7 +119,11 @@ def _backup_and_delete_jkm(threshold_str: str):
         finally:
             conn.execute("DETACH DATABASE backup_db")
             
-        conn.isolation_level = None
-        conn.execute("VACUUM")
-        conn.isolation_level = ""
+        try:
+            conn.isolation_level = None
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"JKM DBのVACUUMをスキップしました (使用中): {e}")
+        finally:
+            conn.isolation_level = ""
         logger.info(f"JKMの古いデータ({count}件)をバックアップし削除しました。")

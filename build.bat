@@ -22,13 +22,15 @@ del /f /q "LEE電力モニター.spec" 2>nul
 echo [3/4] PyInstaller をインストール中...
 pip install pyinstaller pyinstaller-hooks-contrib -q
 
+echo [3.5/4] リソース(QRC)をコンパイル中...
+pyside6-rcc resources.qrc -o resources_rc.py
+
 echo [4/4] ビルド開始...
 pyinstaller ^
   --onefile ^
   --windowed ^
   --name "LEE電力モニター" ^
   --icon "img/icon.ico" ^
-  --add-data "img;img" ^
   --add-data "app/ui/themes;app/ui/themes" ^
   --collect-all yfinance ^
   --hidden-import "pandas" ^
