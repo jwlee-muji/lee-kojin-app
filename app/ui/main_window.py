@@ -1,13 +1,15 @@
 import socket
 import time
 import logging
+import sys
+from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QStackedWidget, 
     QSplitter, QSystemTrayIcon, QMenu, QApplication, QPushButton, QMessageBox, QLabel,
     QListWidgetItem, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize
+from PySide6.QtGui import QAction, QIcon
 from app.widgets.power_reserve import PowerReserveWidget
 from app.widgets.imbalance import ImbalanceWidget
 from app.widgets.jkm import JkmWidget
@@ -16,7 +18,7 @@ from app.widgets.hjks import HjksWidget
 from app.widgets.log_viewer import LogViewerWidget
 from app.widgets.settings import SettingsWidget
 from app.widgets.dashboard import DashboardWidget
-from app.ui.common import FadeStackedWidget
+from app.ui.common import FadeStackedWidget, get_tinted_icon
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(0)
 
         self.sidebar = QListWidget()
+        self.sidebar.setIconSize(QSize(22, 22))
         sidebar_layout.addWidget(self.sidebar)
 
         self.network_lbl = QLabel(self.tr("🟢 オンライン"))
@@ -124,6 +127,11 @@ class MainWindow(QMainWindow):
         self.w_settings = SettingsWidget()
         self.w_settings.settings_saved.connect(self._apply_settings_all)
 
+        # 아이콘 목록을 저장하여 테마 변경 시 동기화에 사용
+        self._page_icons = [
+            "board", "power", "won", "fire", "weather", "plant", "notice", "setting", "log"
+        ]
+
         self.w_reserve.summary_updated.connect(self.w_dashboard.update_occto)
         self.w_imbalance.data_updated.connect(self.w_dashboard.refresh_imbalance)
         self.w_jkm.data_updated.connect(self.w_dashboard.refresh_jkm)
@@ -131,15 +139,15 @@ class MainWindow(QMainWindow):
         self.w_weather.summary_updated.connect(self.w_dashboard.update_weather)
         self.w_dashboard.page_requested.connect(self.sidebar.setCurrentRow)
 
-        self._add_page(self.w_dashboard, self.tr("📊 ダッシュボード"))
-        self._add_page(self.w_reserve, self.tr("⚡ 電力予備率"))
-        self._add_page(self.w_imbalance, self.tr("💰 インバランス"))
-        self._add_page(self.w_jkm, self.tr("🔥 JKM LNG 価格"))
-        self._add_page(self.w_weather, self.tr("🌤️ 全国天気"))
-        self._add_page(self.w_hjks, self.tr("🏭 発電稼働状況"))
-        self._add_page(self.w_notifications, self.tr("🔔 通知センター (0)"))
-        self._add_page(self.w_settings, self.tr("⚙️ 設定"))
-        self._add_page(self.w_log, self.tr("📝 システムログ"))
+        self._add_page(self.w_dashboard, self.tr("ダッシュボード"), "board")
+        self._add_page(self.w_reserve, self.tr("電力予備率"), "power")
+        self._add_page(self.w_imbalance, self.tr("インバランス"), "won")
+        self._add_page(self.w_jkm, self.tr("JKM LNG 価格"), "fire")
+        self._add_page(self.w_weather, self.tr("全国天気"), "weather")
+        self._add_page(self.w_hjks, self.tr("発電稼働状況"), "plant")
+        self._add_page(self.w_notifications, self.tr("通知センター (0)"), "notice")
+        self._add_page(self.w_settings, self.tr("設定"), "setting")
+        self._add_page(self.w_log, self.tr("システムログ"), "log")
 
         # 앱 기동 시 모든 위젯의 테마 초기 상태를 완벽하게 동기화
         self._sync_theme()
@@ -149,22 +157,22 @@ class MainWindow(QMainWindow):
         
         # 앱 기동 10초 후 백그라운드에서 오래된 데이터 자동 정리 및 백업 실행
         self._retention_worker = RetentionWorker(self)
+        self._retention_worker.finished.connect(self._retention_worker.deleteLater)
         QTimer.singleShot(10000, self._retention_worker.start)
         
         # 네트워크 모니터링 시작
         QApplication.instance().is_online = True
         self.network_monitor = NetworkMonitor()
         self.network_monitor.status_changed.connect(self._on_network_changed)
+        self.network_monitor.finished.connect(self.network_monitor.deleteLater)
         self.network_monitor.start()
 
     def _center_window(self):
-        """タスクバーなどを除いた有効な画面領域を計算し、完璧に中央へ配置します。"""
+        """앱 시작 시 우하단으로 튀는 현상을 방지하기 위해 절대 좌표로 중앙을 계산합니다."""
         screen_geometry = QApplication.primaryScreen().availableGeometry()
-        window_geometry = self.frameGeometry()
-        
-        # ウィンドウの中心を、画面の中心座標に合わせる
-        window_geometry.moveCenter(screen_geometry.center())
-        self.move(window_geometry.topLeft())
+        x = (screen_geometry.width() - self.width()) // 2
+        y = (screen_geometry.height() - self.height()) // 2
+        self.move(x, y)
         
     def add_notification(self, title: str, message: str):
         """하위 위젯이나 트레이에서 발생한 알림을 중앙 센터에 모아줍니다."""
@@ -176,7 +184,7 @@ class MainWindow(QMainWindow):
         for i in range(self.sidebar.count()):
             # 번역된 텍스트와 비교 및 f-string 대신 format 사용
             if self.tr("通知センター") in self.sidebar.item(i).text():
-                self.sidebar.item(i).setText(self.tr("🔔 通知センター ({0})").format(self.w_notifications.count()))
+                self.sidebar.item(i).setText(self.tr("通知センター ({0})").format(self.w_notifications.count()))
                 break
 
     def _apply_settings_all(self):
@@ -240,6 +248,14 @@ class MainWindow(QMainWindow):
             w = self.content_stack.widget(i)
             if hasattr(w, 'set_theme'):
                 w.set_theme(self.is_dark)
+                
+        # 사이드바 아이콘 테마 동기화
+        for i, icon_name in enumerate(self._page_icons):
+            if icon_name and i < self.sidebar.count():
+                base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
+                icon_path = base_dir / "img" / f"{icon_name}.svg"
+                if icon_path.exists():
+                    self.sidebar.item(i).setIcon(get_tinted_icon(str(icon_path), self.is_dark))
 
     def _setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -305,10 +321,18 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
-    def _add_page(self, widget, label: str):
+    def _add_page(self, widget, label: str, icon_name: str = None):
         """위젯과 사이드바 항목을 한 번에 등록. 새 페이지 추가 시 이 메서드만 호출."""
         self.content_stack.addWidget(widget)
         # 알림 센터 추가 시 위젯 초기화 중에 쌓인 알림 수를 배지에 반영
         if widget is self.w_notifications and self.w_notifications.count() > 0:
-            label = self.tr("🔔 通知センター ({0})").format(self.w_notifications.count())
-        self.sidebar.addItem(label)
+            label = self.tr("通知センター ({0})").format(self.w_notifications.count())
+            
+        item = QListWidgetItem(label)
+        if icon_name:
+            base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
+            icon_path = base_dir / "img" / f"{icon_name}.svg"
+            if icon_path.exists():
+                item.setIcon(get_tinted_icon(str(icon_path), self.is_dark))
+                
+        self.sidebar.addItem(item)

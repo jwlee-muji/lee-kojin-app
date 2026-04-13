@@ -78,9 +78,15 @@ class FetchWeatherWorker(QThread):
                     data = [data]
                     
                 self.finished.emit(data)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"天気予報データの取得中に通信エラーが発生しました: {str(e)}")
+                self.error.emit(f"天気の取得に失敗しました(通信エラー): {str(e)}")
+            except (ValueError, KeyError) as e:
+                logger.error(f"天気予報APIの応答解析中にエラーが発生しました: {str(e)}")
+                self.error.emit(f"API応答の解析に失敗しました: {str(e)}")
             except Exception as e:
-                logger.error(f"天気予報データの取得中にエラーが発生しました: {str(e)}")
-                self.error.emit(f"天気の取得に失敗しました: {str(e)}")
+                logger.error(f"天気予報データの取得中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
+                self.error.emit(f"天気の取得中に予期せぬエラーが発生しました: {str(e)}")
 
 
 class RegionCard(QFrame):
@@ -231,8 +237,11 @@ class WeatherWidget(BaseWidget):
 
     def fetch_weather(self):
         if not self.check_online_status(): return
-        if self.worker and self.worker.isRunning():
-            return
+        try:
+            if self.worker and self.worker.isRunning():
+                return
+        except RuntimeError:
+            self.worker = None
         self.refresh_btn.setEnabled(False)
         self.status_label.setText("天気データを取得中...")
         self.status_label.setStyleSheet("color: #64b5f6;")
@@ -240,6 +249,7 @@ class WeatherWidget(BaseWidget):
         self.worker = FetchWeatherWorker()
         self.worker.finished.connect(self._on_fetch_success)
         self.worker.error.connect(self._on_fetch_error)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def _on_fetch_success(self, data_list):

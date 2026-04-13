@@ -1,22 +1,24 @@
 import pandas as pd
 import logging
+import sqlite3
 import pyqtgraph as pg
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QTableWidgetItem, QMessageBox, QHeaderView,
     QSplitter, QComboBox, QCheckBox, QApplication, QGraphicsDropShadowEffect,
-    QScrollArea, QFrame, QSystemTrayIcon
+    QScrollArea, QFrame, QSystemTrayIcon,
 )
-from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer
+from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFont, QBrush, QColor
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
+from app.ui.theme import UIColors
 from app.core.config import (
     DB_IMBALANCE, IMBALANCE_COLORS, load_settings,
     DATE_COL_IDX, TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 from app.core.database import get_db_connection
-from app.ui.api_client import UpdateImbalanceWorker
+from app.core.api_client import UpdateImbalanceWorker
 
 pg.setConfigOptions(antialias=True)
 
@@ -244,6 +246,9 @@ class ImbalanceWidget(BaseWidget):
         # 최초 기동 시 자동 수집 및 표시
         self.update_database()
 
+    def set_loading(self, is_loading: bool):
+        super().set_loading(is_loading, self.splitter)
+
     def apply_settings_custom(self):
         self.update_timer_interval(self.settings.get("imbalance_interval", 5))
         self.display_data()
@@ -307,18 +312,24 @@ class ImbalanceWidget(BaseWidget):
 
     def update_database(self):
         if not self.check_online_status(): return
-        if self.worker and self.worker.isRunning():
-            return
+        try:
+            if self.worker and self.worker.isRunning():
+                return
+        except RuntimeError:
+            self.worker = None
         self.update_btn.setEnabled(False)
+        self.set_loading(True)
         self.status_label.setText("DB更新中...")
         self.status_label.setStyleSheet("color: #64b5f6;")
         self.worker = UpdateImbalanceWorker()
         self.worker.finished.connect(self._on_update_success)
         self.worker.error.connect(self._on_update_error)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def _on_update_success(self, msg):
         self.update_btn.setEnabled(True)
+        self.set_loading(False)
         self.status_label.setText(msg)
         self.status_label.setStyleSheet("color: #4caf50;")
         self.display_data()
@@ -326,6 +337,7 @@ class ImbalanceWidget(BaseWidget):
 
     def _on_update_error(self, err):
         self.update_btn.setEnabled(True)
+        self.set_loading(False)
         self.status_label.setText("更新失敗")
         self.status_label.setStyleSheet("color: #ff5252;")
         QMessageBox.warning(self, "エラー", err)
@@ -345,8 +357,14 @@ class ImbalanceWidget(BaseWidget):
                     conn, params=[target_yyyymmdd, str(target_yyyymmdd)]
                 )
                 df.columns = [c.strip().replace('\ufeff', '') for c in df.columns]
-        except Exception:
+        except (sqlite3.Error, pd.errors.DatabaseError) as e:
+            logger.warning(f"インバランスDBの読み込みに失敗しました: {e}")
             self.status_label.setText("DBが存在しません。まず更新してください。")
+            self.status_label.setStyleSheet("color: #ff5252;")
+            self.table.clear()
+            self.table.setRowCount(0)
+            self.plot_widget.clear()
+            self._clear_legend()
             return
 
         time_col    = df.columns[TIME_COL_IDX]
@@ -366,7 +384,7 @@ class ImbalanceWidget(BaseWidget):
                         f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER))'
                         f' FROM imbalance_prices'
                     ).fetchone()
-                if row and row[0]:
+                if row and row[0] is not None:
                     min_d, max_d = str(int(row[0])), str(int(row[1]))
                     msg = (f"{target_date} のデータがありません。\n"
                            f"(DBに保存されている期間: "
@@ -374,7 +392,7 @@ class ImbalanceWidget(BaseWidget):
                            f"{max_d[:4]}/{max_d[4:6]}/{max_d[6:]})")
                 else:
                     msg = "DBに有効なデータがありません。"
-            except Exception:
+            except sqlite3.Error:
                 msg = "DBに有効なデータがありません。"
             self.status_label.setText("データなし")
             self.status_label.setStyleSheet("color: #ff5252;")
@@ -383,6 +401,12 @@ class ImbalanceWidget(BaseWidget):
 
         target_cols   = yojo_cols if self.type_combo.currentText() == "余剰インバランス料金単価" else fusoku_cols
         display_cols  = [time_col] + target_cols
+
+        # Pandas 데이터 변환 최적화: 루프 전에 문자열을 숫자로 일괄 변환하여 속도/메모리 크게 향상
+        all_numeric_cols = yojo_cols + fusoku_cols
+        for col in all_numeric_cols:
+            if df[col].dtype == object:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
 
         # 테이블
         self.table.setUpdatesEnabled(False)
@@ -395,18 +419,27 @@ class ImbalanceWidget(BaseWidget):
 
         for row_idx, (_, row_data) in enumerate(df[display_cols].iterrows()):
             for col_idx, value in enumerate(row_data):
-                item = QTableWidgetItem(str(value))
+                item_text = str(value) if col_idx == 0 else (str(value) if pd.notna(value) else "-")
+                item = QTableWidgetItem(item_text)
                 item.setTextAlignment(Qt.AlignCenter)
                 if col_idx > 0:
-                    try:
-                        val = float(str(value).replace(',', ''))
-                        if   val >= alert_val: item.setBackground(QBrush(QColor('#5c1111' if self.is_dark else '#ffcccc'))); item.setForeground(QBrush(QColor('#ffffff' if self.is_dark else '#ff0000'))); f = item.font(); f.setBold(True); item.setFont(f)
-                        elif val >= 20: item.setBackground(QBrush(QColor('#801515' if self.is_dark else '#ffdddd')))
-                        elif val >= 15: item.setBackground(QBrush(QColor('#804000' if self.is_dark else '#fff0cc')))
-                        elif val >= 10: item.setBackground(QBrush(QColor('#1e401e' if self.is_dark else '#dcf0dc')))
-                        elif val >= 0:  item.setBackground(QBrush(QColor('#113344' if self.is_dark else '#e1f5fe')))
-                    except (ValueError, TypeError):
-                        pass
+                    val = value
+                    if pd.notna(val):
+                        if   val >= alert_val: 
+                            bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 5)
+                            item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg))); f = item.font(); f.setBold(True); item.setFont(f)
+                        elif val >= 20: 
+                            bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 4)
+                            item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg)))
+                        elif val >= 15: 
+                            bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 3)
+                            item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg)))
+                        elif val >= 10: 
+                            bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 2)
+                            item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg)))
+                        elif val >= 0:  
+                            bg, fg = UIColors.get_imbalance_alert_colors(self.is_dark, 1)
+                            item.setBackground(QBrush(QColor(bg))); item.setForeground(QBrush(QColor(fg)))
                 self.table.setItem(row_idx, col_idx, item)
 
         hdr = self.table.horizontalHeader()
@@ -434,7 +467,7 @@ class ImbalanceWidget(BaseWidget):
         for idx, col in enumerate(target_cols):
             color = IMBALANCE_COLORS[idx % len(IMBALANCE_COLORS)]
             try:
-                y_vals = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').tolist()
+                y_vals = df[col].tolist()
                 curve  = self.plot_widget.plot(
                     x_indices, y_vals,
                     pen=pg.mkPen(color=color, width=2.5),
@@ -548,7 +581,7 @@ class ImbalanceWidget(BaseWidget):
             
         # NaN 이슈를 방지하기 위해 컬럼 단위로 안전하게 필터링
         for col in check_cols:
-            series = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
+            series = df[col]
             # 임계값을 초과하는 순수 수치만 필터링 (NaN 자동 제외)
             over_series = series[series >= alert_val]
             for row_idx, val in over_series.items():

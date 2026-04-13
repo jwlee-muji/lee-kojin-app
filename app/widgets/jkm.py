@@ -7,6 +7,7 @@ JKM（Japan Korea Marker）LNG スポット価格ウィジェット
 """
 import logging
 import pyqtgraph as pg
+import sqlite3
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QMessageBox, QHeaderView, QApplication, QSplitter,
@@ -17,7 +18,7 @@ from PySide6.QtGui import QBrush, QColor, QFont
 from app.ui.common import ExcelCopyTableWidget, BaseWidget, BasePlotWidget
 from app.core.config import JKM_TICKER, DB_JKM, load_settings
 from app.core.database import get_db_connection
-from app.ui.api_client import FetchJkmWorker
+from app.core.api_client import FetchJkmWorker
 
 pg.setConfigOptions(antialias=True)
 
@@ -146,14 +147,18 @@ class JkmWidget(BaseWidget):
 
     def _on_fetch(self):
         if not self.check_online_status(): return
-        if self._worker and self._worker.isRunning():
-            return
+        try:
+            if self._worker and self._worker.isRunning():
+                return
+        except RuntimeError:
+            self._worker = None
         self.fetch_btn.setEnabled(False)
         self.status_label.setText("取込中...")
         self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
         self._worker = FetchJkmWorker()
         self._worker.finished.connect(self._on_fetch_done)
         self._worker.error.connect(self._on_fetch_error)
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     def _on_fetch_done(self, count: int):
@@ -179,7 +184,7 @@ class JkmWidget(BaseWidget):
                     "WHERE date BETWEEN ? AND ? ORDER BY date",
                     (start, end),
                 ).fetchall()
-        except Exception as e:
+        except sqlite3.Error as e:
             self.status_label.setText(f"DBエラー: {e}")
             self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
             return

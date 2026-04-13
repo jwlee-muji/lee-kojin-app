@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGridLayout,
@@ -7,23 +8,26 @@ from PySide6.QtCore import (
     Qt, QTimer, QThread, Signal, QPropertyAnimation, QEasingCurve,
     Property, QObject
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 from app.core.config import (
-    DB_IMBALANCE, DB_HJKS, DB_JKM,
+    DB_IMBALANCE, DB_HJKS, DB_JKM, BASE_DIR,
     TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 import sqlite3
-from app.ui.common import BaseWidget
+from app.ui.common import BaseWidget, get_tinted_pixmap
+
+logger = logging.getLogger(__name__)
 
 
 class SummaryCard(QFrame):
     clicked = Signal()
 
-    def __init__(self, title, icon, color):
+    def __init__(self, title, icon_name, color):
         super().__init__()
         self.is_dark = True
         self.setCursor(Qt.PointingHandCursor)
         self.card_color = color
+        self.icon_name = icon_name
         self._val_color = None
         self._has_animated = False  # 初回のみアニメーションを実行するためのフラグ
         self._hover_offset = 0.0    # ホバーアニメーション用
@@ -32,12 +36,12 @@ class SummaryCard(QFrame):
         layout.setContentsMargins(20, 20, 20, 20)
         
         header_layout = QHBoxLayout()
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet("font-size: 26px; background: transparent;")
+        self.icon_lbl = QLabel()
+            
         title_lbl = QLabel(title)
         self.title_lbl = title_lbl
         
-        header_layout.addWidget(icon_lbl)
+        header_layout.addWidget(self.icon_lbl)
         header_layout.addWidget(title_lbl)
         header_layout.addStretch()
         
@@ -75,22 +79,23 @@ class SummaryCard(QFrame):
             self.sub_lbl.setText(self.tr("データ取得中..."))
             
             if not hasattr(self, '_skel_effect'):
-                self._skel_effect = QGraphicsOpacityEffect(self.value_lbl)
-                self.value_lbl.setGraphicsEffect(self._skel_effect)
+                # 위젯이 아닌 카드 자체를 부모로 하여 이펙트의 생명주기를 관리합니다.
+                self._skel_effect = QGraphicsOpacityEffect(self)
                 self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity")
                 self._skel_anim.setDuration(800)
                 self._skel_anim.setStartValue(0.3)
                 self._skel_anim.setEndValue(1.0)
                 self._skel_anim.setLoopCount(-1) # 무한 반복
                 
+            # 다른 애니메이션(페이드)이 실행 중일 수 있으므로, 스켈레톤 이펙트를 명시적으로 설정합니다.
+            self.value_lbl.setGraphicsEffect(self._skel_effect)
             self._skel_anim.start()
         else:
             if hasattr(self, '_skel_anim'):
                 self._skel_anim.stop()
+            # 다른 이펙트(페이드)를 실수로 제거하지 않도록, 스켈레톤 이펙트일 경우에만 제거합니다.
+            if hasattr(self, '_skel_effect') and self.value_lbl.graphicsEffect() == self._skel_effect:
                 self.value_lbl.setGraphicsEffect(None)
-                del self._skel_anim
-                if hasattr(self, '_skel_effect'):
-                    del self._skel_effect
 
     def set_value(self, val_str, sub_str, val_color=None, target_val=None, format_str=None, animate_fade=False):
         self.set_loading(False)  # 값이 설정되면 스켈레톤 중지
@@ -134,18 +139,24 @@ class SummaryCard(QFrame):
             self.value_lbl.setText(self._anim_format.format(self._anim_target))
             
     def _start_fade_out(self):
+        # C++ 객체가 삭제되었을 경우를 대비하여 안전하게 재성성하는 로직
+        try:
+            if hasattr(self, '_fade_opacity_effect'): self._fade_opacity_effect.opacity()
+        except RuntimeError:
+            delattr(self, '_fade_opacity_effect')
+            
         if not hasattr(self, '_fade_opacity_effect'):
-            self._fade_opacity_effect = QGraphicsOpacityEffect(self.value_lbl)
-            self.value_lbl.setGraphicsEffect(self._fade_opacity_effect)
-
+            self._fade_opacity_effect = QGraphicsOpacityEffect(self)
             self._fade_out_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity")
             self._fade_out_anim.setDuration(180)
             self._fade_out_anim.setEasingCurve(QEasingCurve.InQuad)
             self._fade_out_anim.finished.connect(self._on_fade_out_done)
-
             self._fade_in_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity")
             self._fade_in_anim.setDuration(180)
             self._fade_in_anim.setEasingCurve(QEasingCurve.OutQuad)
+
+        if self.value_lbl.graphicsEffect() != self._fade_opacity_effect:
+            self.value_lbl.setGraphicsEffect(self._fade_opacity_effect)
 
         self._fade_in_anim.stop()
         self._fade_out_anim.setStartValue(self._fade_opacity_effect.opacity())
@@ -199,6 +210,14 @@ class SummaryCard(QFrame):
         bg_hover = "#2d2d30" if self.is_dark else "#f4f8ff"
         border = "#3e3e42" if self.is_dark else "#dddddd"
         tc = "#eeeeee" if self.is_dark else "#333333"
+
+        icon_path = BASE_DIR / "img" / f"{self.icon_name}.svg"
+        if icon_path.exists():
+            self.icon_lbl.setPixmap(get_tinted_pixmap(str(icon_path), self.is_dark))
+        else:
+            self.icon_lbl.setText(self.icon_name)
+            self.icon_lbl.setStyleSheet("font-size: 26px; background: transparent;")
+
         self.setStyleSheet(
             f"SummaryCard {{ background-color: {bg}; border: 1px solid {border}; "
             f"border-radius: 8px; border-left: 6px solid {self.card_color}; }}"
@@ -247,6 +266,14 @@ class DashboardDataService(QObject):
         if fetch_type in ("all", "hjks"):
             self._fetch_hjks()
 
+    def close_connections(self):
+        """앱 종료 시 할당된 모든 커넥션 안전 종료"""
+        for conn in self._conns.values():
+            try:
+                conn.close()
+            except: pass
+        self._conns.clear()
+
     def _fetch_imbalance(self):
         try:
             today_yyyymmdd = int(datetime.now().strftime("%Y%m%d"))
@@ -271,18 +298,23 @@ class DashboardDataService(QObject):
                         val_str = row[i]
                         if val_str:
                             try:
-                                v = float(str(val_str).replace(',', ''))
+                                v = float(val_str)
                                 if max_val is None or v > max_val:
                                     max_val = v
                                     max_col = cols[i]
                                     max_slot = slot
-                            except ValueError:
+                            except (ValueError, TypeError):
                                 pass
             
             if max_val is not None:
                 self.imb_result.emit(float(max_val), f"コマ {max_slot} / {max_col}")
             else: self.imb_empty.emit()
-        except Exception: self.imb_empty.emit()
+        except (sqlite3.Error, ValueError, IndexError) as e:
+            logger.warning(f"インバランスDBのクエリ中にエラー: {e}")
+            self.imb_empty.emit()
+        except Exception as e:
+            logger.error(f"インバランスデータの取得中に予期せぬエラー: {e}", exc_info=True)
+            self.imb_empty.emit()
             
     def _fetch_jkm(self):
         try:
@@ -292,7 +324,12 @@ class DashboardDataService(QObject):
             latest_date, latest_price = rows[0]
             pct = ((latest_price - rows[1][1]) / rows[1][1] * 100) if len(rows) > 1 else 0.0
             self.jkm_result.emit(latest_price, latest_date, pct)
-        except Exception: self.jkm_empty.emit()
+        except sqlite3.Error as e:
+            logger.warning(f"JKM DBのクエリ中にエラー: {e}")
+            self.jkm_empty.emit()
+        except Exception as e:
+            logger.error(f"JKMデータの取得中に予期せぬエラー: {e}", exc_info=True)
+            self.jkm_empty.emit()
             
     def _fetch_hjks(self):
         try:
@@ -301,7 +338,12 @@ class DashboardDataService(QObject):
             row = conn.execute("SELECT SUM(operating_kw), SUM(stopped_kw) FROM hjks_capacity WHERE date = ?", (today_str,)).fetchone()
             if not row or row[0] is None: return self.hjks_empty.emit()
             self.hjks_result.emit(float(row[0]) / 1000.0, float(row[1]) / 1000.0)
-        except Exception: self.hjks_empty.emit()
+        except sqlite3.Error as e:
+            logger.warning(f"HJKS DBのクエリ中にエラー: {e}")
+            self.hjks_empty.emit()
+        except Exception as e:
+            logger.error(f"HJKSデータの取得中に予期せぬエラー: {e}", exc_info=True)
+            self.hjks_empty.emit()
 
 
 class DashboardWidget(BaseWidget):
@@ -344,18 +386,18 @@ class DashboardWidget(BaseWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        self.title_lbl = QLabel(self.tr("📊 総合ダッシュボード"))
+        self.title_lbl = QLabel(self.tr("総合ダッシュボード"))
         layout.addWidget(self.title_lbl)
         layout.addSpacing(20)
         
         grid = QGridLayout()
         grid.setSpacing(20)
         
-        self.card_imb   = SummaryCard(self.tr("本日の最大インバランス"), "💰", "#F44336")
-        self.card_occto = SummaryCard(self.tr("本日の最低電力予備率"), "⚡", "#2196F3")
-        self.card_wea   = SummaryCard(self.tr("全国の天気"), "🌤️", "#4CAF50")
-        self.card_jkm   = SummaryCard(self.tr("最新 JKM LNG 価格"), "🔥", "#FF9800")
-        self.card_hjks  = SummaryCard(self.tr("本日の発電稼働容量"), "🏭", "#9C27B0")
+        self.card_imb   = SummaryCard(self.tr("本日の最大インバランス"), "won", "#F44336")
+        self.card_occto = SummaryCard(self.tr("本日の最低電力予備率"), "power", "#2196F3")
+        self.card_wea   = SummaryCard(self.tr("全国の天気"), "weather", "#4CAF50")
+        self.card_jkm   = SummaryCard(self.tr("最新 JKM LNG 価格"), "fire", "#FF9800")
+        self.card_hjks  = SummaryCard(self.tr("本日の発電稼働容量"), "plant", "#9C27B0")
         
         grid.addWidget(self.card_imb, 0, 0)
         grid.addWidget(self.card_occto, 0, 1)
@@ -389,6 +431,8 @@ class DashboardWidget(BaseWidget):
         self.card_hjks.set_theme(is_dark)
 
     def _cleanup_thread(self):
+        # 스레드 종료 전 서비스의 DB 커넥션 닫기 요청
+        self._service.close_connections()
         self._service_thread.quit()
         self._service_thread.wait()
         

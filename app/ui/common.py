@@ -1,8 +1,31 @@
 from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect
-from PySide6.QtGui import QKeySequence
-from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon
+from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt
 import pyqtgraph as pg
 from app.core.config import load_settings
+from typing import Optional
+
+
+def get_tinted_icon(icon_path: str, is_dark: bool) -> QIcon:
+    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 QIcon으로 반환합니다."""
+    pixmap = QPixmap(icon_path)
+    painter = QPainter(pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    color = QColor("#cccccc") if is_dark else QColor("#555555")
+    painter.fillRect(pixmap.rect(), color)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def get_tinted_pixmap(icon_path: str, is_dark: bool, width: int = 26, height: int = 26) -> QPixmap:
+    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 지정된 크기의 QPixmap으로 반환합니다."""
+    pixmap = QPixmap(icon_path).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    painter = QPainter(pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    color = QColor("#cccccc") if is_dark else QColor("#555555")
+    painter.fillRect(pixmap.rect(), color)
+    painter.end()
+    return pixmap
 
 
 class ExcelCopyTableWidget(QTableWidget):
@@ -53,6 +76,10 @@ class FadeStackedWidget(QStackedWidget):
         self.currentChanged.connect(self._on_current_changed)
 
     def _on_current_changed(self, index):
+        if self._fade_anim.state() == QPropertyAnimation.Running:
+            self._fade_anim.stop()
+            self._on_fade_finished()
+            
         self._current_widget = self.widget(index)
         if not self._current_widget: return
         self._effect = QGraphicsOpacityEffect(self._current_widget)
@@ -126,6 +153,36 @@ class BaseWidget(QWidget):
 
     def apply_theme_custom(self):
         pass
+
+    def set_loading(self, is_loading: bool, target_widget: Optional[QWidget] = None):
+        """スケルトンローディングアニメーションを対象ウィジェットに適用する共通メソッド。
+        target_widget が None の場合は self 自身に適用する。"""
+        widget = target_widget if target_widget is not None else self
+        if is_loading:
+            try:
+                if hasattr(self, '_skel_effect'):
+                    self._skel_effect.opacity()
+            except RuntimeError:
+                delattr(self, '_skel_effect')
+
+            if not hasattr(self, '_skel_effect'):
+                self._skel_effect = QGraphicsOpacityEffect(self)
+                self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity")
+                self._skel_anim.setDuration(800)
+                self._skel_anim.setStartValue(0.3)
+                self._skel_anim.setEndValue(1.0)
+                self._skel_anim.setLoopCount(-1)
+
+            widget.setGraphicsEffect(self._skel_effect)
+            self._skel_anim.start()
+        else:
+            if hasattr(self, '_skel_anim'):
+                try:
+                    self._skel_anim.stop()
+                    self._skel_effect.setOpacity(1.0)
+                except RuntimeError:
+                    pass
+            widget.setGraphicsEffect(None)
 
     def check_online_status(self) -> bool:
         if not getattr(QApplication.instance(), 'is_online', True):

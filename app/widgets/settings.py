@@ -2,15 +2,33 @@ import sys
 import winreg
 import logging
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDoubleSpinBox, QSpinBox, QGroupBox, QFormLayout, QMessageBox, QScrollArea, QCheckBox
 )
-from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtCore import Signal, Qt, QTimer, QThread
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
 from app.ui.common import BaseWidget
 
 logger = logging.getLogger(__name__)
+
+
+class _RetentionWorker(QThread):
+    """手動データ整理をバックグラウンドで実行するワーカースレッド"""
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, retention_days: int):
+        super().__init__()
+        self.retention_days = retention_days
+
+    def run(self):
+        try:
+            from app.core.database import run_retention_policy
+            run_retention_policy(self.retention_days)
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
 
 class SettingsWidget(BaseWidget):
     settings_saved = Signal()
@@ -160,20 +178,34 @@ class SettingsWidget(BaseWidget):
 
     def _manual_retention(self):
         reply = QMessageBox.question(
-            self, "確認", 
-            f"保持期間({self.spn_retention.value()}日)より古いデータを\nバックアップして削除しますか？\n(※処理中は数秒間画面が止まる場合があります)", 
+            self, "確認",
+            f"保持期間({self.spn_retention.value()}日)より古いデータを\nバックアップして削除しますか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                from app.core.database import run_retention_policy
-                run_retention_policy(self.spn_retention.value())
-                QMessageBox.information(self, "完了", "古いデータのバックアップと削除が完了しました。\n(保存先: backups フォルダ)")
-            except Exception as e:
-                QMessageBox.warning(self, "エラー", f"処理中にエラーが発生しました:\n{e}")
-            finally:
-                QApplication.restoreOverrideCursor()
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.btn_run_retention.setEnabled(False)
+        self.btn_run_retention.setText(self.tr("整理中..."))
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        self._retention_worker = _RetentionWorker(self.spn_retention.value())
+        self._retention_worker.finished.connect(self._on_retention_finished)
+        self._retention_worker.error.connect(self._on_retention_error)
+        self._retention_worker.finished.connect(self._retention_worker.deleteLater)
+        self._retention_worker.start()
+
+    def _on_retention_finished(self):
+        QApplication.restoreOverrideCursor()
+        self.btn_run_retention.setEnabled(True)
+        self.btn_run_retention.setText(self.tr("今すぐ古いデータを整理"))
+        QMessageBox.information(self, "完了", "古いデータのバックアップと削除が完了しました。\n(保存先: backups フォルダ)")
+
+    def _on_retention_error(self, err: str):
+        QApplication.restoreOverrideCursor()
+        self.btn_run_retention.setEnabled(True)
+        self.btn_run_retention.setText(self.tr("今すぐ古いデータを整理"))
+        QMessageBox.warning(self, "エラー", f"処理中にエラーが発生しました:\n{err}")
 
     def _load_data(self):
         self._current_settings = load_settings()

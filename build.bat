@@ -28,8 +28,7 @@ pyinstaller ^
   --windowed ^
   --name "LEE電力モニター" ^
   --icon "img/icon.ico" ^
-  --add-data "img/icon.png;img" ^
-  --add-data "img/icon.ico;img" ^
+  --add-data "img;img" ^
   --add-data "app/ui/themes;app/ui/themes" ^
   --collect-all yfinance ^
   --hidden-import "pandas" ^

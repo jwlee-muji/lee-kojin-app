@@ -46,8 +46,10 @@ def check_for_update(timeout: int = 5):
                     url = asset["browser_download_url"]
                     break
             return {"version": latest, "url": url}
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"업데이트 확인 중 통신 오류 발생: {e}")
     except Exception as e:
-        logger.error(f"업데이트 확인 중 오류 발생: {e}")
+        logger.error(f"업데이트 확인 중 예기치 않은 오류 발생: {e}", exc_info=True)
     return None
 
 
@@ -60,16 +62,25 @@ def download_update(url: str, progress_callback=None) -> Path:
     current_exe  = Path(sys.executable)
     new_exe_path = current_exe.with_name(current_exe.stem + '_update.exe')
 
-    r     = requests.get(url, stream=True, timeout=120)
-    r.raise_for_status()
+    try:
+        r = requests.get(url, stream=True, timeout=120)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"업데이트 파일 다운로드 실패 (통신 오류): {url}, {e}")
+        raise
+
     total = int(r.headers.get('Content-Length', 0))
     done  = 0
-    with open(new_exe_path, 'wb') as f:
-        for chunk in r.iter_content(chunk_size=65536):
-            f.write(chunk)
-            done += len(chunk)
-            if progress_callback:
-                progress_callback(done, total)
+    try:
+        with open(new_exe_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                f.write(chunk)
+                done += len(chunk)
+                if progress_callback:
+                    progress_callback(done, total)
+    except IOError as e:
+        logger.error(f"업데이트 파일 저장 실패: {new_exe_path}, {e}")
+        raise
     return new_exe_path
 
 
@@ -138,8 +149,8 @@ def _get_downloads_folder() -> Path:
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
         ) as key:
             return Path(winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")[0])
-    except Exception as e:
-        logger.warning(f"다운로드 폴더 레지스트리 조회 실패, 기본 경로 반환: {e}")
+    except (FileNotFoundError, TypeError) as e:
+        logger.warning(f"다운로드 폴더 레지스트리 조회 실패, 기본 경로 반환: {e}, 기본 경로를 사용합니다.")
         return Path.home() / "Downloads"
 
 
@@ -169,7 +180,7 @@ def handle_downloads_launch():
         shutil.copy2(str(current_exe), str(install_path))
         subprocess.Popen([str(install_path)])
         sys.exit(0)
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         logger.error(f"설치 경로로 복사 후 실행 실패: {e}")
         _save_install_path(current_exe)
 
@@ -183,8 +194,10 @@ def _load_install_path() -> Optional[Path]:
     try:
         p = Path(INSTALL_FILE.read_text(encoding='utf-8').strip())
         return p if p.parent.exists() else None
+    except FileNotFoundError:
+        return None
     except Exception as e:
-        logger.debug(f"설치 경로 파일 로드 실패 (최초 실행일 수 있음): {e}")
+        logger.debug(f"설치 경로 파일 로드 실패: {e}")
         return None
 
 
@@ -218,8 +231,12 @@ class DownloadWorker(QThread):
         try:
             new_exe = download_update(self.url, progress_callback=lambda d, t: self.progress.emit(d, t))
             self.finished.emit(str(new_exe))
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
+            self.error.emit(f"통신 오류: {e}")
+        except (RuntimeError, IOError) as e:
             self.error.emit(str(e))
+        except Exception as e:
+            self.error.emit(f"예기치 않은 오류: {e}")
 
 
 class UpdateManager(QObject):
@@ -232,6 +249,7 @@ class UpdateManager(QObject):
     def start_check(self):
         self._check_worker = UpdateCheckWorker()
         self._check_worker.result.connect(self._on_update_found)
+        self._check_worker.finished.connect(self._check_worker.deleteLater)
         self._check_worker.start()
 
     def _on_update_found(self, info: dict):
@@ -261,6 +279,7 @@ class UpdateManager(QObject):
         self._download_worker.progress.connect(self._on_progress)
         self._download_worker.finished.connect(self._on_download_finished)
         self._download_worker.error.connect(self._on_download_error)
+        self._download_worker.finished.connect(self._download_worker.deleteLater)
         self._download_worker.start()
 
     def _on_progress(self, downloaded: int, total: int):

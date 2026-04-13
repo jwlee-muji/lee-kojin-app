@@ -1,10 +1,14 @@
 import os
+import sys
 import json
 from pathlib import Path
 
 # --- 기본 경로 설정 ---
 APP_NAME = 'LEE電力モニター'
 APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
+
+# PyInstaller frozen 환경과 개발 환경 모두에서 프로젝트 루트를 안전하게 반환
+BASE_DIR: Path = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
 APP_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE     = APP_DIR / 'app.log'

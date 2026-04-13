@@ -1,16 +1,18 @@
 import re
+import csv
 import logging
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidgetItem,
     QPushButton, QMessageBox, QHeaderView, QDateEdit, QFileDialog,
-    QApplication, QSystemTrayIcon
+    QApplication, QSystemTrayIcon,
 )
 from PySide6.QtCore import QTimer, QThread, Signal, QDate, Qt
 from PySide6.QtGui import QBrush, QColor
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
+from app.ui.theme import UIColors
 from app.core.config import load_settings
-from app.ui.api_client import FetchPowerReserveWorker
+from app.core.api_client import FetchPowerReserveWorker
 
 logger = logging.getLogger(__name__)
 
@@ -61,30 +63,40 @@ class PowerReserveWidget(BaseWidget):
         if self._last_headers and self._last_rows:
             self._update_table(self._last_headers, self._last_rows)
 
+    def set_loading(self, is_loading: bool):
+        super().set_loading(is_loading, self.table)
+
     def apply_theme_custom(self):
         if self._last_headers and self._last_rows:
             self._update_table(self._last_headers, self._last_rows)
 
     def fetch_data(self):
         if not self.check_online_status(): return
-        if self.worker and self.worker.isRunning():
-            return
+        try:
+            if self.worker and self.worker.isRunning():
+                return
+        except RuntimeError:
+            self.worker = None
         selected_date = self.date_edit.date().toString("yyyy-MM-dd")
         self.refresh_btn.setEnabled(False)
+        self.set_loading(True)
         self.status_label.setText("更新中...")
         self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
         self.worker = FetchPowerReserveWorker(selected_date)
         self.worker.data_fetched.connect(self._update_table)
         self.worker.error_occurred.connect(self._handle_error)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def _handle_error(self, err):
+        self.set_loading(False)
         self.status_label.setText("更新失敗")
         self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
         QMessageBox.warning(self, "エラー", f"データの取得中にエラーが発生しました:\n{err}")
         self.refresh_btn.setEnabled(True)
 
     def _update_table(self, headers, rows):
+        self.set_loading(False)
         self._last_headers = headers
         self._last_rows    = rows
         self.table.setUpdatesEnabled(False)
@@ -146,15 +158,12 @@ class PowerReserveWidget(BaseWidget):
                     except ValueError:
                         pass
 
-                if reserve_level == 'low':
-                    item.setBackground(QBrush(QColor("#7f1d1d" if self.is_dark else "#ff6666")))
-                    item.setForeground(QBrush(QColor("#ffffff" if self.is_dark else "#000000")))
-                elif reserve_level == 'warning':
-                    item.setBackground(QBrush(QColor("#785b0d" if self.is_dark else "#ffeb3b")))
-                    item.setForeground(QBrush(QColor("#ffffff" if self.is_dark else "#000000")))
-                elif is_past:
-                    item.setBackground(QBrush(QColor("#2d2d2d" if self.is_dark else "#e0e0e0")))
-                    item.setForeground(QBrush(QColor("#777777" if self.is_dark else "#888888")))
+                status_key = reserve_level if reserve_level else ('past' if is_past else None)
+                if status_key:
+                    bg, fg = UIColors.get_reserve_alert_colors(self.is_dark, status_key)
+                    item.setBackground(QBrush(QColor(bg)))
+                    item.setForeground(QBrush(QColor(fg)))
+
                 self.table.setItem(row_idx, col_idx, item)
                 
                 # 오늘 날짜이며 예비율 경고(low)인 경우 알림 목록에 추가 (시간 무관, 캐시로 중복 방지)
@@ -210,7 +219,6 @@ class PowerReserveWidget(BaseWidget):
             QMessageBox.warning(self, "エラー", "保存するデータがありません。")
             return
             
-        import csv
         date_str = self.date_edit.date().toString('yyyyMMdd')
         file_path, _ = QFileDialog.getSaveFileName(self, "CSV保存", f"OCCTO_予備率_{date_str}.csv", "CSV Files (*.csv)")
         
@@ -229,5 +237,5 @@ class PowerReserveWidget(BaseWidget):
                     writer.writerow(row_data)
                     
             QMessageBox.information(self, "完了", "CSVファイルとして保存しました。\nExcelで開くことができます。")
-        except Exception as e:
+        except (IOError, csv.Error) as e:
             QMessageBox.warning(self, "エラー", f"保存に失敗しました:\n{e}")

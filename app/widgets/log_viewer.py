@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -7,6 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QFileSystemWatcher, QTimer
 from PySide6.QtGui import QFont
 from app.core.config import LOG_FILE
+
+logger = logging.getLogger(__name__)
 
 
 class LogViewerWidget(QWidget):
@@ -112,9 +115,18 @@ class LogViewerWidget(QWidget):
                 return  # 추가된 변경 내용 없음
                 
             with open(self._log_file, 'r', encoding='utf-8') as f:
-                f.seek(self._last_pos)
-                new_content = f.read()
-                self._last_pos = f.tell()
+                # 처음 읽을 때 파일이 500KB를 넘으면 뒤에서부터 읽음 (OOM/프리징 방지)
+                MAX_READ_BYTES = 500 * 1024
+                if self._last_pos == 0 and current_size > MAX_READ_BYTES:
+                    f.seek(current_size - MAX_READ_BYTES)
+                    # 잘린 첫 줄은 버리기 위해 readlines 대신 부분 읽기 후 첫 줄 컷
+                    f.readline()
+                    new_content = f.read()
+                    self._last_pos = f.tell()
+                else:
+                    f.seek(self._last_pos)
+                    new_content = f.read()
+                    self._last_pos = f.tell()
                 
             if not new_content:
                 return
@@ -125,9 +137,11 @@ class LogViewerWidget(QWidget):
             if not self._process_timer.isActive():
                 self._process_timer.start()
                 
-        except Exception as e:
-            self.log_text.setUpdatesEnabled(True)
+        except (IOError, OSError) as e:
             self.log_text.appendHtml(f"<span style='color: #ff5555;'>ログの読み込みに失敗しました: {e}</span>")
+        except Exception as e:
+            self.log_text.appendHtml(f"<span style='color: #ff5555;'>予期せぬエラーが発生しました: {e}</span>")
+            logger.error(f"Log viewer error: {e}", exc_info=True)
             
     def _process_log_buffer(self):
         if not self._log_buffer:
@@ -182,5 +196,5 @@ class LogViewerWidget(QWidget):
             self.log_text.clear()
             self._last_pos = 0
             self._load_logs()
-        except Exception:
+        except (IOError, OSError):
             pass

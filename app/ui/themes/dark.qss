@@ -40,3 +40,57 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; back
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QSplitter::handle { background-color: #3e3e42; }
 QMessageBox { background-color: #1e1e1e; }
+QSpinBox, QDoubleSpinBox {
+    background-color: #333333;
+    color: #d4d4d4;
+    border: 1px solid #555555;
+    border-radius: 3px;
+    padding: 3px 5px;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    background-color: #3e3e42;
+    border: none;
+    border-left: 1px solid #555555;
+    width: 16px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background-color: #3e3e42;
+    border: none;
+    border-left: 1px solid #555555;
+    width: 16px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background-color: #4a4a4e; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0px; }
+QScrollBar::handle:horizontal { background: rgba(85, 85, 85, 150); border-radius: 5px; min-width: 20px; margin: 1px; }
+QScrollBar::handle:horizontal:hover { background: rgba(120, 120, 120, 200); margin: 0px; border-radius: 5px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; background: none; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+QPlainTextEdit {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    border: 1px solid #3e3e42;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+}
+QComboBox::drop-down { background-color: #3e3e42; border: none; border-left: 1px solid #555555; width: 20px; }
+QComboBox QAbstractItemView {
+    background-color: #2d2d30;
+    color: #d4d4d4;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+    border: 1px solid #555555;
+    outline: none;
+}
+QCalendarWidget QWidget { background-color: #252526; color: #d4d4d4; }
+QCalendarWidget QAbstractItemView {
+    background-color: #252526;
+    color: #d4d4d4;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+    gridline-color: #3e3e42;
+}
+QCalendarWidget QAbstractItemView:disabled { color: #555555; }
+QCalendarWidget QToolButton { background-color: #333333; color: #d4d4d4; border: none; border-radius: 3px; padding: 3px 6px; }
+QCalendarWidget QToolButton:hover { background-color: #444444; }
+QCalendarWidget #qt_calendar_navigationbar { background-color: #2d2d30; padding: 4px; }

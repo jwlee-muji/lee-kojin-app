@@ -157,9 +157,18 @@ class FetchHjksWorker(QThread):
             logger.info("HJKS DB更新が完了しました。")
             self.finished.emit("データ取得およびDB更新完了")
 
+        except requests.exceptions.RequestException as e:
+            logger.error(f"HJKS データ取得中の通信エラー: {str(e)}")
+            self.error.emit(f"通信エラー: {str(e)}")
+        except (ValueError, KeyError) as e:
+            logger.error(f"HJKS API応答の解析エラー: {str(e)}")
+            self.error.emit(f"API応答の解析エラー: {str(e)}")
+        except sqlite3.Error as e:
+            logger.error(f"HJKS DB保存エラー: {str(e)}")
+            self.error.emit(f"DB保存エラー: {str(e)}")
         except Exception as e:
-            logger.error(f"HJKS データの取得中にエラーが発生しました: {str(e)}")
-            self.error.emit(f"データの取得に失敗しました: {str(e)}")
+            logger.error(f"HJKS データ取得中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
+            self.error.emit(f"予期せぬエラー: {str(e)}")
 
 
 class AggregateHjksWorker(QThread):
@@ -178,7 +187,11 @@ class AggregateHjksWorker(QThread):
                     ) ORDER BY date
                 """
                 df = pd.read_sql(query, conn, params=[today_str])
-        except Exception:
+        except sqlite3.Error as e:
+            logger.error(f"HJKS DB 집계 데이터 로드 실패: {e}")
+            df = pd.DataFrame()
+        except Exception as e:
+            logger.error(f"HJKS 집계 중 예기치 않은 오류: {e}", exc_info=True)
             df = pd.DataFrame()
 
         if not df.empty and 'region' in df.columns:
@@ -209,6 +222,7 @@ class HjksWidget(BaseWidget):
         super().__init__()
         self.worker = None
         self._base_daily_data = None  # 계산 결과 캐시 저장소
+        self._dates_str = []          # 집계 날짜 목록 캐시
         self.aggregated_data = []
 
         self._build_ui()
@@ -399,8 +413,11 @@ class HjksWidget(BaseWidget):
 
     def fetch_data(self):
         if not self.check_online_status(): return
-        if self.worker and self.worker.isRunning():
-            return
+        try:
+            if self.worker and self.worker.isRunning():
+                return
+        except RuntimeError:
+            self.worker = None
         self.refresh_btn.setEnabled(False)
         self.status_label.setText("データ取得中...")
         self.status_label.setStyleSheet("color: #64b5f6;")
@@ -408,6 +425,7 @@ class HjksWidget(BaseWidget):
         self.worker = FetchHjksWorker()
         self.worker.finished.connect(self._on_fetch_success)
         self.worker.error.connect(self._on_fetch_error)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def _on_fetch_success(self, msg):
@@ -415,6 +433,7 @@ class HjksWidget(BaseWidget):
         self.status_label.setText(msg)
         self.status_label.setStyleSheet("color: #4caf50;")
         self._base_daily_data = None  # 데이터가 갱신되었으므로 캐시 초기화
+        self._dates_str = []          # 캐시 초기화에 맞춰 날짜 목록도 리셋
         self._update_chart()
         self.data_updated.emit()
 
@@ -427,10 +446,14 @@ class HjksWidget(BaseWidget):
     def _update_chart(self):
         # 1. 필요 시 베이스 데이터 캐싱 (DB 읽기 + 10일간의 날짜/에리어/방식별 사전 집계)
         if self._base_daily_data is None:
-            if getattr(self, '_agg_worker', None) and self._agg_worker.isRunning():
-                return
+            try:
+                if getattr(self, '_agg_worker', None) and self._agg_worker.isRunning():
+                    return
+            except RuntimeError:
+                self._agg_worker = None
             self._agg_worker = AggregateHjksWorker()
             self._agg_worker.finished.connect(self._on_aggregate_finished)
+            self._agg_worker.finished.connect(self._agg_worker.deleteLater)
             self._agg_worker.start()
             return
             
