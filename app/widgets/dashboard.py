@@ -17,6 +17,7 @@ import sqlite3
 from app.core.database import get_db_connection
 from app.ui.common import BaseWidget, get_tinted_pixmap
 from app.core.events import bus
+from app.core.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class SummaryCard(QFrame):
         self.value_lbl = QLabel("--")
         self.value_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
-        self.sub_lbl = QLabel(self.tr("データ待機中..."))
+        self.sub_lbl = QLabel(tr("データ待機中..."))
         self.sub_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
         layout.addLayout(header_layout)
@@ -91,7 +92,7 @@ class SummaryCard(QFrame):
         """스켈레톤(Skeleton) 로딩 애니메이션 활성화/비활성화"""
         if is_loading:
             self.value_lbl.setText("----")
-            self.sub_lbl.setText(self.tr("データ取得中..."))
+            self.sub_lbl.setText(tr("データ取得中..."))
 
             # C++ 객체 유효성 검사 후 필요 시 재생성
             if not self._is_effect_alive('_skel_effect'):
@@ -309,7 +310,7 @@ class DashboardDataService(QObject):
                                 pass
             
             if max_val is not None:
-                self.imb_result.emit(float(max_val), f"コマ {max_slot} / {max_col}")
+                self.imb_result.emit(float(max_val), tr("コマ {0} / {1}").format(max_slot, tr(max_col)))
             else: self.imb_empty.emit()
         except (sqlite3.Error, ValueError, IndexError) as e:
             logger.warning(f"インバランスDBのクエリ中にエラー: {e}")
@@ -393,18 +394,18 @@ class DashboardWidget(BaseWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        self.title_lbl = QLabel(self.tr("総合ダッシュボード"))
+        self.title_lbl = QLabel(tr("総合ダッシュボード"))
         layout.addWidget(self.title_lbl)
         layout.addSpacing(20)
-        
+
         grid = QGridLayout()
         grid.setSpacing(20)
-        
-        self.card_imb   = SummaryCard(self.tr("本日の最大インバランス"), "won", "#F44336")
-        self.card_occto = SummaryCard(self.tr("本日の最低電力予備率"), "power", "#2196F3")
-        self.card_wea   = SummaryCard(self.tr("全国の天気"), "weather", "#4CAF50")
-        self.card_jkm   = SummaryCard(self.tr("最新 JKM LNG 価格"), "fire", "#FF9800")
-        self.card_hjks  = SummaryCard(self.tr("本日の発電稼働容量"), "plant", "#9C27B0")
+
+        self.card_imb   = SummaryCard(tr("本日の最大インバランス"), "won", "#F44336")
+        self.card_occto = SummaryCard(tr("本日の最低電力予備率"), "power", "#2196F3")
+        self.card_wea   = SummaryCard(tr("全国の天気"), "weather", "#4CAF50")
+        self.card_jkm   = SummaryCard(tr("最新 JKM LNG 価格"), "fire", "#FF9800")
+        self.card_hjks  = SummaryCard(tr("本日の発電稼働容量"), "plant", "#9C27B0")
         
         grid.addWidget(self.card_imb, 0, 0)
         grid.addWidget(self.card_occto, 0, 1)
@@ -453,26 +454,26 @@ class DashboardWidget(BaseWidget):
         self.card_imb.set_value(f"{max_val:,.1f} 円", max_info, color, target_val=max_val, format_str="{:,.1f} 円")
         
     def _on_imb_empty(self):
-        self.card_imb.set_value(self.tr("-- 円"), self.tr("本日のデータなし"))
+        self.card_imb.set_value(tr("-- 円"), tr("本日のデータなし"))
             
     def refresh_jkm(self):
         self.request_fetch.emit("jkm")
         
     def _on_jkm_result(self, price, date, pct):
         sign, color = ("▲", ("#ff5252" if self.is_dark else "#d32f2f")) if pct < 0 else ("▼", ("#4caf50" if self.is_dark else "#388e3c"))
-        self.card_jkm.set_value(f"{price:.3f} USD", self.tr("{0} (前日比 {1} {2}%)").format(date, sign, abs(pct)) if pct else date, color if pct else None, target_val=price, format_str="{:.3f} USD")
+        self.card_jkm.set_value(f"{price:.3f} USD", tr("{0} (前日比 {1} {2}%)").format(date, sign, abs(pct)) if pct else date, color if pct else None, target_val=price, format_str="{:.3f} USD")
         
     def _on_jkm_empty(self):
-        self.card_jkm.set_value(self.tr("-- USD"), self.tr("データなし"))
+        self.card_jkm.set_value(tr("-- USD"), tr("データなし"))
             
     def refresh_hjks(self):
         self.request_fetch.emit("hjks")
         
     def _on_hjks_result(self, operating_mw, stopped_mw):
-        self.card_hjks.set_value(f"{operating_mw:,.0f} MW", self.tr("停止中: {0:,.0f} MW").format(stopped_mw), target_val=operating_mw, format_str="{:,.0f} MW")
+        self.card_hjks.set_value(f"{operating_mw:,.0f} MW", tr("停止中: {0} MW").format(f"{stopped_mw:,.0f}"), target_val=operating_mw, format_str="{:,.0f} MW")
         
     def _on_hjks_empty(self):
-        self.card_hjks.set_value(self.tr("0 MW"), self.tr("本日のデータなし"))
+        self.card_hjks.set_value("0 MW", tr("本日のデータなし"))
             
     def update_occto(self, time_str, area_str, min_val):
         color = ("#ff5252" if self.is_dark else "#d32f2f") if min_val <= 8.0 else (("#ffa726" if self.is_dark else "#f57c00") if min_val <= 10.0 else None)

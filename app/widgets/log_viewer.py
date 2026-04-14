@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QFileSystemWatcher, QTimer
 from PySide6.QtGui import QFont
 from app.core.config import LOG_FILE
+from app.core.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -43,35 +44,35 @@ class LogViewerWidget(QWidget):
         layout = QVBoxLayout(self)
         
         top = QHBoxLayout()
-        title = QLabel(self.tr("システムログ (System Logs)"))
+        title = QLabel(tr("システムログ (System Logs)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         top.addWidget(title)
         top.addSpacing(15)
-        
+
         self.module_combo = QComboBox()
         self.module_combo.addItems([
-            self.tr("すべての機能"),
-            self.tr("システム起動・終了"),
-            self.tr("発電停止状況 (HJKS)"),
-            self.tr("インバランス単価"),
-            self.tr("JKM LNG 価格"),
-            self.tr("全国天気予報"),
-            self.tr("電力予備率 (OCCTO)")
+            tr("すべての機能"),
+            tr("システム起動・終了"),
+            tr("発電停止状況 (HJKS)"),
+            tr("インバランス単価"),
+            tr("JKM LNG 価格"),
+            tr("全国天気予報"),
+            tr("電力予備率 (OCCTO)")
         ])
         self.module_combo.currentIndexChanged.connect(self._on_filter_changed)
         top.addWidget(self.module_combo)
-        
+
         self.level_combo = QComboBox()
-        self.level_combo.addItems([self.tr("すべてのログレベル"), "INFO", "WARNING", "ERROR"])
+        self.level_combo.addItems([tr("すべてのログレベル"), "INFO", "WARNING", "ERROR"])
         self.level_combo.currentIndexChanged.connect(self._on_filter_changed)
         top.addWidget(self.level_combo)
-        
+
         top.addStretch()
-        
-        self.clear_btn = QPushButton(self.tr("ログ消去"))
+
+        self.clear_btn = QPushButton(tr("ログ消去"))
         self.clear_btn.clicked.connect(self._clear_logs)
-        
-        refresh_btn = QPushButton(self.tr("手動更新"))
+
+        refresh_btn = QPushButton(tr("手動更新"))
         refresh_btn.clicked.connect(self._load_logs)
         
         top.addWidget(self.clear_btn)
@@ -139,9 +140,9 @@ class LogViewerWidget(QWidget):
                 self._process_timer.start()
                 
         except (IOError, OSError) as e:
-            self.log_text.appendHtml(f"<span style='color: #ff5555;'>ログの読み込みに失敗しました: {e}</span>")
+            self.log_text.appendHtml(f"<span style='color: #ff5555;'>{tr('ログの読み込みに失敗しました: {0}').format(e)}</span>")
         except Exception as e:
-            self.log_text.appendHtml(f"<span style='color: #ff5555;'>予期せぬエラーが発生しました: {e}</span>")
+            self.log_text.appendHtml(f"<span style='color: #ff5555;'>{tr('予期せぬエラーが発生しました: {0}').format(e)}</span>")
             logger.error(f"Log viewer error: {e}", exc_info=True)
             
     def _process_log_buffer(self):
@@ -155,22 +156,25 @@ class LogViewerWidget(QWidget):
         bar = self.log_text.verticalScrollBar()
         at_bottom = bar.value() == bar.maximum()
         
+        lvl_idx = self.level_combo.currentIndex()
         lvl_filter = self.level_combo.currentText()
-        mod_filter = self.module_combo.currentText()
-        
+        mod_idx = self.module_combo.currentIndex()
+
         self.log_text.setUpdatesEnabled(False)
         for line in chunk:
             safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            
-            if lvl_filter != "すべてのログレベル" and f"[{lvl_filter}]" not in safe_line: continue
-                
-            if mod_filter != "すべての機能":
-                if mod_filter == "システム起動・終了" and "__main__" not in safe_line: continue
-                elif mod_filter == "発電停止状況 (HJKS)" and "hjks" not in safe_line: continue
-                elif mod_filter == "インバランス単価" and "imbalance" not in safe_line: continue
-                elif mod_filter == "JKM LNG 価格" and "jkm" not in safe_line: continue
-                elif mod_filter == "全国天気予報" and "weather" not in safe_line: continue
-                elif mod_filter == "電力予備率 (OCCTO)" and "power_reserve" not in safe_line: continue
+
+            # Level filter (index 0 = all)
+            if lvl_idx != 0 and f"[{lvl_filter}]" not in safe_line:
+                continue
+
+            # Module filter (index 0 = all) — index-based to avoid translation mismatch
+            if mod_idx == 1 and "__main__" not in safe_line: continue
+            elif mod_idx == 2 and "hjks" not in safe_line: continue
+            elif mod_idx == 3 and "imbalance" not in safe_line: continue
+            elif mod_idx == 4 and "jkm" not in safe_line: continue
+            elif mod_idx == 5 and "weather" not in safe_line: continue
+            elif mod_idx == 6 and "power_reserve" not in safe_line: continue
 
             match = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - \[(.*?)\] (.*?)\s*:\s*(.*)", safe_line)
             if match:

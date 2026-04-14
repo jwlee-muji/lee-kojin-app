@@ -77,7 +77,12 @@ DEFAULT_SETTINGS = {
     "hjks_interval": 180,
     "jkm_interval": 180,
     "retention_days": 1460,
-    "auto_start": False
+    "auto_start": False,
+    "language": "auto",
+    "gemini_model": "gemini-2.5-flash",
+    "ai_temperature": 0.7,
+    "ai_max_tokens": 2048,
+    "chat_history_limit": 20,
 }
 
 def load_settings():

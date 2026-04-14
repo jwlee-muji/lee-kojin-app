@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor
 from app.core.config import HJKS_REGIONS, HJKS_METHODS, HJKS_COLORS, load_settings
 from app.api.hjks_api import FetchHjksWorker, AggregateHjksWorker
 from app.ui.common import BaseWidget
+from app.core.i18n import tr
 from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
@@ -37,27 +38,27 @@ class HjksWidget(BaseWidget):
 
         # 상단 컨트롤 바
         top = QHBoxLayout()
-        title = QLabel(self.tr("発電所 稼働可能容量 推移 (HJKS)"))
+        title = QLabel(tr("発電所 稼働可能容量 推移 (HJKS)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         top.addWidget(title)
         top.addSpacing(20)
 
-        self.refresh_btn = QPushButton(self.tr("データ更新"))
+        self.refresh_btn = QPushButton(tr("データ更新"))
         self.refresh_btn.clicked.connect(self.fetch_data)
         top.addWidget(self.refresh_btn)
 
         top.addSpacing(15)
-        self.status_label = QLabel(self.tr("待機中..."))
+        self.status_label = QLabel(tr("待機中..."))
         self.status_label.setStyleSheet("color: #aaaaaa;")
         top.addWidget(self.status_label)
         top.addStretch()
         
         # 그래프 복사 버튼
-        self.copy_btn = QPushButton(self.tr("グラフ画像をコピー"))
+        self.copy_btn = QPushButton(tr("グラフ画像をコピー"))
         self.copy_btn.clicked.connect(self._copy_graph)
         top.addWidget(self.copy_btn)
         
-        self.reset_zoom_btn = QPushButton(self.tr("ビュー初期化"))
+        self.reset_zoom_btn = QPushButton(tr("ビュー初期化"))
         self.reset_zoom_btn.clicked.connect(lambda: self.plot_widget.enableAutoRange())
         top.addWidget(self.reset_zoom_btn)
         
@@ -72,13 +73,13 @@ class HjksWidget(BaseWidget):
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(10, 15, 10, 15)
         
-        self.lbl_region = QLabel(self.tr("表示エリア選択"))
+        self.lbl_region = QLabel(tr("表示エリア選択"))
         self.lbl_region.setStyleSheet("font-weight: bold; color: #eeeeee; border: none; background: transparent;")
         left_layout.addWidget(self.lbl_region)
         
         btn_layout = QHBoxLayout()
-        self.btn_select_all = QPushButton(self.tr("全選択"))
-        self.btn_deselect_all = QPushButton(self.tr("全解除"))
+        self.btn_select_all = QPushButton(tr("全選択"))
+        self.btn_deselect_all = QPushButton(tr("全解除"))
         self.btn_select_all.setCursor(Qt.PointingHandCursor)
         self.btn_deselect_all.setCursor(Qt.PointingHandCursor)
         self.btn_select_all.clicked.connect(self._select_all_regions)
@@ -91,7 +92,7 @@ class HjksWidget(BaseWidget):
         
         self.checkboxes = {}
         for region in HJKS_REGIONS:
-            cb = QCheckBox(region)
+            cb = QCheckBox(tr(region))
             cb.setChecked(True)
             cb.setCursor(Qt.PointingHandCursor)
             cb.stateChanged.connect(self._update_chart)
@@ -101,7 +102,7 @@ class HjksWidget(BaseWidget):
         left_layout.addSpacing(15)
 
         # 발전 방식 범례 표시
-        self.leg_title = QLabel(self.tr("【発電方式 凡例】"))
+        self.leg_title = QLabel(tr("【発電方式 凡例】"))
         self.leg_title.setStyleSheet("background: transparent; color: #eeeeee;")
         left_layout.addWidget(self.leg_title)
         left_layout.addSpacing(10)
@@ -111,7 +112,7 @@ class HjksWidget(BaseWidget):
             color_box = QLabel()
             color_box.setFixedSize(12, 12)
             color_box.setStyleSheet(f"background-color: {HJKS_COLORS[method]}; border-radius: 2px; border: none;")
-            leg_lbl = QLabel(method)
+            leg_lbl = QLabel(tr(method))
             leg_lbl.setStyleSheet("font-size: 11px; border: none; background: transparent; color: #d4d4d4;")
             self.leg_labels.append(leg_lbl)
             leg_layout.addWidget(color_box)
@@ -201,7 +202,7 @@ class HjksWidget(BaseWidget):
             ax = self.plot_widget.getAxis(ax_name)
             ax.setPen(ax_pen)
             ax.setTextPen(text_pen)
-        self.plot_widget.setLabel('left', '稼働可能容量 (MW)', color='#aaaaaa' if is_dark else '#666666', size='10pt')
+        self.plot_widget.setLabel('left', tr('稼働可能容量 (MW)'), color='#aaaaaa' if is_dark else '#666666', size='10pt')
         self.tooltip_label.setStyleSheet(
             f"QLabel {{ background-color: {'rgba(45, 45, 45, 230)' if is_dark else 'rgba(255, 255, 255, 230)'}; border: 1px solid {'#555555' if is_dark else '#cccccc'}; border-radius: 6px; padding: 8px 12px; color: {'#eeeeee' if is_dark else '#333333'}; font-size: 12px; }}"
         )
@@ -225,7 +226,7 @@ class HjksWidget(BaseWidget):
         except RuntimeError:
             self.worker = None
         self.refresh_btn.setEnabled(False)
-        self.status_label.setText("データ取得中...")
+        self.status_label.setText(tr("データ取得中..."))
         self.status_label.setStyleSheet("color: #64b5f6;")
         
         self.worker = FetchHjksWorker()
@@ -246,9 +247,9 @@ class HjksWidget(BaseWidget):
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
-        self.status_label.setText("取得失敗")
+        self.status_label.setText(tr("取得失敗"))
         self.status_label.setStyleSheet("color: #ff5252;")
-        QMessageBox.warning(self, "エラー", err_msg)
+        QMessageBox.warning(self, tr("エラー"), err_msg)
 
     def _update_chart(self):
         # 1. 필요 시 베이스 데이터 캐싱 (DB 읽기 + 10일간의 날짜/에리어/방식별 사전 집계)
@@ -361,22 +362,29 @@ class HjksWidget(BaseWidget):
             self.hover_point.setSymbolPen(pg.mkPen(bg_color, width=1.5))
 
             total_st_mw = data['total_st'] / 1000.0
-            tooltip_text = f"<b>{data['date']}</b><br>稼働可能容量: {total_op_mw:,.0f} MW<br><span style='color:#aaaaaa; font-size:11px;'> (停止中: {total_st_mw:,.0f} MW)</span><hr style='margin:4px 0;'>"
-            
-            tooltip_text += f"<span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【発電方式別】</span><br>"
+            cap_lbl = tr('稼働可能容量 (MW)')
+            tooltip_text = (
+                f"<b>{data['date']}</b><br>"
+                f"{cap_lbl}: {total_op_mw:,.0f} MW<br>"
+                f"<span style='color:#aaaaaa; font-size:11px;'>"
+                f"({tr('停止中')}: {total_st_mw:,.0f} MW)</span>"
+                f"<hr style='margin:4px 0;'>"
+            )
+
+            tooltip_text += f"<span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>{tr('【発電方式別】')}</span><br>"
             for method in HJKS_METHODS:
                 val_kw = data['methods'].get(method, {}).get("op", 0)
                 if val_kw > 0:
                     val_mw = val_kw / 1000.0
                     color = HJKS_COLORS[method]
-                    tooltip_text += f"<span style='color:{color};'>■</span> {method}: {val_mw:,.0f} MW<br>"
+                    tooltip_text += f"<span style='color:{color};'>■</span> {tr(method)}: {val_mw:,.0f} MW<br>"
 
-            tooltip_text += f"<hr style='margin:4px 0; border-color:{'#555' if self.is_dark else '#ccc'};'><span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>【選択エリア別】</span><br>"
+            tooltip_text += f"<hr style='margin:4px 0; border-color:{'#555' if self.is_dark else '#ccc'};'><span style='font-size:10px; color:{'#aaaaaa' if self.is_dark else '#666666'};'>{tr('【選択エリア別】')}</span><br>"
             for region in HJKS_REGIONS:
                 val_kw = data.get('regions', {}).get(region, {}).get("op", 0)
                 if val_kw > 0:
                     val_mw = val_kw / 1000.0
-                    tooltip_text += f" • {region}: {val_mw:,.0f} MW<br>"
+                    tooltip_text += f" • {tr(region)}: {val_mw:,.0f} MW<br>"
 
             self.tooltip_label.setText(tooltip_text)
             self.tooltip_label.adjustSize()
@@ -391,4 +399,4 @@ class HjksWidget(BaseWidget):
 
     def _copy_graph(self):
         QApplication.clipboard().setPixmap(self.plot_widget.grab())
-        QMessageBox.information(self, "完了", "グラフ画像をクリップボードにコピーしました。")
+        QMessageBox.information(self, tr("完了"), tr("グラフ画像をクリップボードにコピーしました。"))

@@ -22,6 +22,9 @@ build/
 # Environment variables
 .env
 
+# 内蔵シークレット (API キー等) — git に含めない
+app/core/_secrets.py
+
 # IDE
 .vscode/
 .idea/

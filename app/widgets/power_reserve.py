@@ -12,6 +12,7 @@ from PySide6.QtGui import QBrush, QColor
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import load_settings
+from app.core.i18n import tr
 from app.api.power_reserve_api import FetchPowerReserveWorker
 from app.core.events import bus
 
@@ -26,16 +27,16 @@ class PowerReserveWidget(BaseWidget):
         layout = QVBoxLayout(self)
 
         top_layout = QHBoxLayout()
-        self.title_label  = QLabel(self.tr("エリア別 予備率 (5分自動更新)"))
+        self.title_label  = QLabel(tr("エリア別 予備率 (5分自動更新)"))
         self.date_edit    = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.status_label = QLabel(self.tr("待機中"))
+        self.status_label = QLabel(tr("待機中"))
         self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
-        self.refresh_btn  = QPushButton(self.tr("表示"))
+        self.refresh_btn  = QPushButton(tr("表示"))
         self.refresh_btn.clicked.connect(self.fetch_data)
-        self.export_btn   = QPushButton(self.tr("Excel(CSV) 保存"))
+        self.export_btn   = QPushButton(tr("Excel(CSV) 保存"))
         self.export_btn.clicked.connect(self._export_csv)
 
         top_layout.addWidget(self.title_label)
@@ -79,7 +80,7 @@ class PowerReserveWidget(BaseWidget):
         selected_date = self.date_edit.date().toString("yyyy-MM-dd")
         self.refresh_btn.setEnabled(False)
         self.set_loading(True)
-        self.status_label.setText("更新中...")
+        self.status_label.setText(tr("更新中..."))
         self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
         self.worker = FetchPowerReserveWorker(selected_date)
         self.worker.data_fetched.connect(self._update_table)
@@ -90,9 +91,9 @@ class PowerReserveWidget(BaseWidget):
 
     def _handle_error(self, err):
         self.set_loading(False)
-        self.status_label.setText("更新失敗")
+        self.status_label.setText(tr("更新失敗"))
         self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
-        QMessageBox.warning(self, "エラー", f"データの取得中にエラーが発生しました:\n{err}")
+        QMessageBox.warning(self, tr("エラー"), tr("データの取得中にエラーが発生しました:\n{0}").format(err))
         self.refresh_btn.setEnabled(True)
 
     def _update_table(self, headers, rows):
@@ -102,7 +103,7 @@ class PowerReserveWidget(BaseWidget):
         self.table.setUpdatesEnabled(False)
         self.table.clear()
         self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
+        self.table.setHorizontalHeaderLabels([tr(h) for h in headers])
         self.table.setRowCount(0)
 
         header = self.table.horizontalHeader()
@@ -150,7 +151,7 @@ class PowerReserveWidget(BaseWidget):
                         
                         if is_today and val < min_val:
                             min_val = val
-                            min_area = headers[col_idx] if col_idx < len(headers) else f"エリア{col_idx}"
+                            min_area = headers[col_idx] if col_idx < len(headers) else f"Area{col_idx}"
                             min_time = row_data[0]
                             
                         if   val <= low_th:  reserve_level = 'low'
@@ -168,7 +169,7 @@ class PowerReserveWidget(BaseWidget):
                 
                 # 오늘 날짜이며 예비율 경고(low)인 경우 알림 목록에 추가 (시간 무관, 캐시로 중복 방지)
                 if is_today and reserve_level == 'low' and val is not None:
-                    area = headers[col_idx] if col_idx < len(headers) else f"エリア{col_idx}"
+                    area = headers[col_idx] if col_idx < len(headers) else f"Area{col_idx}"
                     key = (row_data[0], area)
                     if key not in self._alerted_low_reserve:
                         self._alerted_low_reserve.add(key)
@@ -177,28 +178,29 @@ class PowerReserveWidget(BaseWidget):
             self.refresh_btn.setEnabled(True)
 
         if min_val != 999.0:
-            bus.occto_updated.emit(min_time, min_area, min_val)
+            bus.occto_updated.emit(min_time, tr(min_area), min_val)
 
-        self.status_label.setText("更新完了")
+        self.status_label.setText(tr("更新完了"))
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         self.table.setUpdatesEnabled(True)
 
         if new_alerts:
             display_alerts = new_alerts[:5]
-            lines = "\n".join(f"  {t}  |  {area}:  {val}%" for t, area, val in display_alerts)
+            lines = "\n".join(f"  {t}  |  {tr(area)}:  {val}%" for t, area, val in display_alerts)
             if len(new_alerts) > 5:
-                lines += f"\n  ...他 {len(new_alerts) - 5}件の警告があります"
-                
+                lines += "\n  " + tr("...他 {0}件の警告があります").format(len(new_alerts) - 5)
+
             timestamp = datetime.now().strftime("%H:%M:%S")
             total_count = len(new_alerts)
-            
-            main_window = next((w for w in QApplication.topLevelWidgets() if w.inherits("QMainWindow")), None)
-            
-            plain_msg = f"本日のデータに予備率{low_th}%以下のコマが 【計 {total_count}件】 発生しています。\n\n{lines}"
-            html_lines = lines.replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
-            html_msg  = f"本日のデータに予備率{low_th}%以下のコマが <span style='color: #ff5252; font-weight: bold; font-size: 14px;'>【計 {total_count}件】</span> 発生しています。<br><br>{html_lines}"
 
-            title = f"⚠ 予備率警告 (計 {total_count}件) - {timestamp}"
+            main_window = next((w for w in QApplication.topLevelWidgets() if w.inherits("QMainWindow")), None)
+
+            prefix = tr("本日のデータに予備率{0}%以下のコマが 【計 {1}件】 発生しています。").format(low_th, total_count)
+            plain_msg = prefix + f"\n\n{lines}"
+            html_lines = lines.replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
+            html_msg  = prefix + f"<br><br>{html_lines}"
+
+            title = tr("⚠ 予備率警告 (計 {0}件) - {1}").format(total_count, timestamp)
             
             # 알림 센터 패널에 기록 추가
             if main_window and hasattr(main_window, 'add_notification'):
@@ -216,11 +218,11 @@ class PowerReserveWidget(BaseWidget):
 
     def _export_csv(self):
         if self.table.rowCount() == 0:
-            QMessageBox.warning(self, "エラー", "保存するデータがありません。")
+            QMessageBox.warning(self, tr("エラー"), tr("保存するデータがありません。"))
             return
             
         date_str = self.date_edit.date().toString('yyyyMMdd')
-        file_path, _ = QFileDialog.getSaveFileName(self, "CSV保存", f"OCCTO_予備率_{date_str}.csv", "CSV Files (*.csv)")
+        file_path, _ = QFileDialog.getSaveFileName(self, tr("CSV保存"), f"OCCTO_予備率_{date_str}.csv", "CSV Files (*.csv)")
         
         if not file_path:
             return
@@ -236,6 +238,6 @@ class PowerReserveWidget(BaseWidget):
                     row_data = [self.table.item(row, col).text() if self.table.item(row, col) else "" for col in range(self.table.columnCount())]
                     writer.writerow(row_data)
                     
-            QMessageBox.information(self, "完了", "CSVファイルとして保存しました。\nExcelで開くことができます。")
+            QMessageBox.information(self, tr("完了"), tr("CSVファイルとして保存しました。\nExcelで開くことができます。"))
         except (IOError, csv.Error) as e:
-            QMessageBox.warning(self, "エラー", f"保存に失敗しました:\n{e}")
+            QMessageBox.warning(self, tr("エラー"), tr("保存に失敗しました:\n{0}").format(e))

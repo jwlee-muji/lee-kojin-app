@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QColor, QBrush, QPixmap
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import WEATHER_REGIONS, BASE_DIR, load_settings
+from app.core.i18n import tr
 from app.api.weather_api import FetchWeatherWorker
 from app.core.events import bus
 
@@ -49,9 +50,9 @@ _WMO_MAP: dict[int, tuple[str, str, str]] = {
 _UNKNOWN = ("不明", "#757575", "cloudy")
 
 def get_weather_info(code: int) -> tuple[str, str]:
-    """WMO 코드 → (텍스트, 강조색) 반환 (하위 호환)"""
+    """WMO 코드 → (번역된 텍스트, 강조색) 반환"""
     t, c, _ = _WMO_MAP.get(code, _UNKNOWN)
-    return t, c
+    return tr(t), c
 
 # --- QPixmap 캐시: (icon_name, size) → QPixmap ---
 _PIXMAP_CACHE: dict[tuple[str, int], QPixmap] = {}
@@ -94,7 +95,7 @@ class RegionCard(QFrame):
         layout.setSpacing(4)
 
         # 지역명
-        name_lbl = QLabel(region_name)
+        name_lbl = QLabel(tr(region_name))
         name_lbl.setStyleSheet(
             f"font-weight: bold; font-size: 14px; color: {tc}; background: transparent;"
         )
@@ -174,9 +175,9 @@ class WeatherWidget(BaseWidget):
         
         # 상단 타이틀 바
         top = QHBoxLayout()
-        title = QLabel(self.tr("全国天気予報 (Open-Meteo)"))
+        title = QLabel(tr("全国天気予報 (Open-Meteo)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self.status_label = QLabel(self.tr("待機中..."))
+        self.status_label = QLabel(tr("待機中..."))
         self.status_label.setStyleSheet("color: #aaaaaa;")
         
         top.addWidget(title)
@@ -184,7 +185,7 @@ class WeatherWidget(BaseWidget):
         top.addWidget(self.status_label)
         top.addStretch()
         
-        self.refresh_btn = QPushButton(self.tr("更新 (再取得)"))
+        self.refresh_btn = QPushButton(tr("更新 (再取得)"))
         self.refresh_btn.clicked.connect(self.fetch_weather)
         top.addWidget(self.refresh_btn)
         
@@ -204,13 +205,13 @@ class WeatherWidget(BaseWidget):
         detail_layout = QVBoxLayout(detail_container)
         detail_layout.setContentsMargins(10, 0, 0, 0)
         
-        self.detail_title = QLabel(self.tr("👈 左側の地域を選択してください"))
+        self.detail_title = QLabel(tr("👈 左側の地域を選択してください"))
         self.detail_title.setStyleSheet("font-size: 16px; font-weight: bold; padding-bottom: 10px; color: #eeeeee;")
         detail_layout.addWidget(self.detail_title)
-        
+
         self.detail_table = ExcelCopyTableWidget()
         self.detail_table.setColumnCount(8)
-        self.detail_table.setHorizontalHeaderLabels([self.tr("日付"), self.tr("天気"), self.tr("最高気温"), self.tr("最低気温"), self.tr("降水確率"), self.tr("降水量"), self.tr("雲量"), self.tr("最大風速")])
+        self.detail_table.setHorizontalHeaderLabels([tr("日付"), tr("天気"), tr("最高気温"), tr("最低気温"), tr("降水確率"), tr("降水量"), tr("雲量"), tr("最大風速")])
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -259,7 +260,7 @@ class WeatherWidget(BaseWidget):
         except RuntimeError:
             self.worker = None
         self.refresh_btn.setEnabled(False)
-        self.status_label.setText("天気データを取得中...")
+        self.status_label.setText(tr("天気データを取得中..."))
         self.status_label.setStyleSheet("color: #64b5f6;")
         
         self.worker = FetchWeatherWorker()
@@ -272,7 +273,7 @@ class WeatherWidget(BaseWidget):
     def _on_fetch_success(self, data_list):
         self.refresh_btn.setEnabled(True)
         self.weather_data = data_list
-        self.status_label.setText("取得完了")
+        self.status_label.setText(tr("取得完了"))
         self.status_label.setStyleSheet("color: #4caf50;")
         self._populate_region_list()
 
@@ -288,16 +289,16 @@ class WeatherWidget(BaseWidget):
                 w_text, w_color = get_weather_info(w_code)
                 t_max_str = f"{t_max}℃" if t_max is not None else "—"
                 t_min_str = f"{t_min}℃" if t_min is not None else "—"
-                weather_summary.append((region["name"], w_text, f"{t_max_str} / {t_min_str}", w_color))
+                weather_summary.append((tr(region["name"]), w_text, f"{t_max_str} / {t_min_str}", w_color))
         
         if weather_summary:
             bus.weather_updated.emit(weather_summary)
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
-        self.status_label.setText("取得失敗")
+        self.status_label.setText(tr("取得失敗"))
         self.status_label.setStyleSheet("color: #ff5252;")
-        QMessageBox.warning(self, "エラー", err_msg)
+        QMessageBox.warning(self, tr("エラー"), err_msg)
 
     def _populate_region_list(self):
         self.region_list.clear()
@@ -335,7 +336,7 @@ class WeatherWidget(BaseWidget):
             return
             
         region_name = WEATHER_REGIONS[index]["name"]
-        self.detail_title.setText(f"📍 {region_name} の詳細天気 (7日間)")
+        self.detail_title.setText(tr("📍 {0} の詳細天気 (7日間)").format(tr(region_name)))
         
         daily = self.weather_data[index].get("daily", {})
         if not daily:

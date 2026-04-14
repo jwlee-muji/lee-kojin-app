@@ -45,10 +45,13 @@ def main():
     from PySide6.QtWidgets import QApplication, QSplashScreen
     from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
     from PySide6.QtCore import Qt
-    from PySide6.QtCore import QTranslator, QLocale
     from app.ui.main_window import MainWindow
     from app.core.updater import UpdateManager
-    
+    from app.core.i18n import init_language, tr
+
+    # 언어 초기화: 설정 파일 → 시스템 로캘 순으로 결정
+    init_language()
+
     # 고해상도(HiDPI) 모니터 스케일링 지원 명시 (글자/그래프 흐림 방지)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 
@@ -56,14 +59,6 @@ def main():
 
     # PyInstaller --onefile環境ではリソースが sys._MEIPASS に展開される
     base_dir  = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
-
-    # 다국어 지원 (i18n) 설정
-    translator = QTranslator()
-    # 시스템 로캘(예: 한국어 OS면 ko_KR)에 맞는 번역 파일(.qm)을 translations 폴더에서 탐색
-    locale_name = QLocale.system().name()
-    # 추후 translations 폴더에 app_ko_KR.qm 등을 넣으면 자동으로 로드됩니다.
-    if translator.load(f"app_{locale_name}", str(base_dir / "translations")):
-        app.installTranslator(translator)
 
     app.setFont(QFont("Meiryo, Segoe UI, sans-serif", 9))
     app.setStyle("Fusion")
@@ -96,7 +91,7 @@ def main():
         painter = QPainter(splash_pix)
         painter.setPen(QColor("#ffffff"))
         painter.setFont(QFont("Meiryo", 16, QFont.Bold))
-        painter.drawText(splash_pix.rect(), Qt.AlignCenter, "LEE電力モニター\n\n起動中...")
+        painter.drawText(splash_pix.rect(), Qt.AlignCenter, f"{tr('LEE電力モニター')}\n\n{tr('起動中...')}")
         painter.end()
         
         splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)

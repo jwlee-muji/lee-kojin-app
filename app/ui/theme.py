@@ -88,7 +88,10 @@ def get_global_qss(theme: str) -> str:
     secondary_bg = "#444444" if is_dark else "#dddddd"
     secondary_hover = "#555555" if is_dark else "#cccccc"
     toast_color = "#4caf50" if is_dark else "#388e3c"
-    
+    main_bg    = "#1e1e1e" if is_dark else "#f4f4f4"
+    grp_border = "#303030" if is_dark else "#dedede"
+    grp_title  = "#b0b0b0" if is_dark else "#444444"
+
     return f"""
     /* 앱 전체 공통 툴팁 스타일 */
     QToolTip {{
@@ -99,20 +102,26 @@ def get_global_qss(theme: str) -> str:
         padding: 5px;
     }}
 
-    /* SettingsWidget - QGroupBox 공통 설정 */
+    /* SettingsWidget - QGroupBox (배경 없음 → 자식 위젯 가시성 확보) */
     QGroupBox#settingsGroup {{
         font-weight: bold;
-        border: 1px solid {bc};
-        border-radius: 5px;
-        margin-top: 12px;
-        padding-top: 10px;
+        border: 1px solid {grp_border};
+        border-radius: 8px;
+        margin-top: 14px;
+        padding-top: 6px;
         color: {tc};
     }}
     QGroupBox#settingsGroup::title {{
         subcontrol-origin: margin;
-        left: 10px;
-        padding: 0 5px;
-        top: 0px;
+        subcontrol-position: top left;
+        left: 14px;
+        top: -1px;
+        padding: 2px 8px;
+        background-color: {main_bg};
+        color: {grp_title};
+        font-size: 12px;
+        font-weight: bold;
+        border-radius: 4px;
     }}
     
     /* 공통 버튼 액션 스타일 */

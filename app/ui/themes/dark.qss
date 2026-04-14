@@ -75,12 +75,25 @@ QPlainTextEdit {
 }
 QComboBox::drop-down { background-color: #3e3e42; border: none; border-left: 1px solid #555555; width: 20px; }
 QComboBox QAbstractItemView {
-    background-color: #2d2d30;
-    color: #d4d4d4;
-    selection-background-color: #094771;
+    background-color: #464646;
+    color: #e0e0e0;
+    selection-background-color: #0e639c;
     selection-color: #ffffff;
-    border: 1px solid #555555;
+    border: 1px solid #707070;
     outline: none;
+}
+QComboBox QAbstractItemView::item {
+    padding: 5px 10px;
+    min-height: 22px;
+    color: #e0e0e0;
+}
+QComboBox QAbstractItemView::item:hover {
+    background-color: #565656;
+    color: #ffffff;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: #0e639c;
+    color: #ffffff;
 }
 QCalendarWidget QWidget { background-color: #252526; color: #d4d4d4; }
 QCalendarWidget QAbstractItemView {

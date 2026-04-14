@@ -37,6 +37,9 @@ pyinstaller ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^
   --hidden-import "sqlite3" ^
+  --hidden-import "smtplib" ^
+  --hidden-import "email.mime.text" ^
+  --hidden-import "email.mime.multipart" ^
   main.py
 
 echo.

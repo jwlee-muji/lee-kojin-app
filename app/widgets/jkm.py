@@ -18,6 +18,7 @@ from PySide6.QtGui import QBrush, QColor, QFont
 from app.ui.common import ExcelCopyTableWidget, BaseWidget, BasePlotWidget
 from app.core.config import JKM_TICKER, DB_JKM, load_settings
 from app.core.database import get_db_connection
+from app.core.i18n import tr
 from app.api.jkm_api import FetchJkmWorker
 from app.core.events import bus
 
@@ -49,17 +50,17 @@ class JkmWidget(BaseWidget):
 
         # 상단 컨트롤
         top = QHBoxLayout()
-        title = QLabel(self.tr("JKM LNG スポット価格 (USD/MMBtu)"))
+        title = QLabel(tr("JKM LNG スポット価格 (USD/MMBtu)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         top.addWidget(title)
         top.addSpacing(20)
 
-        self.fetch_btn = QPushButton(self.tr("Yahoo Finance から取込"))
+        self.fetch_btn = QPushButton(tr("Yahoo Finance から取込"))
         self.fetch_btn.clicked.connect(self._on_fetch)
         top.addWidget(self.fetch_btn)
 
         top.addSpacing(16)
-        top.addWidget(QLabel(self.tr("表示期間:")))
+        top.addWidget(QLabel(tr("表示期間:")))
 
         self.start_date = QDateEdit()
         self.start_date.setCalendarPopup(True)
@@ -67,7 +68,7 @@ class JkmWidget(BaseWidget):
         self.start_date.setDisplayFormat("yyyy/MM/dd")
         top.addWidget(self.start_date)
 
-        top.addWidget(QLabel(self.tr("〜")))
+        top.addWidget(QLabel(tr("〜")))
 
         self.end_date = QDateEdit()
         self.end_date.setCalendarPopup(True)
@@ -75,11 +76,11 @@ class JkmWidget(BaseWidget):
         self.end_date.setDisplayFormat("yyyy/MM/dd")
         top.addWidget(self.end_date)
 
-        self.show_btn = QPushButton(self.tr("表示"))
+        self.show_btn = QPushButton(tr("表示"))
         self.show_btn.clicked.connect(self._refresh_chart)
         top.addWidget(self.show_btn)
 
-        self.status_label = QLabel(self.tr("待機中"))
+        self.status_label = QLabel(tr("待機中"))
         self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
         top.addWidget(self.status_label)
         top.addStretch()
@@ -88,10 +89,10 @@ class JkmWidget(BaseWidget):
         # 그래프 복사 버튼
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(6, 2, 6, 2)
-        self.copy_btn = QPushButton(self.tr("グラフ画像をコピー"))
+        self.copy_btn = QPushButton(tr("グラフ画像をコピー"))
         self.copy_btn.clicked.connect(self._copy_graph)
         
-        self.reset_zoom_btn = QPushButton(self.tr("ビュー初期化"))
+        self.reset_zoom_btn = QPushButton(tr("ビュー初期化"))
         self.reset_zoom_btn.clicked.connect(lambda: self.plot_widget.enableAutoRange())
         toolbar.addStretch()
         toolbar.addWidget(self.reset_zoom_btn)
@@ -104,12 +105,12 @@ class JkmWidget(BaseWidget):
 
         self.table = ExcelCopyTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["日付", "終値\n(USD/MMBtu)", "高値", "安値", "前日比(%)"])
+        self.table.setHorizontalHeaderLabels([tr("日付"), tr("終値\n(USD/MMBtu)"), tr("高値"), tr("安値"), tr("前日比(%)")])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setAlternatingRowColors(True)
         splitter.addWidget(self.table)
 
-        self.plot_widget = BasePlotWidget(y_label="USD/MMBtu", x_label="日付")
+        self.plot_widget = BasePlotWidget(y_label="USD/MMBtu", x_label=tr("日付"))
         splitter.addWidget(self.plot_widget)
         splitter.setSizes([450, 550])
         splitter.setStretchFactor(0, 4)
@@ -149,7 +150,7 @@ class JkmWidget(BaseWidget):
         if hasattr(self, 'tooltip_shadow'):
             self.tooltip_shadow.setColor(QColor(0, 0, 0, 160) if is_dark else QColor(0, 0, 0, 60))
         if self._dates:
-            self.plot_widget.setTitle(f"JKM (JKM=F)  {self._dates[0]} 〜 {self._dates[-1]}  最新: {self._closes[-1]:.3f} USD/MMBtu", color='#cccccc' if is_dark else '#333333', size='11pt')
+            self.plot_widget.setTitle(f"JKM (JKM=F)  {self._dates[0]} 〜 {self._dates[-1]}  {tr('最新')}: {self._closes[-1]:.3f} USD/MMBtu", color='#cccccc' if is_dark else '#333333', size='11pt')
             self._update_table(self._last_highs, self._last_lows)
 
     def _on_fetch(self):
@@ -160,7 +161,7 @@ class JkmWidget(BaseWidget):
         except RuntimeError:
             self._worker = None
         self.fetch_btn.setEnabled(False)
-        self.status_label.setText("取込中...")
+        self.status_label.setText(tr("データ取得中..."))
         self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
         self._worker = FetchJkmWorker()
         self._worker.finished.connect(self._on_fetch_done)
@@ -171,16 +172,16 @@ class JkmWidget(BaseWidget):
 
     def _on_fetch_done(self, count: int):
         self.fetch_btn.setEnabled(True)
-        self.status_label.setText(f"取込完了: {count}件")
+        self.status_label.setText(f"{tr('取得完了')}: {count}")
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         self._refresh_chart()
         bus.jkm_updated.emit()
 
     def _on_fetch_error(self, err: str):
         self.fetch_btn.setEnabled(True)
-        self.status_label.setText("取込失敗")
+        self.status_label.setText(tr("取得失敗"))
         self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
-        QMessageBox.warning(self, "取込エラー", err)
+        QMessageBox.warning(self, tr("エラー"), err)
 
     def _refresh_chart(self):
         start = self.start_date.date().toString("yyyy-MM-dd")
@@ -193,7 +194,7 @@ class JkmWidget(BaseWidget):
                     (start, end),
                 ).fetchall()
         except sqlite3.Error as e:
-            self.status_label.setText(f"DBエラー: {e}")
+            self.status_label.setText(tr("DBエラー: {0}").format(e))
             self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
             return
 
@@ -201,7 +202,7 @@ class JkmWidget(BaseWidget):
             self.table.setRowCount(0)
             self.plot_widget.clear()
             self.status_label.setText(
-                "DBにデータがありません。「Yahoo Finance から取込」で取得してください。"
+                tr("DBにデータがありません。「Yahoo Finance から取込」で取得してください。")
             )
             self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
             return
@@ -214,7 +215,7 @@ class JkmWidget(BaseWidget):
         self._update_table(self._last_highs, self._last_lows)
         self._update_chart()
         self.status_label.setText(
-            f"表示: {len(rows)}件  最新: {self._closes[-1]:.3f} USD/MMBtu  ({self._dates[-1]})"
+            tr("表示: {0}件  最新: {1} USD/MMBtu  ({2})").format(len(rows), f"{self._closes[-1]:.3f}", self._dates[-1])
         )
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
 
@@ -266,7 +267,7 @@ class JkmWidget(BaseWidget):
         self.plot_widget.getAxis('bottom').setTicks([ticks])
         self.plot_widget.setTitle(
             f"JKM (JKM=F)  {self._dates[0]} 〜 {self._dates[-1]}"
-            f"  最新: {self._closes[-1]:.3f} USD/MMBtu",
+            f"  {tr('最新')}: {self._closes[-1]:.3f} USD/MMBtu",
             color='#cccccc' if self.is_dark else '#333333', size='11pt',
         )
         
@@ -302,7 +303,7 @@ class JkmWidget(BaseWidget):
             self.hover_point.setSymbolBrush(pg.mkBrush('#2196F3'))
             self.hover_point.setSymbolPen(pg.mkPen(bg_color, width=1.5))
             self.tooltip_label.setText(
-                f"日付: {self._dates[x_idx]}\n終値: {self._closes[x_idx]:.3f} USD/MMBtu"
+                f"{tr('日付')}: {self._dates[x_idx]}\n{tr('終値')}: {self._closes[x_idx]:.3f} USD/MMBtu"
             )
             self.tooltip_label.adjustSize()
 
@@ -317,6 +318,6 @@ class JkmWidget(BaseWidget):
     def _copy_graph(self):
         QApplication.clipboard().setPixmap(self.plot_widget.grab())
         QMessageBox.information(
-            self, "完了",
-            "グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)",
+            self, tr("完了"),
+            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"),
         )

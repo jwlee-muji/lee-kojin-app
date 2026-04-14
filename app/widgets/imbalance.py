@@ -18,6 +18,7 @@ from app.core.config import (
     DATE_COL_IDX, TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 from app.core.database import get_db_connection
+from app.core.i18n import tr
 from app.api.imbalance_api import UpdateImbalanceWorker
 from app.core.events import bus
 
@@ -59,10 +60,16 @@ class LoadImbalanceDataWorker(QThread):
                     row = cursor.fetchone()
                 if row and row[0] is not None:
                     min_d, max_d = str(int(row[0])), str(int(row[1]))
-                    msg = (f"{self.target_date} のデータがありません。\n(DBに保存されている期間: "
-                           f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]} ~ {max_d[:4]}/{max_d[4:6]}/{max_d[6:]})")
+                    range_str = f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]} ~ {max_d[:4]}/{max_d[4:6]}/{max_d[6:]}"
+                    from app.core.i18n import tr as _tr
+                    msg = _tr("{0} のデータがありません。\n(DBに保存されている期間: {1} ~ {2})").format(
+                        self.target_date,
+                        f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]}",
+                        f"{max_d[:4]}/{max_d[4:6]}/{max_d[6:]}"
+                    )
                 else:
-                    msg = "DBに有効なデータがありません。"
+                    from app.core.i18n import tr as _tr
+                    msg = _tr("DBに有効なデータがありません。")
                 self.no_data.emit(msg)
                 return
 
@@ -110,7 +117,7 @@ class LegendButton(QFrame):
 
         self.indicator  = QLabel()
         self.indicator.setFixedSize(10, 10)
-        self.text_label = QLabel(col_name)
+        self.text_label = QLabel(tr(col_name))
         self.text_label.setFont(QFont("Meiryo", 10))
 
         layout.addWidget(self.indicator)
@@ -154,10 +161,10 @@ class ImbalanceWidget(BaseWidget):
 
         # 상단 컨트롤
         top = QHBoxLayout()
-        self.title_label = QLabel(self.tr("インバランス単価"))
+        self.title_label = QLabel(tr("インバランス単価"))
         self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
 
-        self.update_btn = QPushButton(self.tr("今月分 DB更新"))
+        self.update_btn = QPushButton(tr("今月分 DB更新"))
         self.update_btn.clicked.connect(self.update_database)
 
         self.date_edit = QDateEdit()
@@ -166,22 +173,22 @@ class ImbalanceWidget(BaseWidget):
         self.date_edit.setDisplayFormat("yyyy/MM/dd")
 
         self.type_combo = QComboBox()
-        self.type_combo.addItems([self.tr("余剰インバランス料金単価"), self.tr("不足インバランス料金単価")])
+        self.type_combo.addItems([tr("余剰インバランス料金単価"), tr("不足インバランス料金単価")])
         self.type_combo.currentIndexChanged.connect(self.display_data)
 
-        self.show_btn = QPushButton(self.tr("表示"))
+        self.show_btn = QPushButton(tr("表示"))
         self.show_btn.clicked.connect(self.display_data)
 
-        self.show_table_cb = QCheckBox(self.tr("表表示"))
+        self.show_table_cb = QCheckBox(tr("表表示"))
         self.show_table_cb.setChecked(True)
         self.show_table_cb.stateChanged.connect(self._toggle_views)
         self.show_table_cb.setCursor(Qt.PointingHandCursor)
-        self.show_graph_cb = QCheckBox(self.tr("グラフ表示"))
+        self.show_graph_cb = QCheckBox(tr("グラフ表示"))
         self.show_graph_cb.setChecked(True)
         self.show_graph_cb.stateChanged.connect(self._toggle_views)
         self.show_graph_cb.setCursor(Qt.PointingHandCursor)
 
-        self.status_label = QLabel(self.tr("待機中"))
+        self.status_label = QLabel(tr("待機中"))
         self.status_label.setStyleSheet("color: #aaaaaa;")
 
         for w in (self.title_label, self.update_btn):
@@ -214,10 +221,10 @@ class ImbalanceWidget(BaseWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(6, 4, 6, 2)
-        self.btn_copy_graph = QPushButton(self.tr("グラフ画像をコピー"))
+        self.btn_copy_graph = QPushButton(tr("グラフ画像をコピー"))
         self.btn_copy_graph.clicked.connect(self._copy_graph)
         
-        self.btn_reset_zoom = QPushButton(self.tr("ビュー初期化"))
+        self.btn_reset_zoom = QPushButton(tr("ビュー初期化"))
         self.btn_reset_zoom.clicked.connect(lambda: self.plot_widget.enableAutoRange())
         toolbar.addStretch()
         toolbar.addWidget(self.btn_reset_zoom)
@@ -236,7 +243,7 @@ class ImbalanceWidget(BaseWidget):
         lp_layout.setContentsMargins(0, 10, 0, 6)
         lp_layout.setSpacing(0)
 
-        self.legend_title = QLabel(self.tr("  エリア"))
+        self.legend_title = QLabel(tr("  エリア"))
         self.legend_title.setStyleSheet(
             "font-size: 10px; font-weight: bold; color: #888888; letter-spacing: 1px; padding-bottom: 6px; background: transparent;"
         )
@@ -267,8 +274,8 @@ class ImbalanceWidget(BaseWidget):
         lp_btn_layout = QHBoxLayout()
         lp_btn_layout.setContentsMargins(6, 5, 6, 0)
         lp_btn_layout.setSpacing(4)
-        self.btn_select_all   = QPushButton(self.tr("全選択"))
-        self.btn_deselect_all = QPushButton(self.tr("全解除"))
+        self.btn_select_all   = QPushButton(tr("全選択"))
+        self.btn_deselect_all = QPushButton(tr("全解除"))
         self.btn_select_all.clicked.connect(self._select_all)
         self.btn_deselect_all.clicked.connect(self._deselect_all)
         lp_btn_layout.addWidget(self.btn_select_all)
@@ -361,8 +368,8 @@ class ImbalanceWidget(BaseWidget):
             ax = self.plot_widget.getAxis(ax_name)
             ax.setPen(ax_pen)
             ax.setTextPen(text_pen)
-        self.plot_widget.setLabel('left', '単価 [円/kWh]', color=g_colors['text'], size='9pt')
-        self.plot_widget.setLabel('bottom', '時刻コード', color=g_colors['text'], size='9pt')
+        self.plot_widget.setLabel('left', tr('単価 [円/kWh]'), color=g_colors['text'], size='9pt')
+        self.plot_widget.setLabel('bottom', tr('時刻コード'), color=g_colors['text'], size='9pt')
         
         if hasattr(self, 'tooltip_shadow'):
             self.tooltip_shadow.setColor(QColor(0, 0, 0, 160) if is_dark else QColor(0, 0, 0, 60))
@@ -397,7 +404,7 @@ class ImbalanceWidget(BaseWidget):
             self.worker = None
         self.update_btn.setEnabled(False)
         self.set_loading(True)
-        self.status_label.setText("DB更新中...")
+        self.status_label.setText(tr("DB更新中..."))
         self.status_label.setStyleSheet("color: #64b5f6;")
         self.worker = UpdateImbalanceWorker()
         self.worker.finished.connect(self._on_update_success)
@@ -417,14 +424,14 @@ class ImbalanceWidget(BaseWidget):
     def _on_update_error(self, err):
         self.update_btn.setEnabled(True)
         self.set_loading(False)
-        self.status_label.setText("更新失敗")
+        self.status_label.setText(tr("更新失敗"))
         self.status_label.setStyleSheet("color: #ff5252;")
-        QMessageBox.warning(self, "エラー", err)
+        QMessageBox.warning(self, tr("エラー"), err)
 
     def display_data(self):
         target_date    = self.date_edit.date().toString("yyyy/MM/dd")
         target_yyyymmdd = int(self.date_edit.date().toString("yyyyMMdd"))
-        is_yojo = self.type_combo.currentText() == "余剰インバランス料金単価"
+        is_yojo = self.type_combo.currentIndex() == 0
 
         try:
             if getattr(self, '_load_worker', None) and self._load_worker.isRunning():
@@ -433,7 +440,7 @@ class ImbalanceWidget(BaseWidget):
             self._load_worker = None
             
         self.set_loading(True)
-        self.status_label.setText("データ読込中...")
+        self.status_label.setText(tr("データ読込中..."))
         self.status_label.setStyleSheet("color: #64b5f6;")
         
         self._load_worker = LoadImbalanceDataWorker(target_date, target_yyyymmdd, is_yojo)
@@ -450,9 +457,9 @@ class ImbalanceWidget(BaseWidget):
         self.table.setRowCount(0)
         self.plot_widget.clear()
         self._clear_legend()
-        self.status_label.setText("データなし")
+        self.status_label.setText(tr("データなし"))
         self.status_label.setStyleSheet("color: #ff5252;")
-        QMessageBox.information(self, "通知", msg)
+        QMessageBox.information(self, tr("通知"), msg)
         
     def _on_load_error(self, err):
         self.set_loading(False)
@@ -460,7 +467,7 @@ class ImbalanceWidget(BaseWidget):
         self.table.setRowCount(0)
         self.plot_widget.clear()
         self._clear_legend()
-        self.status_label.setText("読込エラー")
+        self.status_label.setText(tr("読込エラー"))
         self.status_label.setStyleSheet("color: #ff5252;")
         logger.warning(f"インバランスDBの読み込みに失敗しました: {err}")
 
@@ -473,7 +480,7 @@ class ImbalanceWidget(BaseWidget):
         self.table.setUpdatesEnabled(False)
         self.table.clear()
         self.table.setColumnCount(len(display_cols))
-        self.table.setHorizontalHeaderLabels(display_cols)
+        self.table.setHorizontalHeaderLabels([tr(c) for c in display_cols])
         self.table.setRowCount(len(rows))
         
         alert_val = self.settings.get("imbalance_alert", 40.0)
@@ -572,7 +579,7 @@ class ImbalanceWidget(BaseWidget):
         self.plot_widget.addItem(self.hover_points)
 
         self.plot_widget.enableAutoRange()
-        self.status_label.setText(f"{target_date} 表示完了")
+        self.status_label.setText(f"{target_date} {tr('更新完了')}")
         self.status_label.setStyleSheet("color: #4caf50;")
         
         # 조회한 데이터가 오늘 날짜인 경우에만 40엔 초과 경고 검사 (DB 재조회 방지)
@@ -633,7 +640,7 @@ class ImbalanceWidget(BaseWidget):
             self.hover_points.setSymbolBrush(pg.mkBrush(best_color))
             self.hover_points.setSymbolPen(pg.mkPen(g_colors['bg'], width=1.5))
             self.tooltip_label.setText(
-                f"エリア: {best_col}\n時刻: {self._x_labels[x_idx]}\n単価: {best_y:,.2f} 円"
+                tr("エリア: {0}\n時刻: {1}\n単価: {2} 円").format(best_col, self._x_labels[x_idx], f"{best_y:,.2f}")
             )
             self.tooltip_label.adjustSize()
 
@@ -660,8 +667,8 @@ class ImbalanceWidget(BaseWidget):
     def _copy_graph(self):
         QApplication.clipboard().setPixmap(self.plot_widget.grab())
         QMessageBox.information(
-            self, "完了",
-            "グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"
+            self, tr("完了"),
+            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)")
         )
 
     def _check_high_price_alerts(self, rows, target_cols, today_yyyymmdd: int):
@@ -682,20 +689,21 @@ class ImbalanceWidget(BaseWidget):
 
         if new_alerts:
             display_alerts = new_alerts[:5]
-            lines = "\n".join(f"  コマ {s}  |  {a}:  {v:,.1f} 円" for s, a, v in display_alerts)
+            lines = "\n".join(f"  {tr('コマ')} {s}  |  {tr(a)}:  {v:,.1f} {tr('円')}" for s, a, v in display_alerts)
             if len(new_alerts) > 5:
-                lines += f"\n  ...他 {len(new_alerts) - 5}件の警告があります"
-                
+                lines += "\n  " + tr("...他 {0}件の警告があります").format(len(new_alerts) - 5)
+
             timestamp = datetime.now().strftime("%H:%M:%S")
             total_count = len(new_alerts)
-            
-            main_window = next((w for w in QApplication.topLevelWidgets() if w.inherits("QMainWindow")), None)
-            
-            plain_msg = f"本日データに{alert_val}円超の単価が 【計 {total_count}件】 発生しました。\n\n{lines}"
-            html_lines = lines.replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
-            html_msg  = f"本日データに{alert_val}円超の単価が <span style='color: #ff5252; font-weight: bold; font-size: 14px;'>【計 {total_count}件】</span> 発生しました。<br><br>{html_lines}"
 
-            title = f"⚠ インバランス 警告 (計 {total_count}件) - {timestamp}"
+            main_window = next((w for w in QApplication.topLevelWidgets() if w.inherits("QMainWindow")), None)
+
+            prefix = tr("本日データに{0}円超の単価が 【計 {1}件】 発生しました。").format(alert_val, total_count)
+            plain_msg = prefix + f"\n\n{lines}"
+            html_lines = lines.replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
+            html_msg  = prefix + f"<br><br>{html_lines}"
+
+            title = tr("⚠ インバランス 警告 (計 {0}件) - {1}").format(total_count, timestamp)
             
             # 알림 센터 패널에 기록 추가
             if main_window and hasattr(main_window, 'add_notification'):
