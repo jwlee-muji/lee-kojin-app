@@ -3,12 +3,14 @@
 内蔵 SMTP 認証情報を使用して jw.lee@shirokumapower.com へ送信。
 ユーザーによるメール設定は不要。
 """
+import json
 import smtplib
 import ssl
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from PySide6.QtCore import QThread, Signal
+from app.api.base import BaseWorker
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,24 @@ _SMTP_PORT      = 587
 
 
 def _get_smtp_creds() -> tuple[str, str]:
-    """内蔵 SMTP 認証情報を返す (user, password)"""
+    """SMTP 認証情報を返す (優先順位: 環境変数 → 設定ファイル → 内蔵キー)"""
+    import os
+    # 1. 環境変数
+    env_user = os.environ.get("SMTP_USER", "").strip()
+    env_pw   = os.environ.get("SMTP_PASSWORD", "").strip()
+    if env_user and env_pw:
+        return env_user, env_pw
+    # 2. 設定ファイル
+    try:
+        from app.core.config import load_settings
+        s = load_settings()
+        cfg_user = s.get("user_smtp_user", "").strip()
+        cfg_pw   = s.get("user_smtp_password", "").strip()
+        if cfg_user and cfg_pw:
+            return cfg_user, cfg_pw
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"設定ファイルからSMTP認証情報を読み込めませんでした: {e}")
+    # 3. 内蔵キー (フォールバック)
     try:
         from app.core._secrets import get_smtp_user, get_smtp_password
         return get_smtp_user(), get_smtp_password()
@@ -32,10 +51,9 @@ def is_smtp_ready() -> bool:
     return bool(user and pw)
 
 
-class SendBugReportWorker(QThread):
+class SendBugReportWorker(BaseWorker):
     """バグレポートをバックグラウンドでメール送信するワーカー"""
     success = Signal()
-    error   = Signal(str)
 
     def __init__(self, subject: str, body: str):
         super().__init__()

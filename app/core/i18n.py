@@ -6,7 +6,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_current_language: str = 'ja'
+class _I18nState:
+    """言語設定を安全に保持するカプセル化クラス。
+    直接の属性アクセスによる不正な状態変更を防ぎ、
+    必ず set_language() を経由させることでバリデーションを保証します。"""
+    __slots__ = ('_lang',)
+    _VALID: frozenset = frozenset(('ja', 'en', 'ko', 'zh'))
+
+    def __init__(self) -> None:
+        self._lang: str = 'ja'
+
+    @property
+    def lang(self) -> str:
+        return self._lang
+
+    @lang.setter
+    def lang(self, value: str) -> None:
+        self._lang = value if value in self._VALID else 'ja'
+
+
+_state = _I18nState()
 
 # 言語選択肢: (表示名, 言語コード)  ← ネイティブ表記で固定 (言語ピッカーなので翻訳しない)
 LANG_OPTIONS: list[tuple[str, str]] = [
@@ -377,6 +396,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '不足インバランス料金単価':            'Shortage Imbalance Price',
         '表表示':                              'Show Table',
         'グラフ表示':                          'Show Graph',
+        'マップ表示':                          'Show Map',
+        'マップ画像をコピー':                  'Copy Map Image',
+        '予備率ヒートマップ':                  'Reserve Heatmap',
         '  エリア':                            '  Area',
         'DB更新中...':                         'Updating DB...',
         'データ読込中...':                     'Loading data...',
@@ -735,6 +757,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '不足インバランス料金単価':            '부족 인밸런스 단가',
         '表表示':                              '표 표시',
         'グラフ表示':                          '그래프 표시',
+        'マップ表示':                          '맵 표시',
+        'マップ画像をコピー':                  '맵 이미지 복사',
+        '予備率ヒートマップ':                  '예비율 히트맵',
         '  エリア':                            '  지역',
         'DB更新中...':                         'DB 갱신 중...',
         'データ読込中...':                     '데이터 로드 중...',
@@ -1093,6 +1118,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '不足インバランス料金単価':            '缺量不平衡单价',
         '表表示':                              '显示表格',
         'グラフ表示':                          '显示图表',
+        'マップ表示':                          '显示地图',
+        'マップ画像をコピー':                  '复制地图图像',
+        '予備率ヒートマップ':                  '备用率热力图',
         '  エリア':                            '  区域',
         'DB更新中...':                         '数据库更新中...',
         'データ読込中...':                     '数据加载中...',
@@ -1105,20 +1133,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
 def tr(text: str) -> str:
     """テキストを現在の言語に翻訳して返す。翻訳が見つからない場合はそのまま返す。"""
-    if _current_language == 'ja':
+    if _state.lang == 'ja':
         return text
-    return TRANSLATIONS.get(_current_language, {}).get(text, text)
+    return TRANSLATIONS.get(_state.lang, {}).get(text, text)
 
 
 def set_language(lang: str) -> None:
-    """言語コードを設定する (ja / en / ko / zh)"""
-    global _current_language
-    _current_language = lang if lang in ('ja', 'en', 'ko', 'zh') else 'ja'
+    """言語コードを設定する (ja / en / ko / zh)。不正な値は 'ja' にフォールバック。"""
+    _state.lang = lang
 
 
 def get_language() -> str:
     """現在の言語コードを返す"""
-    return _current_language
+    return _state.lang
 
 
 def init_language() -> None:
@@ -1126,14 +1153,15 @@ def init_language() -> None:
     try:
         from app.core.config import load_settings
         lang = load_settings().get('language', 'auto')
-    except Exception:
+    except Exception as e:
+        logger.warning(f"言語設定の読み込みに失敗しました。'auto' を使用します: {e}")
         lang = 'auto'
 
     if lang == 'auto':
         lang = _detect_system_language()
 
     set_language(lang)
-    logger.debug(f"Language initialized: {_current_language}")
+    logger.debug(f"Language initialized: {_state.lang}")
 
 
 def _detect_system_language() -> str:

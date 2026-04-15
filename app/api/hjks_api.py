@@ -3,41 +3,43 @@
 """
 import ssl
 import time
+import random
 import requests
 import sqlite3
-import urllib3
 import logging
 from urllib3.util.ssl_ import create_urllib3_context
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from PySide6.QtCore import QThread, Signal
+from app.api.base import BaseWorker
 from app.core.config import DB_HJKS, HJKS_REGIONS, HJKS_METHODS
 from app.core.database import get_db_connection
 from app.models.data_models import HjksRecord
 
-# SSL 인증서 경고 무시 (JEPX 사이트 SSL 우회용)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# urllib3.disable_warnings() はプロセス全体に影響するため使用しない。
+# LegacySSLAdapter は証明書検証を維持したまま暗号スイートのみ緩和する設計のため、
+# InsecureRequestWarning は発生しない。
 
 logger = logging.getLogger(__name__)
 
 class LegacySSLAdapter(requests.adapters.HTTPAdapter):
-    """JEPX等の古いSSL設定を回避するためのアダプター"""
+    """JEPX の古い TLS 暗号スイートに対応するアダプター。
+    証明書検証は維持しつつ、暗号スイートのセキュリティレベルのみ緩和します。
+    (CERT_NONE は使用しない — MITM 攻撃防止のため)
+    """
     def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
         ctx = create_urllib3_context()
         try:
+            # JEPX が使用する古い暗号スイートに対応するため SECLEVEL=1 に緩和
             ctx.set_ciphers('DEFAULT@SECLEVEL=1')
         except ssl.SSLError:
             pass
-            
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
+        # 証明書検証とホスト名確認は有効のまま維持
         pool_kwargs['ssl_context'] = ctx
         return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
 
-class FetchHjksWorker(QThread):
+class FetchHjksWorker(BaseWorker):
     finished = Signal(str)
-    error    = Signal(str)
 
     def run(self):
         try:
@@ -45,7 +47,6 @@ class FetchHjksWorker(QThread):
             
             records = []
             with requests.Session() as session:
-                session.verify = False
                 session.mount("https://", LegacySSLAdapter())
                 
                 # 1. 初回アクセス（Cookie取得とエリア一覧の取得）
@@ -99,12 +100,13 @@ class FetchHjksWorker(QThread):
                         "Referer": main_url
                     })
                     
-                    cb = int(time.time() * 1000)
+                    cb = random.randint(0, 999_999_999)
                     res = session.get(ajax_url, params={"_": cb}, timeout=10)
                     
                     try:
                         data = res.json()
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"HJKS JSON解析失敗 (エリア: {region_name}): {e}")
                         continue
                         
                     if not data or 'startdtList' not in data:

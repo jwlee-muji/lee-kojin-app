@@ -6,12 +6,13 @@ class UIColors:
     ICON_TINT_LIGHT = "#555555"
 
     # --- 기본 텍스트 색상 ---
-    TEXT_PRIMARY_DARK   = "#d4d4d4"
-    TEXT_PRIMARY_LIGHT  = "#333333"
-    TEXT_SECONDARY_DARK = "#aaaaaa"
-    TEXT_SECONDARY_LIGHT = "#666666"
-    TEXT_EMPHASIS_DARK  = "#eeeeee"
-    TEXT_EMPHASIS_LIGHT = "#111111"
+    TEXT_PRIMARY_DARK    = "#d4d4d4"
+    TEXT_PRIMARY_LIGHT   = "#333333"
+    # WCAG AA 기준 4.5:1 이상 대비도를 확보하기 위해 #aaaaaa(4.2:1) → #bbbbbb(5.0:1)로 개선
+    TEXT_SECONDARY_DARK  = "#bbbbbb"
+    TEXT_SECONDARY_LIGHT = "#555555"
+    TEXT_EMPHASIS_DARK   = "#eeeeee"
+    TEXT_EMPHASIS_LIGHT  = "#111111"
 
     # --- 강조 색상 ---
     ACCENT_DARK  = "#094771"
@@ -75,12 +76,63 @@ class UIColors:
         else:
             return {"bg": "#ffffff", "axis": "#dddddd", "text": "#666666"}
 
+    @staticmethod
+    def get_chat_colors(is_dark: bool) -> dict:
+        """AI チャットウィジェットのバブル・アバター配色"""
+        return {
+            "user_bg":   "#0078d4",
+            "user_fg":   "#ffffff",
+            "asst_bg":   "#2a2d2e" if is_dark else "#e4e4e4",
+            "asst_fg":   "#d4d4d4" if is_dark else "#1a1a1a",
+            "avatar_bg": "#5c6bc0",
+            "time_fg":   "#888888" if is_dark else "#aaaaaa",
+        }
+
+    @staticmethod
+    def get_log_colors(is_dark: bool) -> dict:
+        """システムログビューアに使用するログレベル別の配色"""
+        if is_dark:
+            return {
+                "bg":      "#1e1e1e",
+                "text":    "#d4d4d4",
+                "error":   "#ff5555",
+                "warning": "#ffb86c",
+                "info":    "#8be9fd",
+                "module":  "#bd93f9",
+                "time":    "#777777",
+            }
+        else:
+            return {
+                "bg":      "#ffffff",
+                "text":    "#333333",
+                "error":   "#cc0000",
+                "warning": "#e65100",
+                "info":    "#1565c0",
+                "module":  "#6a1b9a",
+                "time":    "#888888",
+            }
+
+
+# ---------------------------------------------------------------------------
+# タイポグラフィ定数
+# フォントサイズを一元管理して UI 全体の一貫性を維持します。
+# ---------------------------------------------------------------------------
+class Typography:
+    """アプリ全体のフォントサイズ定数"""
+    H1     = "18px"   # ページタイトル
+    H2     = "15px"   # セクションタイトル / ウィジェットヘッダー
+    BODY   = "13px"   # 本文・テーブル
+    SMALL  = "11px"   # キャプション・補助テキスト
+    BUTTON = "12px"   # ボタンラベル
+    CHART  = "9pt"    # グラフ軸ラベル (pyqtgraph は pt 単位)
+
+
 def get_global_qss(theme: str) -> str:
     """
     앱 전체에서 공통으로 사용되는 커스텀 위젯들의 스타일시트(QSS)를 반환합니다.
     """
     is_dark = (theme == "dark")
-    
+
     bc = "#555555" if is_dark else "#cccccc"
     tc = "#d4d4d4" if is_dark else "#333333"
     primary_bg = "#094771" if is_dark else "#0d47a1"
@@ -123,33 +175,33 @@ def get_global_qss(theme: str) -> str:
         font-weight: bold;
         border-radius: 4px;
     }}
-    
+
     /* 공통 버튼 액션 스타일 */
     QPushButton#primaryActionBtn {{
         font-weight: bold; background-color: {primary_bg}; color: white; border: none; padding: 8px; border-radius: 4px;
     }}
     QPushButton#primaryActionBtn:hover {{ background-color: {primary_hover}; }}
-    
+
     QPushButton#secondaryActionBtn {{
         font-weight: bold; background-color: {secondary_bg}; color: {tc}; border: 1px solid {bc}; padding: 8px; border-radius: 4px;
     }}
     QPushButton#secondaryActionBtn:hover {{ background-color: {secondary_hover}; }}
-    
+
     /* 공통 토스트 알림 라벨 */
     QLabel#successToast {{
         color: {toast_color};
         font-weight: bold;
     }}
-    
+
     /* 설정 화면 체크박스 */
     QCheckBox#settingsCheckbox {{
-        border: none; padding: 6px 10px; border-radius: 6px; background: transparent; 
+        border: none; padding: 6px 10px; border-radius: 6px; background: transparent;
         color: {tc}; font-size: 13px;
     }}
     QCheckBox#settingsCheckbox:hover {{
         background-color: {'#333333' if is_dark else '#e8e8e8'};
     }}
-    
+
     /* SummaryCard Dynamic Property 적용 (하드코딩 제거) */
     SummaryCard[theme="dark"] {{
         background-color: #252526;
@@ -157,7 +209,7 @@ def get_global_qss(theme: str) -> str:
         border-radius: 8px;
     }}
     SummaryCard[theme="dark"]:hover {{ background-color: #2d2d30; }}
-    
+
     SummaryCard[theme="light"] {{
         background-color: #ffffff;
         border: 1px solid #dddddd;

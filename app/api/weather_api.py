@@ -4,13 +4,13 @@
 import requests
 import logging
 from PySide6.QtCore import QThread, Signal
+from app.api.base import BaseWorker
 from app.core.config import API_OPEN_METEO, WEATHER_REGIONS
 
 logger = logging.getLogger(__name__)
 
-class FetchWeatherWorker(QThread):
+class FetchWeatherWorker(BaseWorker):
     finished = Signal(list)
-    error    = Signal(str)
 
     def run(self):
         with requests.Session() as session:

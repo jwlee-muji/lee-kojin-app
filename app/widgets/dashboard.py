@@ -14,7 +14,7 @@ from app.core.config import (
     TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 import sqlite3
-from app.core.database import get_db_connection
+from app.core.database import get_db_connection, validate_column_name
 from app.ui.common import BaseWidget, get_tinted_pixmap
 from app.core.events import bus
 from app.core.i18n import tr
@@ -71,22 +71,43 @@ class SummaryCard(QFrame):
         self._hover_anim = QPropertyAnimation(self, b"hoverOffset")
         self._hover_anim.setDuration(150)
         self._hover_anim.setEasingCurve(QEasingCurve.OutQuad)
-        
+
+        # エフェクト参照を None で初期化 (set_loading() 呼び出し前に必ず行う)
+        self._skel_effect: QGraphicsOpacityEffect | None = None
+        self._skel_anim: QPropertyAnimation | None = None
+        self._fade_opacity_effect: QGraphicsOpacityEffect | None = None
+        self._fade_out_anim: QPropertyAnimation | None = None
+        self._fade_in_anim: QPropertyAnimation | None = None
+
         # 初期化時に1回だけスケルトンローディングを開始
         self.set_loading(True)
 
-    def _is_effect_alive(self, attr: str) -> bool:
-        """저장된 QGraphicsEffect C++ 객체가 아직 유효한지 확인합니다."""
-        try:
-            if hasattr(self, attr):
-                getattr(self, attr).opacity()
-                return True
-        except RuntimeError:
-            try:
-                delattr(self, attr)
-            except AttributeError:
-                pass
-        return False
+    # ------------------------------------------------------------------
+    # エフェクトライフサイクル管理ヘルパー
+    # _is_effect_alive() の RuntimeError パターンを廃止し、
+    # setGraphicsEffect() が古いエフェクトを削除するタイミングで
+    # Python 側の参照を None にリセットする方式に統一する。
+    # ------------------------------------------------------------------
+
+    def _clear_skel(self):
+        """スケルトンエフェクト・アニメーションを停止し参照をクリアします。"""
+        if self._skel_anim is not None:
+            self._skel_anim.stop()
+            self._skel_anim.deleteLater()
+        self._skel_effect = None
+        self._skel_anim = None
+
+    def _clear_fade(self):
+        """フェードエフェクト・アニメーションを停止し参照をクリアします。"""
+        if self._fade_out_anim is not None:
+            self._fade_out_anim.stop()
+            self._fade_out_anim.deleteLater()
+        if self._fade_in_anim is not None:
+            self._fade_in_anim.stop()
+            self._fade_in_anim.deleteLater()
+        self._fade_opacity_effect = None
+        self._fade_out_anim = None
+        self._fade_in_anim = None
 
     def set_loading(self, is_loading: bool):
         """스켈레톤(Skeleton) 로딩 애니메이션 활성화/비활성화"""
@@ -94,28 +115,27 @@ class SummaryCard(QFrame):
             self.value_lbl.setText("----")
             self.sub_lbl.setText(tr("データ取得中..."))
 
-            # C++ 객체 유효성 검사 후 필요 시 재생성
-            if not self._is_effect_alive('_skel_effect'):
-                # setGraphicsEffect()가 소유권을 가져가므로 부모를 지정하지 않습니다.
+            if self._skel_effect is None:
                 self._skel_effect = QGraphicsOpacityEffect()
-                self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity")
+                self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity", self)
                 self._skel_anim.setDuration(800)
                 self._skel_anim.setStartValue(0.3)
                 self._skel_anim.setEndValue(1.0)
                 self._skel_anim.setLoopCount(-1)
 
-            # 페이드 이펙트가 붙어있으면 스켈레톤으로 교체
+            # フェードエフェクトが現在適用中なら、setGraphicsEffect() で Qt が削除する前に参照をクリア
+            if self._fade_opacity_effect is not None and self.value_lbl.graphicsEffect() is self._fade_opacity_effect:
+                self._clear_fade()
+
             self.value_lbl.setGraphicsEffect(self._skel_effect)
             self._skel_anim.start()
         else:
-            if hasattr(self, '_skel_anim'):
-                try:
-                    self._skel_anim.stop()
-                except RuntimeError:
-                    pass
-            # 스켈레톤 이펙트가 현재 적용 중일 때만 제거 (페이드 이펙트는 건드리지 않음)
-            if self._is_effect_alive('_skel_effect') and self.value_lbl.graphicsEffect() is self._skel_effect:
+            if self._skel_anim is not None:
+                self._skel_anim.stop()
+            # スケルトンエフェクトが現在適用中の時のみ解除
+            if self._skel_effect is not None and self.value_lbl.graphicsEffect() is self._skel_effect:
                 self.value_lbl.setGraphicsEffect(None)
+                self._clear_skel()  # Qt がエフェクトを削除したため参照をクリア
 
     def set_value(self, val_str, sub_str, val_color=None, target_val=None, format_str=None, animate_fade=False):
         self.set_loading(False)  # 값이 설정되면 스켈레톤 중지
@@ -159,16 +179,19 @@ class SummaryCard(QFrame):
             self.value_lbl.setText(self._anim_format.format(self._anim_target))
             
     def _start_fade_out(self):
-        # C++ 객체 유효성 검사 후 필요 시 재생성
-        if not self._is_effect_alive('_fade_opacity_effect'):
-            self._fade_opacity_effect = QGraphicsOpacityEffect()  # 소유권은 setGraphicsEffect에게
-            self._fade_out_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity")
+        if self._fade_opacity_effect is None:
+            self._fade_opacity_effect = QGraphicsOpacityEffect()
+            self._fade_out_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity", self)
             self._fade_out_anim.setDuration(180)
             self._fade_out_anim.setEasingCurve(QEasingCurve.InQuad)
             self._fade_out_anim.finished.connect(self._on_fade_out_done)
-            self._fade_in_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity")
+            self._fade_in_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity", self)
             self._fade_in_anim.setDuration(180)
             self._fade_in_anim.setEasingCurve(QEasingCurve.OutQuad)
+
+        # スケルトンエフェクトが現在適用中なら、setGraphicsEffect() で Qt が削除する前に参照をクリア
+        if self._skel_effect is not None and self.value_lbl.graphicsEffect() is self._skel_effect:
+            self._clear_skel()
 
         if self.value_lbl.graphicsEffect() is not self._fade_opacity_effect:
             self.value_lbl.setGraphicsEffect(self._fade_opacity_effect)
@@ -284,8 +307,9 @@ class DashboardDataService(QObject):
                 cursor = conn.execute("SELECT name FROM pragma_table_info('imbalance_prices')")
                 cols = [r[0] for r in cursor.fetchall()]
                 if not cols: return self.imb_empty.emit()
-                
-                rows = conn.execute(f'SELECT * FROM imbalance_prices WHERE "{cols[1]}" = ? OR "{cols[1]}" = ?', 
+                date_col = validate_column_name(cols[1])
+
+                rows = conn.execute(f'SELECT * FROM imbalance_prices WHERE "{date_col}" = ? OR "{date_col}" = ?',
                                     (today_yyyymmdd, str(today_yyyymmdd))).fetchall()
                 
                 if not rows: return self.imb_empty.emit()
@@ -440,7 +464,9 @@ class DashboardWidget(BaseWidget):
 
     def _cleanup_thread(self):
         self._service_thread.quit()
-        self._service_thread.wait()
+        if not self._service_thread.wait(2000):
+            self._service_thread.terminate()
+            self._service_thread.wait()
         
     def refresh_data(self):
         # 백그라운드 갱신 시 기존 값을 지우지 않고 조용히 새 데이터를 요청합니다.

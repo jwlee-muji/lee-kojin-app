@@ -3,7 +3,7 @@ from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon
 from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt
 import pyqtgraph as pg
 from app.core.config import load_settings
-from app.ui.theme import UIColors
+from app.ui.theme import UIColors, Typography
 from typing import Optional
 from app.core.events import bus
 
@@ -68,7 +68,8 @@ class FadeStackedWidget(QStackedWidget):
     """부드러운 페이드 인/아웃 화면 전환 애니메이션이 적용된 StackedWidget"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._fade_anim = QPropertyAnimation()
+        # parent 지정으로 Qt 객체 트리에 등록 → 위젯 소멸 시 자동 정리
+        self._fade_anim = QPropertyAnimation(self)
         self._fade_anim.setPropertyName(b"opacity")
         self._fade_anim.setDuration(200)
         self._fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
@@ -102,11 +103,10 @@ class BasePlotWidget(pg.PlotWidget):
         self.is_dark = True
         self.y_label = y_label
         self.x_label = x_label
-        self.setBackground('#1e1e1e')
         self.showGrid(x=True, y=True, alpha=0.25)
         self.plotItem.hideAxis('top')
         self.plotItem.hideAxis('right')
-        self.apply_theme_custom()
+        self.apply_theme_custom()  # setBackground はここで一元管理
 
     def set_theme(self, is_dark: bool):
         self.is_dark = is_dark
@@ -114,14 +114,15 @@ class BasePlotWidget(pg.PlotWidget):
 
     def apply_theme_custom(self):
         self.setBackground('#1e1e1e' if self.is_dark else '#ffffff')
-        ax_pen = pg.mkPen(color='#555555' if self.is_dark else '#dddddd', width=1)
-        text_pen = pg.mkPen('#aaaaaa' if self.is_dark else '#666666')
+        ax_pen   = pg.mkPen(color='#555555' if self.is_dark else '#dddddd', width=1)
+        text_col = UIColors.TEXT_SECONDARY_DARK if self.is_dark else UIColors.TEXT_SECONDARY_LIGHT
+        text_pen = pg.mkPen(text_col)
         for ax_name in ('left', 'bottom'):
             ax = self.getAxis(ax_name)
             ax.setPen(ax_pen)
             ax.setTextPen(text_pen)
-        self.setLabel('left', self.y_label, color='#aaaaaa' if self.is_dark else '#666666', size='9pt')
-        self.setLabel('bottom', self.x_label, color='#aaaaaa' if self.is_dark else '#666666', size='9pt')
+        self.setLabel('left',   self.y_label, color=text_col, size=Typography.CHART)
+        self.setLabel('bottom', self.x_label, color=text_col, size=Typography.CHART)
 
 
 class BaseWidget(QWidget):
@@ -132,7 +133,17 @@ class BaseWidget(QWidget):
         self.settings = load_settings()
         self.timer = QTimer(self)
         self._active_workers = []
+        self._skel_effect: Optional[QGraphicsOpacityEffect] = None
+        self._skel_anim: Optional[QPropertyAnimation] = None
         bus.app_quitting.connect(self._safe_terminate_workers)
+
+    def closeEvent(self, event):
+        """ウィジェット破棄時にシグナル接続を安全に解除してメモリ漏れを防ぎます。"""
+        try:
+            bus.app_quitting.disconnect(self._safe_terminate_workers)
+        except (RuntimeError, TypeError):
+            pass
+        super().closeEvent(event)
 
     def track_worker(self, worker):
         """워커 스레드를 등록하여 앱 종료 시 안전하게 해제되도록 관리합니다."""
@@ -145,11 +156,14 @@ class BaseWidget(QWidget):
             self._active_workers.remove(worker)
 
     def _safe_terminate_workers(self):
-        """앱 종료 시 실행 중인 스레드를 안전하게 종료합니다."""
+        """앱 종료 시 실행 중인 스레드를 안전하게 종료합니다.
+        quit() + wait() 후에도 실행 중이면 terminate() 로 강제 종료하여 좀비 스레드를 방지합니다."""
         for worker in self._active_workers:
             if worker.isRunning():
                 worker.quit()
-                worker.wait(1000)
+                if not worker.wait(1000):
+                    worker.terminate()
+                    worker.wait()
 
     def setup_timer(self, interval_minutes: int, timeout_slot, stagger_seconds: int = 0):
         """타이머를 설정합니다.
@@ -168,10 +182,17 @@ class BaseWidget(QWidget):
 
     def apply_settings(self):
         self.settings = load_settings()
+        self._settings_dirty = False
         self.apply_settings_custom()
 
     def apply_settings_custom(self):
         pass
+
+    def showEvent(self, event):
+        """タブ切替で表示された際に保留中の設定更新を適用します。"""
+        super().showEvent(event)
+        if getattr(self, '_settings_dirty', False):
+            self.apply_settings()
 
     def set_theme(self, is_dark: bool):
         self.is_dark = is_dark
@@ -182,33 +203,26 @@ class BaseWidget(QWidget):
 
     def set_loading(self, is_loading: bool, target_widget: Optional[QWidget] = None):
         """スケルトンローディングアニメーションを対象ウィジェットに適用する共通メソッド。
-        target_widget が None の場合は self 自身に適用する。"""
+        target_widget が None の場合は self 自身に適用する。
+        setGraphicsEffect() が古いエフェクトを削除するため、None チェックで再生成を管理します。"""
         widget = target_widget if target_widget is not None else self
         if is_loading:
-            try:
-                if hasattr(self, '_skel_effect'):
-                    self._skel_effect.opacity()
-            except RuntimeError:
-                delattr(self, '_skel_effect')
-
-            if not hasattr(self, '_skel_effect'):
-                self._skel_effect = QGraphicsOpacityEffect(self)
-                self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity")
+            if self._skel_effect is None:
+                if self._skel_anim is not None:
+                    self._skel_anim.stop()
+                self._skel_effect = QGraphicsOpacityEffect()
+                self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity", self)
                 self._skel_anim.setDuration(800)
                 self._skel_anim.setStartValue(0.3)
                 self._skel_anim.setEndValue(1.0)
                 self._skel_anim.setLoopCount(-1)
-
             widget.setGraphicsEffect(self._skel_effect)
             self._skel_anim.start()
         else:
-            if hasattr(self, '_skel_anim'):
-                try:
-                    self._skel_anim.stop()
-                    self._skel_effect.setOpacity(1.0)
-                except RuntimeError:
-                    pass
+            if self._skel_anim is not None:
+                self._skel_anim.stop()
             widget.setGraphicsEffect(None)
+            self._skel_effect = None  # Qt がエフェクトを削除したため参照をクリア
 
     def check_online_status(self) -> bool:
         if not getattr(QApplication.instance(), 'is_online', True):

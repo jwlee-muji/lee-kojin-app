@@ -1,16 +1,21 @@
 import sys
 import logging
 import traceback
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from app.core.config import LOG_FILE, get_theme_qss
 
 # --- 통합 로그 시스템 설정 ---
+# RotatingFileHandler: 10MB 초과 시 자동 로테이션, 최대 2개 백업 파일 유지
+_file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=2, encoding='utf-8'
+)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(levelname)s] %(name)s : %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        _file_handler,
         logging.StreamHandler()
     ]
 )

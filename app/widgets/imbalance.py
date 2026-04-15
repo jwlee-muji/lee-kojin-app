@@ -17,7 +17,7 @@ from app.core.config import (
     DB_IMBALANCE, IMBALANCE_COLORS, load_settings,
     DATE_COL_IDX, TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
-from app.core.database import get_db_connection
+from app.core.database import get_db_connection, validate_column_name
 from app.core.i18n import tr
 from app.api.imbalance_api import UpdateImbalanceWorker
 from app.core.events import bus
@@ -45,33 +45,31 @@ class LoadImbalanceDataWorker(QThread):
                 cursor = conn.cursor()
                 cursor.execute('SELECT * FROM imbalance_prices LIMIT 0')
                 col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
-                date_col = col_names[DATE_COL_IDX]
-                
+                date_col = validate_column_name(col_names[DATE_COL_IDX])
+
                 cursor.execute(
                     f'SELECT * FROM imbalance_prices WHERE "{date_col}" = ? OR "{date_col}" = ?',
                     (self.target_yyyymmdd, str(self.target_yyyymmdd))
                 )
                 rows = cursor.fetchall()
 
-            if not rows:
-                with get_db_connection(DB_IMBALANCE) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER)) FROM imbalance_prices')
-                    row = cursor.fetchone()
-                if row and row[0] is not None:
-                    min_d, max_d = str(int(row[0])), str(int(row[1]))
-                    range_str = f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]} ~ {max_d[:4]}/{max_d[4:6]}/{max_d[6:]}"
-                    from app.core.i18n import tr as _tr
-                    msg = _tr("{0} のデータがありません。\n(DBに保存されている期間: {1} ~ {2})").format(
-                        self.target_date,
-                        f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]}",
-                        f"{max_d[:4]}/{max_d[4:6]}/{max_d[6:]}"
+                # データなし → 同一コネクション内で日付範囲を取得 (2回目のコネクション開設を省略)
+                if not rows:
+                    cursor.execute(
+                        f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER)) FROM imbalance_prices'
                     )
-                else:
-                    from app.core.i18n import tr as _tr
-                    msg = _tr("DBに有効なデータがありません。")
-                self.no_data.emit(msg)
-                return
+                    range_row = cursor.fetchone()
+                    if range_row and range_row[0] is not None:
+                        min_d, max_d = str(int(range_row[0])), str(int(range_row[1]))
+                        msg = tr("{0} のデータがありません。\n(DBに保存されている期間: {1} ~ {2})").format(
+                            self.target_date,
+                            f"{min_d[:4]}/{min_d[4:6]}/{min_d[6:]}",
+                            f"{max_d[:4]}/{max_d[4:6]}/{max_d[6:]}"
+                        )
+                    else:
+                        msg = tr("DBに有効なデータがありません。")
+                    self.no_data.emit(msg)
+                    return
 
             time_col = col_names[TIME_COL_IDX]
             yojo_cols = [c for i, c in enumerate(col_names) if YOJO_START_COL_IDX <= i <= YOJO_END_COL_IDX and '変更S' not in c]
@@ -94,7 +92,10 @@ class LoadImbalanceDataWorker(QThread):
                 processed_rows.append(processed_row)
 
             self.finished.emit(processed_rows, target_cols, time_col, self.target_yyyymmdd)
-        except (sqlite3.Error, Exception) as e:
+        except sqlite3.Error as e:
+            self.error.emit(f"DBエラー: {e}")
+        except Exception as e:
+            logger.error(f"インバランスデータの読み込み中に予期せぬエラー: {e}", exc_info=True)
             self.error.emit(str(e))
 
 
@@ -455,17 +456,23 @@ class ImbalanceWidget(BaseWidget):
         self.set_loading(False)
         self.table.clear()
         self.table.setRowCount(0)
-        self.plot_widget.clear()
+        # clear() は hover_points も除去するため、カーブのみ個別削除して hover_points をシーンに残す
+        for curve in self.curves.values():
+            self.plot_widget.removeItem(curve)
+        self.curves = {}
         self._clear_legend()
         self.status_label.setText(tr("データなし"))
         self.status_label.setStyleSheet("color: #ff5252;")
         QMessageBox.information(self, tr("通知"), msg)
-        
+
     def _on_load_error(self, err):
         self.set_loading(False)
         self.table.clear()
         self.table.setRowCount(0)
-        self.plot_widget.clear()
+        # clear() は hover_points も除去するため、カーブのみ個別削除して hover_points をシーンに残す
+        for curve in self.curves.values():
+            self.plot_widget.removeItem(curve)
+        self.curves = {}
         self._clear_legend()
         self.status_label.setText(tr("読込エラー"))
         self.status_label.setStyleSheet("color: #ff5252;")
@@ -516,8 +523,10 @@ class ImbalanceWidget(BaseWidget):
             hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.setUpdatesEnabled(True)
 
-        # 그래프
-        self.plot_widget.clear()
+        # 그래프 — clear() は hover_points まで除去してしまうため、
+        # 登録済みカーブのみ個別に削除して hover_points はシーンに残す
+        for curve in self.curves.values():
+            self.plot_widget.removeItem(curve)
         self._clear_legend()
         self.curves    = {}
         
@@ -575,9 +584,6 @@ class ImbalanceWidget(BaseWidget):
         # X축과 Y축이 데이터 영역 밖으로 과도하게 스크롤되지 않도록 뷰포트 제한
         self.plot_widget.getViewBox().setLimits(xMin=-1, xMax=max(1, len(self._x_labels)), yMin=0)
         
-        # clear()로 인해 캔버스에서 삭제된 호버 마커를 다시 추가
-        self.plot_widget.addItem(self.hover_points)
-
         self.plot_widget.enableAutoRange()
         self.status_label.setText(f"{target_date} {tr('更新完了')}")
         self.status_label.setStyleSheet("color: #4caf50;")

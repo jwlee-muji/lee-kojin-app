@@ -44,7 +44,12 @@ class MainWindow(QMainWindow):
 
         from version import __version__
         self.setWindowTitle(f"LEE 個人アプリ  v{__version__}")
-        self.resize(1050, 650)
+        # 画面サイズに応じてアダプティブなウィンドウサイズを計算
+        # 小型ノートPC(1366px)〜ウルトラワイド(3440px)まで適切に対応
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = max(900,  min(int(screen.width()  * 0.85), 1400))
+        h = max(600,  min(int(screen.height() * 0.85),  900))
+        self.resize(w, h)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -75,7 +80,9 @@ class MainWindow(QMainWindow):
         self.theme_btn.clicked.connect(self._toggle_theme)
         sidebar_layout.addWidget(self.theme_btn)
 
-        sidebar_container.setMinimumWidth(180)
+        # サイドバー幅: 画面幅の 12% を基準に 160〜210px の範囲でクランプ
+        sidebar_w = max(160, min(int(screen.width() * 0.12), 210))
+        sidebar_container.setMinimumWidth(sidebar_w)
         self.main_splitter.addWidget(sidebar_container)
 
         # 컨텐츠 영역
@@ -83,7 +90,7 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(self.content_stack)
         self.sidebar.currentRowChanged.connect(self.content_stack.setCurrentIndex)
 
-        self.main_splitter.setSizes([200, 700])
+        self.main_splitter.setSizes([sidebar_w, w - sidebar_w])
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
 
@@ -135,10 +142,10 @@ class MainWindow(QMainWindow):
         # 起動時にディスプレイのど真ん中へ配置
         self._center_window()
 
-        # 앱 기동 10초 후 백그라운드에서 오래된 데이터 자동 정리 및 백업 실행
+        # 次のイベントループで即座に起動 (UI 初期化完了後のバックグラウンド実行)
         self._retention_worker = RetentionWorker(self)
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)
-        QTimer.singleShot(10000, self._retention_worker.start)
+        QTimer.singleShot(0, self._retention_worker.start)
         bus.app_quitting.connect(self._safe_stop_retention)
 
     def _safe_stop_retention(self):
@@ -202,21 +209,35 @@ class MainWindow(QMainWindow):
             )
 
     def _apply_settings_all(self):
-        if hasattr(self.w_reserve,   'apply_settings'): self.w_reserve.apply_settings()
-        if hasattr(self.w_imbalance, 'apply_settings'): self.w_imbalance.apply_settings()
-        if hasattr(self.w_jkm,       'apply_settings'): self.w_jkm.apply_settings()
-        if hasattr(self.w_weather,   'apply_settings'): self.w_weather.apply_settings()
-        if hasattr(self.w_hjks,      'apply_settings'): self.w_hjks.apply_settings()
+        """設定保存後の全ウィジェット反映。
+        content_stack を動的に走査するため、新規ウィジェット追加時も自動対応します。
+        現在表示中のウィジェットは即時反映、非表示ウィジェットは次回表示時に反映します。"""
+        current = self.content_stack.currentWidget()
+        for i in range(self.content_stack.count()):
+            w = self.content_stack.widget(i)
+            if not hasattr(w, 'apply_settings'):
+                continue
+            if w is current:
+                # 現在表示中 → 即時反映
+                w.apply_settings()
+            else:
+                # 非表示 → 次回 showEvent のタイミングで反映するフラグを立てる
+                w._settings_dirty = True
 
     def _toggle_theme(self):
+        # 実行中のアニメーションを安全に停止 (すでに停止済みの場合は no-op)
         if hasattr(self, '_theme_anim'):
-            self._theme_anim.stop()
+            try:
+                self._theme_anim.stop()
+            except RuntimeError:
+                pass
         if hasattr(self, '_theme_overlay') and self._theme_overlay is not None:
             try:
                 self._theme_overlay.deleteLater()
             except RuntimeError:
                 pass
             self._theme_overlay = None
+        self._theme_effect = None  # 旧ラッパーへの Python 参照を解放
 
         self._theme_overlay = QLabel(self)
         self._theme_overlay.setPixmap(self.grab())
@@ -233,9 +254,12 @@ class MainWindow(QMainWindow):
         self.theme_btn.setText(tr("☀️ ライトモード") if self.is_dark else tr("🌙 ダークモード"))
         self._sync_theme()
 
-        effect = QGraphicsOpacityEffect(self._theme_overlay)
-        self._theme_overlay.setGraphicsEffect(effect)
-        self._theme_anim = QPropertyAnimation(effect, b"opacity", self)
+        # インスタンス変数として保持することで Python GC による早期解放を確実に防ぐ
+        # setGraphicsEffect() は Qt 内部で所有権を移譲するため、ローカル変数では
+        # PySide6 ラッパーが GC されてアニメーションが無音で停止する場合がある
+        self._theme_effect = QGraphicsOpacityEffect(self._theme_overlay)
+        self._theme_overlay.setGraphicsEffect(self._theme_effect)
+        self._theme_anim = QPropertyAnimation(self._theme_effect, b"opacity", self)
         self._theme_anim.setDuration(300)
         self._theme_anim.setStartValue(1.0)
         self._theme_anim.setEndValue(0.0)

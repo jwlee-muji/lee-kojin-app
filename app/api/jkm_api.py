@@ -6,6 +6,7 @@ import logging
 import requests
 import sqlite3
 from PySide6.QtCore import QThread, Signal
+from app.api.base import BaseWorker
 from app.core.config import JKM_TICKER, DB_JKM
 from app.core.database import get_db_connection
 
@@ -34,9 +35,8 @@ def _save_jkm(rows: list) -> int:
         conn.commit()
         return cur.rowcount
 
-class FetchJkmWorker(QThread):
+class FetchJkmWorker(BaseWorker):
     finished = Signal(int)
-    error    = Signal(str)
 
     def run(self):
         try:

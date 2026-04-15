@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import shutil
 import logging
@@ -7,6 +8,17 @@ from datetime import datetime, timedelta
 from app.core.config import DB_IMBALANCE, DB_HJKS, DB_JKM, BACKUP_DIR
 
 logger = logging.getLogger(__name__)
+
+# pragma_table_info 由来のカラム名に使える文字 (日本語・英数・スペース・括弧など)
+_SAFE_COL_RE = re.compile(r'^[\w\s\(\)\-\./\u3000-\u9fff\uff00-\uffef]+$')
+
+
+def validate_column_name(name: str) -> str:
+    """カラム名に SQL インジェクションのリスクがある文字が含まれていないことを検証します。
+    不正な場合は ValueError を送出します。"""
+    if not name or not _SAFE_COL_RE.match(name):
+        raise ValueError(f"不正なカラム名が検出されました: {name!r}")
+    return name
 
 @contextmanager
 def get_db_connection(db_path: Path):
@@ -47,18 +59,25 @@ def run_retention_policy(retention_days: int):
     except Exception as e:
         logger.error(f"データ寿命管理(バックアップと削除)の実行中にエラーが発生しました: {e}")
 
+def _attach_backup_db(conn: sqlite3.Connection, backup_path: Path) -> None:
+    """ATTACH DATABASE を安全に実行します。
+    ATTACH はパラメータバインディング非対応のため、シングルクォートをエスケープして注入を防ぎます。"""
+    safe_path = str(backup_path.resolve()).replace("'", "''")
+    conn.execute(f"ATTACH DATABASE '{safe_path}' AS backup_db")
+
+
 def _backup_and_delete_imbalance(threshold_int: int):
     if not DB_IMBALANCE.exists(): return
     with get_db_connection(DB_IMBALANCE) as conn:
         cols = conn.execute("SELECT name FROM pragma_table_info('imbalance_prices')").fetchall()
         if len(cols) < 2: return
-        date_col = cols[1][0]
-        
+        date_col = validate_column_name(cols[1][0])
+
         count = conn.execute(f'SELECT COUNT(*) FROM imbalance_prices WHERE CAST("{date_col}" AS INTEGER) < ?', (threshold_int,)).fetchone()[0]
         if count == 0: return
-        
+
         backup_db = BACKUP_DIR / 'backup_imbalance.db'
-        conn.execute(f"ATTACH DATABASE '{backup_db}' AS backup_db")
+        _attach_backup_db(conn, backup_db)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS backup_db.imbalance_prices AS SELECT * FROM imbalance_prices WHERE 0")
             conn.execute(f'INSERT OR IGNORE INTO backup_db.imbalance_prices SELECT * FROM imbalance_prices WHERE CAST("{date_col}" AS INTEGER) < ?', (threshold_int,))
@@ -67,13 +86,7 @@ def _backup_and_delete_imbalance(threshold_int: int):
         finally:
             conn.execute("DETACH DATABASE backup_db")
             
-        try:
-            conn.isolation_level = None  # VACUUM을 위해 임시로 Auto-commit 모드로 전환
-            conn.execute("VACUUM")       # 메인 DB 용량 최적화
-        except sqlite3.OperationalError as e:
-            logger.warning(f"インバランスDBのVACUUMをスキップしました (使用中): {e}")
-        finally:
-            conn.isolation_level = ""
+        _vacuum_safely(conn, "インバランス単価")
         logger.info(f"インバランス単価の古いデータ({count}件)をバックアップし削除しました。")
 
 def _backup_and_delete_hjks(threshold_str: str):
@@ -82,9 +95,9 @@ def _backup_and_delete_hjks(threshold_str: str):
         if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hjks_capacity'").fetchone(): return
         count = conn.execute("SELECT COUNT(*) FROM hjks_capacity WHERE date < ?", (threshold_str,)).fetchone()[0]
         if count == 0: return
-        
+
         backup_db = BACKUP_DIR / 'backup_hjks.db'
-        conn.execute(f"ATTACH DATABASE '{backup_db}' AS backup_db")
+        _attach_backup_db(conn, backup_db)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS backup_db.hjks_capacity AS SELECT * FROM hjks_capacity WHERE 0")
             conn.execute("INSERT OR IGNORE INTO backup_db.hjks_capacity SELECT * FROM hjks_capacity WHERE date < ?", (threshold_str,))
@@ -92,14 +105,8 @@ def _backup_and_delete_hjks(threshold_str: str):
             conn.commit()
         finally:
             conn.execute("DETACH DATABASE backup_db")
-            
-        try:
-            conn.isolation_level = None
-            conn.execute("VACUUM")
-        except sqlite3.OperationalError as e:
-            logger.warning(f"HJKS DBのVACUUMをスキップしました (使用中): {e}")
-        finally:
-            conn.isolation_level = ""
+
+        _vacuum_safely(conn, "HJKS")
         logger.info(f"HJKSの古いデータ({count}件)をバックアップし削除しました。")
 
 def _backup_and_delete_jkm(threshold_str: str):
@@ -108,9 +115,9 @@ def _backup_and_delete_jkm(threshold_str: str):
         if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jkm_prices'").fetchone(): return
         count = conn.execute("SELECT COUNT(*) FROM jkm_prices WHERE date < ?", (threshold_str,)).fetchone()[0]
         if count == 0: return
-        
+
         backup_db = BACKUP_DIR / 'backup_jkm.db'
-        conn.execute(f"ATTACH DATABASE '{backup_db}' AS backup_db")
+        _attach_backup_db(conn, backup_db)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS backup_db.jkm_prices AS SELECT * FROM jkm_prices WHERE 0")
             conn.execute("INSERT OR IGNORE INTO backup_db.jkm_prices SELECT * FROM jkm_prices WHERE date < ?", (threshold_str,))
@@ -118,12 +125,22 @@ def _backup_and_delete_jkm(threshold_str: str):
             conn.commit()
         finally:
             conn.execute("DETACH DATABASE backup_db")
-            
-        try:
-            conn.isolation_level = None
-            conn.execute("VACUUM")
-        except sqlite3.OperationalError as e:
-            logger.warning(f"JKM DBのVACUUMをスキップしました (使用中): {e}")
-        finally:
-            conn.isolation_level = ""
+
+        _vacuum_safely(conn, "JKM")
         logger.info(f"JKMの古いデータ({count}件)をバックアップし削除しました。")
+
+
+def _vacuum_safely(conn: sqlite3.Connection, db_label: str) -> None:
+    """VACUUM を安全に実行します。
+    isolation_level の変更前に元の値を保存し、finally で必ず復元します。"""
+    original_isolation = conn.isolation_level
+    try:
+        conn.isolation_level = None   # VACUUM は autocommit モードでのみ実行可能
+        conn.execute("VACUUM")
+    except sqlite3.OperationalError as e:
+        logger.warning(f"{db_label} DBのVACUUMをスキップしました (使用中): {e}")
+    finally:
+        try:
+            conn.isolation_level = original_isolation
+        except Exception:
+            pass  # クローズ直前のコネクションでも安全に続行

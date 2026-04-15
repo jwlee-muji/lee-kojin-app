@@ -184,8 +184,14 @@ class JkmWidget(BaseWidget):
         QMessageBox.warning(self, tr("エラー"), err)
 
     def _refresh_chart(self):
-        start = self.start_date.date().toString("yyyy-MM-dd")
-        end   = self.end_date.date().toString("yyyy-MM-dd")
+        start_qdate = self.start_date.date()
+        end_qdate   = self.end_date.date()
+        if start_qdate > end_qdate:
+            self.status_label.setText(tr("開始日は終了日以前である必要があります。"))
+            self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
+            return
+        start = start_qdate.toString("yyyy-MM-dd")
+        end   = end_qdate.toString("yyyy-MM-dd")
         try:
             with get_db_connection(DB_JKM) as conn:
                 rows = conn.execute(

@@ -32,8 +32,8 @@ def _load_memos() -> list[dict]:
     if f.exists():
         try:
             return json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except (json.JSONDecodeError, ValueError, OSError) as e:
+            logger.warning(f"メモファイルの読み込みに失敗しました。空リストで続行します: {e}")
     return []
 
 

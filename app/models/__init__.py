@@ -1,3 +1,5 @@
-# Models module package
-# 데이터 모델 클래스들을 관리하는 패키지입니다.
-# (패키지 초기화 파일)
+# データモデルパッケージ
+# app.models.HjksRecord のようにトップレベルからインポート可能にします。
+from .data_models import HjksRecord
+
+__all__ = ["HjksRecord"]

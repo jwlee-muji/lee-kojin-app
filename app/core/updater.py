@@ -20,6 +20,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 from packaging.version import Version
+from PySide6.QtCore import QThread, Signal, Qt, QObject
+from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
 from version import __version__
 from app.core.config import APP_DIR, INSTALL_FILE
 
@@ -201,10 +203,7 @@ def _load_install_path() -> Optional[Path]:
         return None
 
 
-# ── Qt 의존 클래스 (업데이트 UI) ─────────────────────────────────────────
-from PySide6.QtCore import QThread, Signal, Qt, QObject
-from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
-
+# ── Qt 依存クラス (アップデート UI) ──────────────────────────────────────
 
 class UpdateCheckWorker(QThread):
     result = Signal(dict)

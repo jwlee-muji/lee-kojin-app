@@ -83,14 +83,65 @@ DEFAULT_SETTINGS = {
     "ai_temperature": 0.7,
     "ai_max_tokens": 2048,
     "chat_history_limit": 20,
+    # ユーザーが設定画面で登録した独自 API キー (空文字はスキップ)
+    "user_gemini_keys": [],
+    "user_groq_key": "",
+    "user_smtp_user": "",
+    "user_smtp_password": "",
 }
+
+def _validate_settings(settings: dict) -> dict:
+    """設定値の型と範囲を検証し、不正な値はデフォルトにリセットします。"""
+    validated = dict(settings)
+
+    _float_ranges = {
+        "imbalance_alert": (0.0, 1000.0),
+        "reserve_low":     (0.0, 100.0),
+        "reserve_warn":    (0.0, 100.0),
+        "ai_temperature":  (0.0, 2.0),
+    }
+    for key, (lo, hi) in _float_ranges.items():
+        try:
+            v = float(validated.get(key, DEFAULT_SETTINGS[key]))
+            validated[key] = max(lo, min(hi, v))
+        except (ValueError, TypeError):
+            validated[key] = DEFAULT_SETTINGS[key]
+
+    _int_ranges = {
+        "imbalance_interval":  (1, 1440),
+        "reserve_interval":    (1, 1440),
+        "weather_interval":    (1, 1440),
+        "hjks_interval":       (1, 1440),
+        "jkm_interval":        (1, 1440),
+        "retention_days":      (1, 36500),
+        "ai_max_tokens":       (128, 8192),
+        "chat_history_limit":  (1, 200),
+    }
+    for key, (lo, hi) in _int_ranges.items():
+        try:
+            v = int(validated.get(key, DEFAULT_SETTINGS[key]))
+            validated[key] = max(lo, min(hi, v))
+        except (ValueError, TypeError):
+            validated[key] = DEFAULT_SETTINGS[key]
+
+    if not isinstance(validated.get("auto_start"), bool):
+        validated["auto_start"] = DEFAULT_SETTINGS["auto_start"]
+
+    if validated.get("language") not in ('auto', 'ja', 'en', 'ko', 'zh'):
+        validated["language"] = DEFAULT_SETTINGS["language"]
+
+    return validated
+
 
 def load_settings():
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                return {**DEFAULT_SETTINGS, **json.load(f)}
-        except Exception: pass
+                merged = {**DEFAULT_SETTINGS, **json.load(f)}
+                return _validate_settings(merged)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
     return DEFAULT_SETTINGS.copy()
 
 def save_settings(settings):

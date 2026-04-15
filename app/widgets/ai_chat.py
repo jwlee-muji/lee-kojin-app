@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent
 from app.ui.common import BaseWidget
+from app.ui.theme import UIColors
 from app.core.i18n import tr
 from app.api.ai_api import (
     AiChatWorker, GEMINI_LITE_MODEL, GEMINI_DEFAULT_MODEL, GROQ_DEFAULT_MODEL,
@@ -24,14 +25,7 @@ logger = logging.getLogger(__name__)
 _MAX_HISTORY  = 20
 _COOLDOWN_SEC = 60
 
-# ─── カラー定義 ────────────────────────────────────────────────────────────
-_C_USER_BG     = "#0078d4"
-_C_USER_FG     = "#ffffff"
-_C_ASST_BG_DK  = "#2a2d2e"
-_C_ASST_FG_DK  = "#d4d4d4"
-_C_ASST_BG_LT  = "#e4e4e4"
-_C_ASST_FG_LT  = "#1a1a1a"
-_C_AVATAR_BG   = "#5c6bc0"
+# カラー定義は UIColors.get_chat_colors() に集約 (theme.py)
 
 
 class AiChatWidget(BaseWidget):
@@ -307,6 +301,7 @@ class _ChatArea(QScrollArea):
         self._on_suggestion  = on_suggestion
         self._thinking_widget = None
         self._msg_count      = 0
+        self._bubbles: list["_BubbleWidget"] = []
 
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -342,7 +337,7 @@ class _ChatArea(QScrollArea):
         avatar.setFixedSize(40, 40)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setStyleSheet(
-            f"background: {_C_AVATAR_BG}; color: white;"
+            f"background: {UIColors.get_chat_colors(True)["avatar_bg"]}; color: white;"
             "border-radius: 20px; font-weight: bold; font-size: 14px;"
         )
 
@@ -396,7 +391,9 @@ class _ChatArea(QScrollArea):
             self._welcome.hide()
         self._msg_count += 1
         time_str = datetime.now().strftime("%H:%M")
-        self._insert(_BubbleWidget(role, text, time_str, self._is_dark))
+        bubble = _BubbleWidget(role, text, time_str, self._is_dark)
+        self._bubbles.append(bubble)
+        self._insert(bubble)
 
     def add_thinking(self):
         w = _ThinkingWidget(self._is_dark)
@@ -432,6 +429,7 @@ class _ChatArea(QScrollArea):
                 item.widget().deleteLater()
         self._thinking_widget = None
         self._msg_count = 0
+        self._bubbles.clear()
 
         self._welcome = self._build_welcome()
         self._layout.insertWidget(0, self._welcome, 0, Qt.AlignmentFlag.AlignTop)
@@ -444,6 +442,13 @@ class _ChatArea(QScrollArea):
             self._welcome.deleteLater()
             self._welcome = self._build_welcome()
             self._layout.insertWidget(0, self._welcome, 0, Qt.AlignmentFlag.AlignTop)
+        # 既存バブルのテーマを動的に更新
+        for bubble in self._bubbles:
+            try:
+                bubble.set_theme(is_dark)
+            except RuntimeError:
+                pass  # 既に削除済みのウィジェットはスキップ
+        self._bubbles = [b for b in self._bubbles if not b.isHidden() or True]
 
     # ── private ──────────────────────────────────────────────────────────
 
@@ -463,18 +468,19 @@ class _BubbleWidget(QWidget):
 
     def __init__(self, role: str, text: str, time_str: str, is_dark: bool):
         super().__init__()
-        is_user = role == "user"
+        self._is_user   = role == "user"
+        self._is_dark   = is_dark
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        if not is_user:
+        if not self._is_user:
             av = QLabel("AI")
             av.setFixedSize(28, 28)
             av.setAlignment(Qt.AlignmentFlag.AlignCenter)
             av.setStyleSheet(
-                f"background: {_C_AVATAR_BG}; color: #fff;"
+                f"background: {UIColors.get_chat_colors(True)["avatar_bg"]}; color: #fff;"
                 "border-radius: 14px; font-weight: bold; font-size: 10px;"
             )
             outer.addWidget(av, 0, Qt.AlignmentFlag.AlignTop)
@@ -483,44 +489,53 @@ class _BubbleWidget(QWidget):
         col.setSpacing(3)
         col.setContentsMargins(0, 0, 0, 0)
 
-        lbl = QLabel(_format_message(text))
-        lbl.setTextFormat(Qt.TextFormat.RichText)
-        lbl.setWordWrap(True)
-        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lbl.setMaximumWidth(520)
-        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._lbl = QLabel(_format_message(text))
+        self._lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._lbl.setWordWrap(True)
+        self._lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._lbl.setMaximumWidth(520)
+        self._lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 
-        if is_user:
-            lbl.setStyleSheet(
-                f"background: {_C_USER_BG}; color: {_C_USER_FG};"
+        self._time_lbl = QLabel(time_str)
+        self._time_lbl.setStyleSheet(f"color: {'#888' if is_dark else '#aaa'}; font-size: 10px;")
+
+        self._apply_bubble_style(is_dark)
+
+        col.addWidget(self._lbl)
+        col.addWidget(
+            self._time_lbl, 0,
+            Qt.AlignmentFlag.AlignRight if self._is_user else Qt.AlignmentFlag.AlignLeft,
+        )
+
+        if self._is_user:
+            outer.addStretch(1)
+            outer.addLayout(col)
+        else:
+            outer.addLayout(col)
+            outer.addStretch(1)
+
+    def _apply_bubble_style(self, is_dark: bool):
+        cc = UIColors.get_chat_colors(is_dark)
+        if self._is_user:
+            self._lbl.setStyleSheet(
+                f"background: {cc['user_bg']}; color: {cc['user_fg']};"
                 "border-radius: 16px 16px 4px 16px;"
                 "padding: 9px 14px; font-size: 13px; line-height: 1.5;"
             )
         else:
-            bg = _C_ASST_BG_DK if is_dark else _C_ASST_BG_LT
-            fg = _C_ASST_FG_DK if is_dark else _C_ASST_FG_LT
-            lbl.setStyleSheet(
-                f"background: {bg}; color: {fg};"
+            self._lbl.setStyleSheet(
+                f"background: {cc['asst_bg']}; color: {cc['asst_fg']};"
                 "border-radius: 4px 16px 16px 16px;"
                 "padding: 9px 14px; font-size: 13px; line-height: 1.5;"
             )
-
-        t_fg = "#888" if is_dark else "#aaa"
-        t = QLabel(time_str)
-        t.setStyleSheet(f"color: {t_fg}; font-size: 10px;")
-
-        col.addWidget(lbl)
-        col.addWidget(
-            t, 0,
-            Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft,
+        self._time_lbl.setStyleSheet(
+            f"color: {cc['time_fg']}; font-size: 10px;"
         )
 
-        if is_user:
-            outer.addStretch(1)
-            outer.addLayout(col)
-        else:
-            outer.addLayout(col)
-            outer.addStretch(1)
+    def set_theme(self, is_dark: bool):
+        """テーマ変更時に既存バブルの色を動的に更新します。"""
+        self._is_dark = is_dark
+        self._apply_bubble_style(is_dark)
 
 
 # ── 「考え中」アニメーション ──────────────────────────────────────────────

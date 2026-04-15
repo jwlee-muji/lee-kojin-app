@@ -6,14 +6,14 @@ import requests
 import csv
 import sqlite3
 from PySide6.QtCore import QThread, Signal
+from app.api.base import BaseWorker
 from app.core.config import DB_IMBALANCE, API_IMBALANCE_BASE, DATE_COL_IDX, TIME_COL_IDX
 from app.core.database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-class UpdateImbalanceWorker(QThread):
+class UpdateImbalanceWorker(BaseWorker):
     finished = Signal(str)
-    error    = Signal(str)
 
     def run(self):
         try:

@@ -1,12 +1,19 @@
 """
 AI チャット API 通信モジュール
 優先順位: Gemini 3.1 Flash Lite (3キー) → Gemini 2.5 Flash (3キー) → Groq フォールバック
+
+APIキー取得の優先順位:
+  1. 環境変数 (GEMINI_API_KEY_1/2/3, GROQ_API_KEY)
+  2. 設定ファイル (settings.json の user_gemini_keys / user_groq_key)
+  3. 内蔵キー (_secrets.py, XOR 難読化)
 """
 import json
 import logging
+import os
 import urllib.request
 import urllib.error
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
+from app.api.base import BaseWorker, HTTP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +36,39 @@ class ServiceUnavailableError(Exception):
 
 
 def get_all_gemini_keys() -> list[str]:
-    """有効な Gemini API キー一覧 (空文字除外)"""
+    """有効な Gemini API キー一覧を返す (優先順位: 環境変数 → 設定ファイル → 内蔵キー)"""
+    # 1. 環境変数
+    env_keys = [
+        os.environ.get("GEMINI_API_KEY_1", ""),
+        os.environ.get("GEMINI_API_KEY_2", ""),
+        os.environ.get("GEMINI_API_KEY_3", ""),
+    ]
+    # 2. 設定ファイル
+    try:
+        from app.core.config import load_settings
+        settings_keys = load_settings().get("user_gemini_keys", [])
+        if isinstance(settings_keys, str):
+            settings_keys = [settings_keys]
+    except Exception as e:
+        logger.warning(f"設定ファイルから Gemini キーを読み込めませんでした: {e}")
+        settings_keys = []
+    # 3. 内蔵キー (フォールバック)
     try:
         from app.core._secrets import get_gemini_key1, get_gemini_key2, get_gemini_key3
-        return [k for k in (get_gemini_key1(), get_gemini_key2(), get_gemini_key3()) if k]
+        builtin_keys = [get_gemini_key1(), get_gemini_key2(), get_gemini_key3()]
     except (ImportError, AttributeError):
-        logger.warning("_secrets.py が見つかりません。Gemini API キーが設定されていません。")
-        return []
+        logger.warning("_secrets.py が見つかりません。内蔵 Gemini API キーなし。")
+        builtin_keys = []
+
+    # 重複除去しながら有効なキーのみ返す
+    seen: set[str] = set()
+    result = []
+    for k in env_keys + list(settings_keys) + builtin_keys:
+        k = (k or "").strip()
+        if k and k not in seen:
+            seen.add(k)
+            result.append(k)
+    return result
 
 
 def get_builtin_api_key() -> str:
@@ -45,7 +78,18 @@ def get_builtin_api_key() -> str:
 
 
 def get_builtin_groq_key() -> str:
-    """組み込み Groq API キーを返す"""
+    """Groq API キーを返す (優先順位: 環境変数 → 設定ファイル → 内蔵キー)"""
+    # 1. 環境変数
+    if key := os.environ.get("GROQ_API_KEY", "").strip():
+        return key
+    # 2. 設定ファイル
+    try:
+        from app.core.config import load_settings
+        if key := load_settings().get("user_groq_key", "").strip():
+            return key
+    except Exception as e:
+        logger.warning(f"設定ファイルから Groq キーを読み込めませんでした: {e}")
+    # 3. 内蔵キー (フォールバック)
     try:
         from app.core._secrets import get_groq_key
         return get_groq_key()
@@ -61,13 +105,14 @@ SYSTEM_PROMPT = (
 )
 
 
-class AiChatWorker(QThread):
+class AiChatWorker(BaseWorker):
     """
     3段フォールバックで AI 応答を取得するワーカー
     Gemini Lite (全キー) → Gemini 2.5 Flash (全キー) → Groq
+    BaseWorker 継承により共通の error シグナルと _emit_error() を利用します。
     """
     response_received = Signal(str)
-    error             = Signal(str)
+    # error は BaseWorker から継承
     rate_limited      = Signal()
 
     def __init__(
@@ -126,7 +171,7 @@ class AiChatWorker(QThread):
         if all_rate_limited:
             self.rate_limited.emit()
         else:
-            self.error.emit(last_err or "Unknown error")
+            self._emit_error(last_err or "Unknown error")
 
     # ── Gemini モデルティア (全キーをローテーション) ───────────────────────
 
@@ -161,6 +206,7 @@ class AiChatWorker(QThread):
     # ── API 呼び出し ─────────────────────────────────────────────────────
 
     def _call_gemini(self, api_key: str, model: str) -> str:
+        # URL に API キーが含まれるためログ出力時はマスクする
         url = GEMINI_API_URL.format(model=model, key=api_key)
 
         contents = []
@@ -181,7 +227,7 @@ class AiChatWorker(QThread):
             method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 429:
@@ -189,6 +235,7 @@ class AiChatWorker(QThread):
             if e.code == 503:
                 raise ServiceUnavailableError()
             body = e.read().decode("utf-8", errors="replace")
+            # URL (キー含む) はログに出力せず、ステータスコードとボディのみ記録
             raise RuntimeError(f"Gemini HTTP {e.code}: {body[:300]}")
 
         try:
@@ -220,7 +267,7 @@ class AiChatWorker(QThread):
             method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 429:

@@ -3,14 +3,16 @@
 """
 import logging
 import requests
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
+from app.api.base import BaseWorker, HTTP_TIMEOUT
 from app.core.config import API_OCCTO_RESERVE
 
 logger = logging.getLogger(__name__)
 
-class FetchPowerReserveWorker(QThread):
-    data_fetched   = Signal(list, list)
-    error_occurred = Signal(str)
+
+class FetchPowerReserveWorker(BaseWorker):
+    """BaseWorker 継承により共通の error シグナルと _emit_error() を利用します。"""
+    data_fetched = Signal(list, list)
 
     def __init__(self, target_date_str):
         super().__init__()
@@ -28,7 +30,7 @@ class FetchPowerReserveWorker(QThread):
                 logger.info(f"OCCTO 電力予備率データ({self.target_date_str})のAPI取得を開始します。")
                 params = {"inputDate": self.target_date_str.replace("-", "/")}
 
-                res = session.get(API_OCCTO_RESERVE, params=params, timeout=15)
+                res = session.get(API_OCCTO_RESERVE, params=params, timeout=HTTP_TIMEOUT)
                 res.raise_for_status()
 
                 if "application/json" not in res.headers.get("Content-Type", ""):
@@ -69,11 +71,8 @@ class FetchPowerReserveWorker(QThread):
                 logger.info(f"OCCTO APIからのデータ抽出が完了しました。 (行数: {len(final_rows)}行)")
                 self.data_fetched.emit(headers, final_rows)
             except requests.exceptions.RequestException as e:
-                logger.error(f"OCCTO APIリクエストエラー: {str(e)}")
-                self.error_occurred.emit(f"通信エラーが発生しました: {str(e)}")
+                self._emit_error(f"通信エラーが発生しました", e)
             except (ValueError, KeyError, TypeError) as e:
-                logger.error(f"OCCTO API応答の解析中にエラーが発生しました: {str(e)}")
-                self.error_occurred.emit(f"API応答の解析エラー: {str(e)}")
+                self._emit_error(f"API応答の解析エラー", e)
             except Exception as e:
-                logger.error(f"OCCTO データ処理中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
-                self.error_occurred.emit(f"予期せぬエラーが発生しました: {str(e)}")
+                self._emit_error(f"予期せぬエラーが発生しました", e)
