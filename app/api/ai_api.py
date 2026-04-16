@@ -49,7 +49,7 @@ def get_all_gemini_keys() -> list[str]:
         settings_keys = load_settings().get("user_gemini_keys", [])
         if isinstance(settings_keys, str):
             settings_keys = [settings_keys]
-    except Exception as e:
+    except (OSError, ValueError, KeyError, TypeError) as e:
         logger.warning(f"設定ファイルから Gemini キーを読み込めませんでした: {e}")
         settings_keys = []
     # 3. 内蔵キー (フォールバック)
@@ -87,7 +87,7 @@ def get_builtin_groq_key() -> str:
         from app.core.config import load_settings
         if key := load_settings().get("user_groq_key", "").strip():
             return key
-    except Exception as e:
+    except (OSError, ValueError, KeyError, TypeError) as e:
         logger.warning(f"設定ファイルから Groq キーを読み込めませんでした: {e}")
     # 3. 内蔵キー (フォールバック)
     try:

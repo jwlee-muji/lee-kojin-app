@@ -20,7 +20,7 @@ from app.widgets.dashboard import DashboardWidget
 from app.widgets.bug_report import BugReportWidget
 from app.widgets.ai_chat import AiChatWidget
 from app.widgets.text_memo import TextMemoWidget
-from app.ui.common import FadeStackedWidget, get_tinted_icon
+from app.ui.common import FadeStackedWidget, get_tinted_icon, clear_tint_cache
 from app.core.events import bus
 from app.core.i18n import tr
 
@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
         self._notifications_tab_index = None
         self._setup_tray_icon()
 
-        from version import __version__
+        from app.core.config import __version__
         self.setWindowTitle(f"LEE 個人アプリ  v{__version__}")
         # 画面サイズに応じてアダプティブなウィンドウサイズを計算
         # 小型ノートPC(1366px)〜ウルトラワイド(3440px)まで適切に対応
@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         self._theme_overlay.raise_()
 
         self.is_dark = not self.is_dark
+        clear_tint_cache()
         app = QApplication.instance()
         from app.core.config import get_theme_qss
         from app.ui.theme import get_global_qss

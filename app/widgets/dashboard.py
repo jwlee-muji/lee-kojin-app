@@ -16,6 +16,7 @@ from app.core.config import (
 import sqlite3
 from app.core.database import get_db_connection, validate_column_name
 from app.ui.common import BaseWidget, get_tinted_pixmap
+from app.ui.theme import Typography
 from app.core.events import bus
 from app.core.i18n import tr
 
@@ -265,10 +266,10 @@ class SummaryCard(QFrame):
         self.setStyleSheet(
             f"SummaryCard {{ border-left: 6px solid {self.card_color}; }}"
         )
-        self.title_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; background: transparent; color: {'#aaaaaa' if self.is_dark else '#666666'};")
-        self.sub_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; background: transparent; color: {'#888888' if self.is_dark else '#888888'};")
+        self.title_lbl.setStyleSheet(f"font-size: {Typography.H2}; font-weight: bold; background: transparent; color: {'#aaaaaa' if self.is_dark else '#666666'};")
+        self.sub_lbl.setStyleSheet(f"font-size: {Typography.BUTTON}; font-weight: bold; background: transparent; color: {'#888888' if self.is_dark else '#888888'};")
         vc = self._val_color if self._val_color else tc
-        self.value_lbl.setStyleSheet(f"font-size: 32px; font-weight: bold; background: transparent; color: {vc};")
+        self.value_lbl.setStyleSheet(f"font-size: {Typography.DISPLAY}; font-weight: bold; background: transparent; color: {vc};")
         
         if hasattr(self, 'shadow'):
             self.shadow.setOffset(0, 4 + self._hover_offset * 4)
@@ -513,6 +514,11 @@ class DashboardWidget(BaseWidget):
     def _cycle_weather(self):
         if not self._weather_list:
             return
-        region, w_text, t_text, color = self._weather_list[self._weather_index]
-        self.card_wea.set_value(t_text, f"{region} / {w_text}", color, animate_fade=True)
+        entry = self._weather_list[self._weather_index]
+        self.card_wea.set_value(
+            entry.temp_str,
+            f"{entry.region} / {entry.weather_text}",
+            entry.accent_color,
+            animate_fade=True,
+        )
         self._weather_index = (self._weather_index + 1) % len(self._weather_list)

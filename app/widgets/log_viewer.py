@@ -24,8 +24,9 @@ class LogViewerWidget(BaseWidget):
         super().__init__(parent)
         # is_dark は BaseWidget.__init__ で True に初期化済み
         self._log_file = LOG_FILE
-        self._last_pos = 0  # 마지막으로 읽은 파일 위치 캐싱
-        self._log_buffer = []  # 대량 로그 처리용 버퍼
+        self._last_pos = 0        # 마지막으로 읽은 파일 위치 캐싱
+        self._all_lines: list[str] = []  # 読込済み行のインメモリキャッシュ (最大1000行)
+        self._log_buffer = []     # 대량 로그 처리용 버퍼
 
         self._process_timer = QTimer(self)
         self._process_timer.setInterval(50)  # 50ms 간격으로 Chunk 처리
@@ -104,12 +105,20 @@ class LogViewerWidget(BaseWidget):
         self.log_text.setStyleSheet(
             f"background-color: {lc['bg']}; color: {lc['text']}; padding: 10px; border: none;"
         )
-        self._on_filter_changed()
+        # テーマ変更: ディスク再読み込みなしにキャッシュから再描画
+        self._rerender_from_cache()
 
     def _on_filter_changed(self):
+        # フィルタ変更: ディスク再読み込みなしにキャッシュから再描画
+        self._rerender_from_cache()
+
+    def _rerender_from_cache(self):
+        """_all_lines キャッシュから表示を再構築。ディスクアクセスなし。"""
         self.log_text.clear()
-        self._last_pos = 0
-        self._load_logs()
+        if self._all_lines:
+            self._log_buffer = list(self._all_lines)
+            if not self._process_timer.isActive():
+                self._process_timer.start()
 
     def _load_logs(self):
         if not self._log_file.exists():
@@ -118,9 +127,10 @@ class LogViewerWidget(BaseWidget):
         try:
             current_size = self._log_file.stat().st_size
             if current_size < self._last_pos:
-                # 파일이 비워졌거나 잘린 경우 초기화
+                # ファイルが切り詰められた (ログ消去等): キャッシュをリセット
                 self.log_text.clear()
                 self._last_pos = 0
+                self._all_lines.clear()
 
             if current_size == self._last_pos:
                 return  # 추가된 변경 내용 없음
@@ -141,8 +151,12 @@ class LogViewerWidget(BaseWidget):
                 
             if not new_content:
                 return
-            
+
             lines = new_content.splitlines()
+            # インメモリキャッシュを更新 (最大1000行に制限)
+            self._all_lines.extend(lines)
+            if len(self._all_lines) > 1000:
+                self._all_lines = self._all_lines[-1000:]
             self._log_buffer.extend(lines)
             
             if not self._process_timer.isActive():
@@ -221,6 +235,7 @@ class LogViewerWidget(BaseWidget):
                 f.write("")
             self.log_text.clear()
             self._last_pos = 0
+            self._all_lines.clear()
             self._load_logs()
         except (IOError, OSError):
             pass

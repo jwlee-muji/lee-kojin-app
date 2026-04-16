@@ -1,7 +1,90 @@
 import os
 import sys
 import json
+import ctypes
+import base64
+import logging
 from pathlib import Path
+
+_cfg_logger = logging.getLogger(__name__)
+
+# ── Windows DPAPI によるシークレット暗号化 ────────────────────────────────
+# ユーザーアカウントの資格情報で暗号化するため、同一ユーザーのみ復号可能。
+# OS 再インストール (プロファイル移行なし) の場合は復号不可になるため、
+# 復号失敗時は空文字にフォールバックし、ユーザーに再入力を促す。
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [
+        ("cbData", ctypes.c_uint32),
+        ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+    ]
+
+
+def _dpapi_protect(data: bytes) -> bytes:
+    buf = (ctypes.c_ubyte * len(data))(*data)
+    blob_in  = _DataBlob(len(data), buf)
+    blob_out = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    )
+    if not ok:
+        raise OSError(f"CryptProtectData 失敗 (err={ctypes.GetLastError()})")
+    try:
+        return bytes(blob_out.pbData[:blob_out.cbData])
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def _dpapi_unprotect(data: bytes) -> bytes:
+    buf = (ctypes.c_ubyte * len(data))(*data)
+    blob_in  = _DataBlob(len(data), buf)
+    blob_out = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    )
+    if not ok:
+        raise OSError(f"CryptUnprotectData 失敗 (err={ctypes.GetLastError()})")
+    try:
+        return bytes(blob_out.pbData[:blob_out.cbData])
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+_DPAPI_PREFIX = "__dpapi__:"
+
+
+def encrypt_secret(value: str) -> str:
+    """文字列を DPAPI で暗号化し '__dpapi__:<base64>' 形式の文字列を返す。
+    失敗時は平文のまま返す (暗号化なし・ログに警告記録)。"""
+    if not value:
+        return value
+    try:
+        encrypted = _dpapi_protect(value.encode("utf-8"))
+        return _DPAPI_PREFIX + base64.b64encode(encrypted).decode("ascii")
+    except Exception as e:
+        _cfg_logger.warning(f"シークレット暗号化に失敗しました (平文保存): {e}")
+        return value
+
+
+def decrypt_secret(value: str) -> str:
+    """'__dpapi__:<base64>' 形式の文字列を復号して返す。
+    非暗号化文字列はそのまま返す。復号失敗時は空文字を返す。"""
+    if not isinstance(value, str) or not value.startswith(_DPAPI_PREFIX):
+        return value  # 未暗号化: そのまま返す (初回移行時など)
+    try:
+        encrypted = base64.b64decode(value[len(_DPAPI_PREFIX):])
+        return _dpapi_unprotect(encrypted).decode("utf-8")
+    except Exception as e:
+        _cfg_logger.warning(f"シークレット復号に失敗しました (空文字返却): {e}")
+        return ""
+
+
+# 暗号化対象の設定キー
+_SENSITIVE_KEYS: frozenset[str] = frozenset({
+    "user_gemini_keys",
+    "user_groq_key",
+    "user_smtp_password",
+})
 
 # --- 기본 경로 설정 ---
 APP_NAME = 'LEE電力モニター'
@@ -10,6 +93,8 @@ APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
 # PyInstaller frozen 환경과 개발 환경 모두에서 프로젝트 루트를 안전하게 반환
 BASE_DIR: Path = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
 APP_DIR.mkdir(parents=True, exist_ok=True)
+
+from version import __version__  # noqa: E402 — アプリバージョンをここで一元管理
 
 LOG_FILE     = APP_DIR / 'app.log'
 INSTALL_FILE = APP_DIR / 'install_path.txt'
@@ -133,20 +218,57 @@ def _validate_settings(settings: dict) -> dict:
     return validated
 
 
-def load_settings():
+_settings_cache: dict | None = None
+
+
+def load_settings() -> dict:
+    """設定ファイルを読み込んで返す。2回目以降はメモリキャッシュを返す。"""
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
+
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                merged = {**DEFAULT_SETTINGS, **json.load(f)}
-                return _validate_settings(merged)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
-    return DEFAULT_SETTINGS.copy()
+                data = json.load(f)
+            for key in _SENSITIVE_KEYS:
+                if key not in data:
+                    continue
+                val = data[key]
+                if key == "user_gemini_keys":
+                    data[key] = [decrypt_secret(k) for k in val if isinstance(k, str)]
+                elif isinstance(val, str):
+                    data[key] = decrypt_secret(val)
+            _settings_cache = _validate_settings({**DEFAULT_SETTINGS, **data})
+            return _settings_cache
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            _cfg_logger.warning(f"設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
 
-def save_settings(settings):
+    _settings_cache = DEFAULT_SETTINGS.copy()
+    return _settings_cache
+
+
+def save_settings(settings: dict) -> None:
+    """設定を保存し、キャッシュを新しい値で更新する。"""
+    global _settings_cache
+    to_save = dict(settings)
+    for key in _SENSITIVE_KEYS:
+        if key not in to_save:
+            continue
+        val = to_save[key]
+        if key == "user_gemini_keys":
+            to_save[key] = [encrypt_secret(k) for k in val if isinstance(k, str)]
+        elif isinstance(val, str):
+            to_save[key] = encrypt_secret(val)
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, indent=4)
+        json.dump(to_save, f, indent=4)
+    _settings_cache = dict(settings)  # 平文をキャッシュ (次回 load_settings がファイルを再読しない)
+
+
+def invalidate_settings_cache() -> None:
+    """キャッシュを破棄して次回 load_settings でファイルを再読みさせる。"""
+    global _settings_cache
+    _settings_cache = None
 
 def get_theme_qss(theme_name: str) -> str:
     """분리된 .qss 파일에서 테마 데이터를 읽어옵니다."""
@@ -160,6 +282,6 @@ def get_theme_qss(theme_name: str) -> str:
         
     try:
         return qss_file.read_text(encoding='utf-8')
-    except Exception as e:
+    except OSError as e:
         print(f"Theme load error: {e}")
         return ""

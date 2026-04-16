@@ -42,23 +42,20 @@ class LoadImbalanceDataWorker(QThread):
     def run(self):
         try:
             with get_db_connection(DB_IMBALANCE) as conn:
-                cursor = conn.cursor()
-                cursor.execute('SELECT * FROM imbalance_prices LIMIT 0')
-                col_names = [desc[0].strip().replace('\ufeff', '') for desc in cursor.description]
+                pragma_rows = conn.execute("PRAGMA table_info('imbalance_prices')").fetchall()
+                col_names = [row[1].strip().replace('\ufeff', '') for row in pragma_rows]
                 date_col = validate_column_name(col_names[DATE_COL_IDX])
 
-                cursor.execute(
+                rows = conn.execute(
                     f'SELECT * FROM imbalance_prices WHERE "{date_col}" = ? OR "{date_col}" = ?',
                     (self.target_yyyymmdd, str(self.target_yyyymmdd))
-                )
-                rows = cursor.fetchall()
+                ).fetchall()
 
                 # データなし → 同一コネクション内で日付範囲を取得 (2回目のコネクション開設を省略)
                 if not rows:
-                    cursor.execute(
+                    range_row = conn.execute(
                         f'SELECT MIN(CAST("{date_col}" AS INTEGER)), MAX(CAST("{date_col}" AS INTEGER)) FROM imbalance_prices'
-                    )
-                    range_row = cursor.fetchone()
+                    ).fetchone()
                     if range_row and range_row[0] is not None:
                         min_d, max_d = str(int(range_row[0])), str(int(range_row[1]))
                         msg = tr("{0} のデータがありません。\n(DBに保存されている期間: {1} ~ {2})").format(

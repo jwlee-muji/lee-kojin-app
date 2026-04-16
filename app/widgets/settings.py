@@ -1,5 +1,3 @@
-import sys
-import winreg
 import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -9,6 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QTimer, QThread
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
+from app.core.platform import set_autostart
 from app.core.i18n import tr, LANG_OPTIONS
 from app.ui.common import BaseWidget
 from app.core.events import bus
@@ -68,7 +67,7 @@ class SettingsWidget(BaseWidget):
         hrow = QHBoxLayout(hdr)
         hrow.setContentsMargins(20, 14, 20, 14)
 
-        from version import __version__
+        from app.core.config import __version__
         title_lbl = QLabel(tr("設定"))
         title_lbl.setStyleSheet("font-weight: bold; font-size: 16px;")
         ver_lbl = QLabel(f"v{__version__}")
@@ -492,19 +491,4 @@ class SettingsWidget(BaseWidget):
     # ── 自動起動 (Windows レジストリ) ────────────────────────────────────
 
     def _toggle_auto_start(self, enable: bool):
-        if not getattr(sys, "frozen", False):
-            return
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        app_name = "LEEPowerMonitor"
-        exe_path = f'"{sys.executable}" --tray'
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
-                if enable:
-                    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, exe_path)
-                else:
-                    try:
-                        winreg.DeleteValue(key, app_name)
-                    except FileNotFoundError:
-                        pass
-        except Exception as e:
-            logger.error(f"Auto-start registry update failed: {e}")
+        set_autostart(enable)

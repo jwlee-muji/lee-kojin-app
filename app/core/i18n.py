@@ -159,6 +159,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '添付ログ (自動取得):':         'Attached Log (auto-fetched):',
         '送信中...':                    'Sending...',
         '送信':                         'Send',
+        '送信  →':                      'Send  →',
         'クリア':                       'Clear',
         'レポートを送信しました。':     'Bug report sent successfully.',
         '送信に失敗しました:':          'Failed to send bug report:',
@@ -170,6 +171,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '送信 (Enter)':                 'Send (Enter)',
         'チャット履歴をクリア':         'Clear Chat History',
         'AI アシスタント':              'AI Assistant',
+        '考え中':                       'Thinking',
         '考え中...':                    'Thinking...',
         'AIサービスに接続できません。': 'Cannot connect to AI service.',
         'モデル:':                      'Model:',
@@ -332,6 +334,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         'システムログ (System Logs)':          'System Logs',
         'すべての機能':                        'All Modules',
         'システム起動・終了':                  'App Start / Stop',
+        '発電停止状況 (HJKS)':                 'Gen. Status (HJKS)',
+        '全国天気予報':                        'Weather Forecast',
         '電力予備率 (OCCTO)':                  'Power Reserve (OCCTO)',
         'すべてのログレベル':                  'All Levels',
         'ログ消去':                            'Clear Log',
@@ -389,6 +393,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             'Showing: {0}  Latest: {1} USD/MMBtu  ({2})',
         '日付':                                'Date',
         '終値':                                'Close',
+        '開始日は終了日以前である必要があります。':
+            'Start date must be on or before the end date.',
         # Imbalance widget
         'インバランス単価':                    'Imbalance Price',
         '今月分 DB更新':                       'Update DB (This Month)',
@@ -520,6 +526,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '添付ログ (自動取得):':         '첨부 로그 (자동 취득):',
         '送信中...':                    '전송 중...',
         '送信':                         '전송',
+        '送信  →':                      '전송  →',
         'クリア':                       '지우기',
         'レポートを送信しました。':     '버그 리포트를 전송했습니다.',
         '送信に失敗しました:':          '전송에 실패했습니다:',
@@ -531,6 +538,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '送信 (Enter)':                 '전송 (Enter)',
         'チャット履歴をクリア':         '채팅 기록 지우기',
         'AI アシスタント':              'AI 어시스턴트',
+        '考え中':                       '생각 중',
         '考え中...':                    '생각 중...',
         'AIサービスに接続できません。': 'AI 서비스에 연결할 수 없습니다.',
         'モデル:':                      '모델:',
@@ -693,6 +701,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         'システムログ (System Logs)':          '시스템 로그',
         'すべての機能':                        '전체 기능',
         'システム起動・終了':                  '앱 시작·종료',
+        '発電停止状況 (HJKS)':                 '발전 현황 (HJKS)',
+        '全国天気予報':                        '전국 날씨 예보',
         '電力予備率 (OCCTO)':                  '전력 예비율 (OCCTO)',
         'すべてのログレベル':                  '전체 레벨',
         'ログ消去':                            '로그 삭제',
@@ -750,6 +760,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             '표시: {0}건  최신: {1} USD/MMBtu  ({2})',
         '日付':                                '날짜',
         '終値':                                '종가',
+        '開始日は終了日以前である必要があります。':
+            '시작일은 종료일 이전이어야 합니다.',
         # Imbalance widget
         'インバランス単価':                    '인밸런스 단가',
         '今月分 DB更新':                       'DB 갱신 (이번 달)',
@@ -881,6 +893,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '添付ログ (自動取得):':         '附件日志（自动获取）：',
         '送信中...':                    '发送中...',
         '送信':                         '发送',
+        '送信  →':                      '发送  →',
         'クリア':                       '清除',
         'レポートを送信しました。':     '错误报告已发送。',
         '送信に失敗しました:':          '发送失败：',
@@ -892,6 +905,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         '送信 (Enter)':                 '发送 (Enter)',
         'チャット履歴をクリア':         '清除聊天记录',
         'AI アシスタント':              'AI 助手',
+        '考え中':                       '思考中',
         '考え中...':                    '思考中...',
         'AIサービスに接続できません。': '无法连接到 AI 服务。',
         'モデル:':                      '模型：',
@@ -1054,6 +1068,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         'システムログ (System Logs)':          '系统日志',
         'すべての機能':                        '全部模块',
         'システム起動・終了':                  '应用启动·退出',
+        '発電停止状況 (HJKS)':                 '发电状况（HJKS）',
+        '全国天気予報':                        '全国天气预报',
         '電力予備率 (OCCTO)':                  '电力备用率（OCCTO）',
         'すべてのログレベル':                  '全部级别',
         'ログ消去':                            '清除日志',
@@ -1111,6 +1127,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             '显示：{0} 条  最新：{1} USD/MMBtu  ({2})',
         '日付':                                '日期',
         '終値':                                '收盘价',
+        '開始日は終了日以前である必要があります。':
+            '开始日期必须早于或等于结束日期。',
         # Imbalance widget
         'インバランス単価':                    '不平衡单价',
         '今月分 DB更新':                       '更新数据库（本月）',
@@ -1153,7 +1171,7 @@ def init_language() -> None:
     try:
         from app.core.config import load_settings
         lang = load_settings().get('language', 'auto')
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.warning(f"言語設定の読み込みに失敗しました。'auto' を使用します: {e}")
         lang = 'auto'
 
@@ -1172,6 +1190,6 @@ def _detect_system_language() -> str:
         for prefix, code in (('ja', 'ja'), ('ko', 'ko'), ('zh', 'zh'), ('en', 'en')):
             if sys_locale.startswith(prefix):
                 return code
-    except Exception:
+    except (ValueError, LookupError):
         pass
     return 'ja'

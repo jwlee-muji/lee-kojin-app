@@ -11,6 +11,7 @@
 """
 import os
 import sys
+import hashlib
 import shutil
 import time
 import subprocess
@@ -22,7 +23,7 @@ from typing import Optional
 from packaging.version import Version
 from PySide6.QtCore import QThread, Signal, Qt, QObject
 from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
-from version import __version__
+from app.core.config import __version__
 from app.core.config import APP_DIR, INSTALL_FILE
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 # ── 버전 확인 ─────────────────────────────────────────────────────────────
 def check_for_update(timeout: int = 5):
-    """신버전이 있으면 {"version": str, "url": str}을 반환, 없으면 None."""
+    """신버전이 있으면 {"version": str, "url": str, "sha256_url": str}을 반환, 없으면 None."""
     try:
         r    = requests.get(RELEASES_API, timeout=timeout)
         r.raise_for_status()
@@ -42,12 +43,15 @@ def check_for_update(timeout: int = 5):
         if not latest:
             return None
         if Version(latest) > Version(__version__):
-            url = data.get("html_url", "")
+            url        = data.get("html_url", "")
+            sha256_url = ""
             for asset in data.get("assets", []):
-                if asset.get("name", "").endswith(".exe"):
+                name = asset.get("name", "")
+                if name.endswith(".exe"):
                     url = asset["browser_download_url"]
-                    break
-            return {"version": latest, "url": url}
+                elif name.endswith(".sha256"):
+                    sha256_url = asset["browser_download_url"]
+            return {"version": latest, "url": url, "sha256_url": sha256_url}
     except requests.exceptions.RequestException as e:
         logger.warning(f"업데이트 확인 중 통신 오류 발생: {e}")
     except Exception as e:
@@ -55,8 +59,36 @@ def check_for_update(timeout: int = 5):
     return None
 
 
+def _verify_checksum(exe_path: Path, sha256_url: str) -> bool:
+    """GitHub Release の .sha256 ファイルと照合して整合性を確認します。
+    sha256_url が空の場合はスキップ (True を返す)。"""
+    if not sha256_url:
+        return True
+    try:
+        r = requests.get(sha256_url, timeout=15)
+        r.raise_for_status()
+        # フォーマット: "<hex>  <filename>" または "<hex>"
+        expected = r.text.strip().split()[0].lower()
+        sha256 = hashlib.sha256()
+        with open(exe_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                sha256.update(chunk)
+        actual = sha256.hexdigest()
+        if actual != expected:
+            logger.error(f"SHA256 検証失敗: expected={expected}, actual={actual}")
+            return False
+        logger.info("SHA256 検証成功")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"SHA256 ファイルのダウンロードに失敗 (検証スキップ): {e}")
+        return True  # ネットワーク障害時はスキップ (ダウンロード済みファイルを使用)
+    except OSError as e:
+        logger.error(f"SHA256 計算中に IO エラー: {e}")
+        return False
+
+
 # ── 다운로드 ──────────────────────────────────────────────────────────────
-def download_update(url: str, progress_callback=None) -> Path:
+def download_update(url: str, progress_callback=None, sha256_url: str = "") -> Path:
     """새 exe를 <현재exe명>_update.exe 로 다운로드. 개발 환경에서는 RuntimeError."""
     if not getattr(sys, 'frozen', False):
         raise RuntimeError("開発環境では自動更新はサポートされていません。")
@@ -83,6 +115,11 @@ def download_update(url: str, progress_callback=None) -> Path:
     except IOError as e:
         logger.error(f"업데이트 파일 저장 실패: {new_exe_path}, {e}")
         raise
+
+    if not _verify_checksum(new_exe_path, sha256_url):
+        new_exe_path.unlink(missing_ok=True)
+        raise ValueError("ダウンロードしたファイルの SHA256 検証に失敗しました。")
+
     return new_exe_path
 
 
@@ -104,7 +141,7 @@ def handle_finish_update(target_exe: Path):
     """
     current_exe = Path(sys.executable)
     logger.info(f"アップデート適用開始: {current_exe} → {target_exe}")
-    time.sleep(2)   # 구버전 프로세스 완전 종료 대기
+    time.sleep(0.3)  # 구버전 프로세스 종료 대기 (QApplication.quit() 후 OS가 파일 잠금 해제)
 
     for attempt in range(30):
         try:
@@ -113,7 +150,7 @@ def handle_finish_update(target_exe: Path):
             break
         except OSError as e:
             logger.warning(f"コピー失敗 (試行 {attempt + 1}回目): {e}")
-            time.sleep(1)
+            time.sleep(0.3)
     else:
         # 복사 실패 시 _update.exe 그대로 기동
         logger.error("30回試行してもコピーに失敗。_update.exe をそのまま起動します。")
@@ -133,14 +170,14 @@ def cleanup_update_file(update_exe: Path):
     --cleanup <update_exe> 인수로 기동됐을 때 호출.
     _update.exe 는 이미 종료된 상태이므로 파일 잠금 없이 삭제 가능.
     """
-    time.sleep(1)   # _update.exe 프로세스 완전 종료 대기
+    time.sleep(0.1)  # _update.exe プロセス終了まで最小限だけ待機
     for _ in range(10):
         try:
             if update_exe.exists():
                 update_exe.unlink()
             break
         except OSError:
-            time.sleep(1)
+            time.sleep(0.3)
 
 
 # ── 다운로드 폴더 실행 감지 ───────────────────────────────────────────────
@@ -198,7 +235,7 @@ def _load_install_path() -> Optional[Path]:
         return p if p.parent.exists() else None
     except FileNotFoundError:
         return None
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug(f"설치 경로 파일 로드 실패: {e}")
         return None
 
@@ -222,17 +259,22 @@ class DownloadWorker(QThread):
     finished = Signal(str)
     error    = Signal(str)
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, sha256_url: str = ""):
         super().__init__()
-        self.url = url
+        self.url        = url
+        self.sha256_url = sha256_url
 
     def run(self):
         try:
-            new_exe = download_update(self.url, progress_callback=lambda d, t: self.progress.emit(d, t))
+            new_exe = download_update(
+                self.url,
+                progress_callback=lambda d, t: self.progress.emit(d, t),
+                sha256_url=self.sha256_url,
+            )
             self.finished.emit(str(new_exe))
         except requests.exceptions.RequestException as e:
             self.error.emit(f"통신 오류: {e}")
-        except (RuntimeError, IOError) as e:
+        except (RuntimeError, IOError, ValueError) as e:
             self.error.emit(str(e))
         except Exception as e:
             self.error.emit(f"예기치 않은 오류: {e}")
@@ -263,9 +305,9 @@ class UpdateManager(QObject):
             QMessageBox.StandardButton.Yes,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self._start_download(info['url'])
+            self._start_download(info['url'], info.get('sha256_url', ''))
 
-    def _start_download(self, url: str):
+    def _start_download(self, url: str, sha256_url: str = ""):
         self._progress_dialog = QProgressDialog("準備中...", None, 0, 100)
         self._progress_dialog.setWindowTitle("アップデートをダウンロード中")
         self._progress_dialog.setWindowModality(Qt.ApplicationModal)
@@ -274,7 +316,7 @@ class UpdateManager(QObject):
         self._progress_dialog.setValue(0)
         self._progress_dialog.show()
 
-        self._download_worker = DownloadWorker(url)
+        self._download_worker = DownloadWorker(url, sha256_url)
         self._download_worker.progress.connect(self._on_progress)
         self._download_worker.finished.connect(self._on_download_finished)
         self._download_worker.error.connect(self._on_download_error)

@@ -8,24 +8,43 @@ from typing import Optional
 from app.core.events import bus
 
 
+_tint_icon_cache:   dict[tuple[str, bool], QIcon]         = {}
+_tint_pixmap_cache: dict[tuple[str, bool, int, int], QPixmap] = {}
+
+
 def get_tinted_icon(icon_path: str, is_dark: bool) -> QIcon:
-    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 QIcon으로 반환합니다."""
+    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 QIcon으로 반환합니다。結果はキャッシュされます。"""
+    key = (icon_path, is_dark)
+    if key in _tint_icon_cache:
+        return _tint_icon_cache[key]
     pixmap = QPixmap(icon_path)
     painter = QPainter(pixmap)
     painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
     painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
     painter.end()
-    return QIcon(pixmap)
+    icon = QIcon(pixmap)
+    _tint_icon_cache[key] = icon
+    return icon
 
 
 def get_tinted_pixmap(icon_path: str, is_dark: bool, width: int = 26, height: int = 26) -> QPixmap:
-    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 지정된 크기의 QPixmap으로 반환합니다."""
+    """SVG/PNG 이미지에 테마에 맞는 색상을 덧입혀 지정된 크기의 QPixmap으로 반환합니다。結果はキャッシュされます。"""
+    key = (icon_path, is_dark, width, height)
+    if key in _tint_pixmap_cache:
+        return _tint_pixmap_cache[key]
     pixmap = QPixmap(icon_path).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     painter = QPainter(pixmap)
     painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
     painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
     painter.end()
+    _tint_pixmap_cache[key] = pixmap
     return pixmap
+
+
+def clear_tint_cache() -> None:
+    """テーマ切替時にアイコンキャッシュをクリアします。"""
+    _tint_icon_cache.clear()
+    _tint_pixmap_cache.clear()
 
 
 class ExcelCopyTableWidget(QTableWidget):

@@ -35,10 +35,11 @@ class ReserveHeatmapWidget(QWidget):
         super().__init__(parent)
         self._regions:  list[str]       = []
         self._rows:     list[list[str]] = []
-        self._is_dark   = True
-        self._low_th    = 8.0
-        self._warn_th   = 10.0
-        self._is_today  = False
+        self._is_dark    = True
+        self._low_th     = 8.0
+        self._warn_th    = 10.0
+        self._is_today   = False
+        self._is_past_day = False
         # ホバー状態
         self._hover_ci  = -1
         self._hover_ri  = -1
@@ -51,19 +52,21 @@ class ReserveHeatmapWidget(QWidget):
     # ── データ更新 ────────────────────────────────────────────────────────────
     def update_data(
         self,
-        headers:  list[str],
-        rows:     list[list[str]],
-        is_dark:  bool,
-        low_th:   float,
-        warn_th:  float,
-        is_today: bool = False,
+        headers:      list[str],
+        rows:         list[list[str]],
+        is_dark:      bool,
+        low_th:       float,
+        warn_th:      float,
+        is_today:     bool = False,
+        is_past_day:  bool = False,
     ):
-        self._regions  = headers[1:] if len(headers) > 1 else []
-        self._rows     = rows
-        self._is_dark  = is_dark
-        self._low_th   = low_th
-        self._warn_th  = warn_th
-        self._is_today = is_today
+        self._regions     = headers[1:] if len(headers) > 1 else []
+        self._rows        = rows
+        self._is_dark     = is_dark
+        self._low_th      = low_th
+        self._warn_th     = warn_th
+        self._is_today    = is_today
+        self._is_past_day = is_past_day
         # ホバー状態リセット (新データで位置がズレるため)
         self._hover_ci = -1
         self._hover_ri = -1
@@ -174,10 +177,12 @@ class ReserveHeatmapWidget(QWidget):
                     self._val_color(val_str),
                 )
 
-        # ③ 過去コマのオーバーレイ (本日のみ。済んだ時間帯を薄く暗くして現在位置を明確化)
+        # ③ 過去コマのオーバーレイ
+        #    本日: 現在時刻より前のコマだけ暗転
+        #    過去日: 全コマ暗転 (すべて終了済み)
+        past_brush = QColor(0, 0, 0, 70)
         if self._is_today:
-            now_min    = datetime.now().hour * 60 + datetime.now().minute
-            past_brush = QColor(0, 0, 0, 70)
+            now_min = datetime.now().hour * 60 + datetime.now().minute
             p.setPen(Qt.NoPen)
             for ci, row_data in enumerate(self._rows):
                 slot_min = self._slot_minutes(row_data[0] if row_data else "")
@@ -185,6 +190,9 @@ class ReserveHeatmapWidget(QWidget):
                     x      = int(_HM_ML + ci * cell_w)
                     x_next = int(_HM_ML + (ci + 1) * cell_w)
                     p.fillRect(x, _HM_MT, max(1, x_next - x - 1), grid_h, past_brush)
+        elif self._is_past_day:
+            p.setPen(Qt.NoPen)
+            p.fillRect(int(_HM_ML), _HM_MT, max(1, int(grid_w)), grid_h, past_brush)
 
         # ④ 2時間刻み縦区切り線 (サブテキスト: 時刻ラベルの基準)
         tick_pen = QPen(QColor('#333333' if is_dark else '#d0d0d0'), 1)
@@ -579,8 +587,8 @@ class PowerReserveWidget(BaseWidget):
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         self.table.setUpdatesEnabled(True)
 
-        # ヒートマップ更新 (is_today を渡すことで過去コマ暗転を制御)
-        self.heatmap.update_data(headers, rows, self.is_dark, low_th, warn_th, is_today)
+        # ヒートマップ更新 (is_today/is_past_day を渡すことで過去コマ暗転を制御)
+        self.heatmap.update_data(headers, rows, self.is_dark, low_th, warn_th, is_today, is_past_day)
 
         if new_alerts:
             display_alerts = new_alerts[:5]

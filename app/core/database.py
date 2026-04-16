@@ -32,7 +32,7 @@ def get_db_connection(db_path: Path):
         try:
             shutil.move(str(old_path), str(db_path))
             logger.info(f"DBファイルの移行完了: {old_path} -> {db_path}")
-        except Exception as e:
+        except OSError as e:
             logger.error(f"DBファイルの移行失敗: {e}")
 
     conn = sqlite3.connect(str(db_path), timeout=15.0)
@@ -54,9 +54,9 @@ def run_retention_policy(retention_days: int):
     
     try:
         _backup_and_delete_imbalance(int_yyyymmdd)
-        _backup_and_delete_hjks(str_dash)
-        _backup_and_delete_jkm(str_dash)
-    except Exception as e:
+        _backup_and_delete_by_date(DB_HJKS, 'hjks_capacity', 'backup_hjks.db', 'HJKS', str_dash)
+        _backup_and_delete_by_date(DB_JKM,  'jkm_prices',    'backup_jkm.db',  'JKM',  str_dash)
+    except (sqlite3.Error, OSError) as e:
         logger.error(f"データ寿命管理(バックアップと削除)の実行中にエラーが発生しました: {e}")
 
 def _attach_backup_db(conn: sqlite3.Connection, backup_path: Path) -> None:
@@ -89,45 +89,35 @@ def _backup_and_delete_imbalance(threshold_int: int):
         _vacuum_safely(conn, "インバランス単価")
         logger.info(f"インバランス単価の古いデータ({count}件)をバックアップし削除しました。")
 
-def _backup_and_delete_hjks(threshold_str: str):
-    if not DB_HJKS.exists(): return
-    with get_db_connection(DB_HJKS) as conn:
-        if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hjks_capacity'").fetchone(): return
-        count = conn.execute("SELECT COUNT(*) FROM hjks_capacity WHERE date < ?", (threshold_str,)).fetchone()[0]
-        if count == 0: return
+def _backup_and_delete_by_date(
+    db_path: Path, table_name: str, backup_name: str, label: str, threshold_str: str
+) -> None:
+    """date カラムを持つテーブルの古いデータをバックアップ後に削除する汎用ヘルパー。"""
+    if not db_path.exists():
+        return
+    with get_db_connection(db_path) as conn:
+        if not conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
+        ).fetchone():
+            return
+        count = conn.execute(
+            f'SELECT COUNT(*) FROM {table_name} WHERE date < ?', (threshold_str,)
+        ).fetchone()[0]
+        if count == 0:
+            return
 
-        backup_db = BACKUP_DIR / 'backup_hjks.db'
+        backup_db = BACKUP_DIR / backup_name
         _attach_backup_db(conn, backup_db)
         try:
-            conn.execute("CREATE TABLE IF NOT EXISTS backup_db.hjks_capacity AS SELECT * FROM hjks_capacity WHERE 0")
-            conn.execute("INSERT OR IGNORE INTO backup_db.hjks_capacity SELECT * FROM hjks_capacity WHERE date < ?", (threshold_str,))
-            conn.execute("DELETE FROM hjks_capacity WHERE date < ?", (threshold_str,))
+            conn.execute(f'CREATE TABLE IF NOT EXISTS backup_db.{table_name} AS SELECT * FROM {table_name} WHERE 0')
+            conn.execute(f'INSERT OR IGNORE INTO backup_db.{table_name} SELECT * FROM {table_name} WHERE date < ?', (threshold_str,))
+            conn.execute(f'DELETE FROM {table_name} WHERE date < ?', (threshold_str,))
             conn.commit()
         finally:
             conn.execute("DETACH DATABASE backup_db")
 
-        _vacuum_safely(conn, "HJKS")
-        logger.info(f"HJKSの古いデータ({count}件)をバックアップし削除しました。")
-
-def _backup_and_delete_jkm(threshold_str: str):
-    if not DB_JKM.exists(): return
-    with get_db_connection(DB_JKM) as conn:
-        if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jkm_prices'").fetchone(): return
-        count = conn.execute("SELECT COUNT(*) FROM jkm_prices WHERE date < ?", (threshold_str,)).fetchone()[0]
-        if count == 0: return
-
-        backup_db = BACKUP_DIR / 'backup_jkm.db'
-        _attach_backup_db(conn, backup_db)
-        try:
-            conn.execute("CREATE TABLE IF NOT EXISTS backup_db.jkm_prices AS SELECT * FROM jkm_prices WHERE 0")
-            conn.execute("INSERT OR IGNORE INTO backup_db.jkm_prices SELECT * FROM jkm_prices WHERE date < ?", (threshold_str,))
-            conn.execute("DELETE FROM jkm_prices WHERE date < ?", (threshold_str,))
-            conn.commit()
-        finally:
-            conn.execute("DETACH DATABASE backup_db")
-
-        _vacuum_safely(conn, "JKM")
-        logger.info(f"JKMの古いデータ({count}件)をバックアップし削除しました。")
+        _vacuum_safely(conn, label)
+        logger.info(f"{label}の古いデータ({count}件)をバックアップし削除しました。")
 
 
 def _vacuum_safely(conn: sqlite3.Connection, db_label: str) -> None:

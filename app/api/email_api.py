@@ -82,6 +82,15 @@ class SendBugReportWorker(BaseWorker):
             logger.info(f"Bug report sent to {BUG_REPORT_TO}")
             self.success.emit()
 
-        except Exception as e:
-            logger.error(f"Bug report send failed: {e}")
-            self.error.emit(str(e))
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP 認証エラー: {e}")
+            self.error.emit(f"認証失敗: ユーザー名またはパスワードが正しくありません。({e})")
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP エラー: {e}")
+            self.error.emit(f"メール送信エラー: {e}")
+        except ssl.SSLError as e:
+            logger.error(f"SSL エラー: {e}")
+            self.error.emit(f"SSL 接続エラー: {e}")
+        except (OSError, TimeoutError) as e:
+            logger.error(f"ネットワーク/IO エラー: {e}")
+            self.error.emit(f"接続エラー: {e}")

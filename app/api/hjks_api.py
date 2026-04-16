@@ -105,7 +105,7 @@ class FetchHjksWorker(BaseWorker):
                     
                     try:
                         data = res.json()
-                    except Exception as e:
+                    except ValueError as e:
                         logger.warning(f"HJKS JSON解析失敗 (エリア: {region_name}): {e}")
                         continue
                         

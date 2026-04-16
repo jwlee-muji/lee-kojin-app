@@ -1,15 +1,31 @@
+from typing import NamedTuple
 from PySide6.QtCore import QObject, Signal
+
+
+class WeatherSummaryEntry(NamedTuple):
+    """weather_updated シグナルのペイロード型。地域ごとの当日天気サマリー。"""
+    region:       str   # 地域名 (翻訳済み)
+    weather_text: str   # 天気テキスト (例: "晴れ")
+    temp_str:     str   # 気温文字列 (例: "28℃ / 18℃")
+    accent_color: str   # WMO テーマカラー (例: "#FF9800")
+
 
 class GlobalEventBus(QObject):
     """컴포넌트 간 결합도를 낮추기 위한 전역 이벤트 버스 (Pub/Sub)"""
-    occto_updated = Signal(str, str, float)  # time_str, area_str, min_val
+
+    # ── データ更新通知 ────────────────────────────────────────────────────────
+    # occto_updated:     (time_str: str, area_str: str, min_reserve: float)
+    occto_updated     = Signal(str, str, float)
     imbalance_updated = Signal()
-    jkm_updated = Signal()
-    hjks_updated = Signal()
-    weather_updated = Signal(list)           # weather_summary
-    
-    settings_saved = Signal()
-    page_requested = Signal(int)             # page_index
-    app_quitting = Signal()                  # 앱 종료 시 워커 스레드 일괄 안전 종료 통지
+    jkm_updated       = Signal()
+    hjks_updated      = Signal()
+    # weather_updated:  list[WeatherSummaryEntry]
+    weather_updated   = Signal(list)
+
+    # ── アプリ制御 ────────────────────────────────────────────────────────────
+    settings_saved  = Signal()
+    page_requested  = Signal(int)   # page_index
+    app_quitting    = Signal()      # 全ワーカースレッドへの安全終了通知
+
 
 bus = GlobalEventBus()

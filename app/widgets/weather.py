@@ -12,7 +12,7 @@ from app.ui.theme import UIColors
 from app.core.config import WEATHER_REGIONS, BASE_DIR, load_settings
 from app.core.i18n import tr
 from app.api.weather_api import FetchWeatherWorker
-from app.core.events import bus
+from app.core.events import bus, WeatherSummaryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +49,26 @@ _WMO_MAP: dict[int, tuple[str, str, str]] = {
 }
 _UNKNOWN = ("不明", "#757575", "cloudy")
 
-def get_weather_info(code: int) -> tuple[str, str]:
-    """WMO 코드 → (번역된 텍스트, 강조색) 반환"""
+# ダークテーマで視認性が低い WMO コードのカラーオーバーライド
+# (雪系は元の色が明るすぎて暗い背景に溶け込む)
+_WMO_DARK_OVERRIDES: dict[int, str] = {
+    71: "#90CAF9",  # 弱い雪: #E1F5FE → 明るめ青
+    73: "#4FC3F7",  # 雪:     #B3E5FC → 明るめ青
+    75: "#29B6F6",  # 強い雪: #81D4FA → より鮮明
+    77: "#90CAF9",  # 霧雪:   #E1F5FE → 明るめ青
+}
+
+
+def get_weather_info(code: int, is_dark: bool = False) -> tuple[str, str]:
+    """WMO 코드 → (번역된 텍스트, 강조색) 반환。is_dark=True でダークテーマ最適色を返す。"""
     t, c, _ = _WMO_MAP.get(code, _UNKNOWN)
+    if is_dark:
+        c = _WMO_DARK_OVERRIDES.get(code, c)
     return tr(t), c
 
 # --- QPixmap 캐시: (icon_name, size) → QPixmap ---
 _PIXMAP_CACHE: dict[tuple[str, int], QPixmap] = {}
+_PIXMAP_CACHE_MAX = 200
 
 def get_weather_pixmap(wmo_code: int, size: int = 28) -> QPixmap:
     """WMO 코드에 해당하는 SVG 아이콘 QPixmap을 반환합니다.
@@ -76,6 +89,11 @@ def get_weather_pixmap(wmo_code: int, size: int = 28) -> QPixmap:
 
     if not pixmap.isNull():
         pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    if len(_PIXMAP_CACHE) >= _PIXMAP_CACHE_MAX:
+        # FIFO 방식으로 가장 오래된 항목 제거
+        oldest_key = next(iter(_PIXMAP_CACHE))
+        del _PIXMAP_CACHE[oldest_key]
 
     _PIXMAP_CACHE[cache_key] = pixmap
     return pixmap
@@ -107,7 +125,7 @@ class RegionCard(QFrame):
         t_min  = today_data.get("temperature_2m_min",           [None])[0] if today_data.get("temperature_2m_min")           else None
         pop    = today_data.get("precipitation_probability_max",   [0])[0] if today_data.get("precipitation_probability_max") else 0
 
-        w_text, w_color = get_weather_info(w_code)
+        w_text, w_color = get_weather_info(w_code, is_dark)
 
         # 날씨 아이콘 + 텍스트
         info_layout = QHBoxLayout()
@@ -197,6 +215,7 @@ class WeatherWidget(BaseWidget):
         
         # 좌측 지역 리스트
         self.region_list = QListWidget()
+        self.region_list.setMinimumWidth(200)
         self.region_list.currentRowChanged.connect(self._on_region_selected)
         self.splitter.addWidget(self.region_list)
         
@@ -286,10 +305,15 @@ class WeatherWidget(BaseWidget):
                 w_code = daily.get("weather_code", [0])[0] if daily.get("weather_code") else 0
                 t_max  = daily.get("temperature_2m_max", [None])[0] if daily.get("temperature_2m_max") else None
                 t_min  = daily.get("temperature_2m_min", [None])[0] if daily.get("temperature_2m_min") else None
-                w_text, w_color = get_weather_info(w_code)
+                w_text, w_color = get_weather_info(w_code, self.is_dark)
                 t_max_str = f"{t_max}℃" if t_max is not None else "—"
                 t_min_str = f"{t_min}℃" if t_min is not None else "—"
-                weather_summary.append((tr(region["name"]), w_text, f"{t_max_str} / {t_min_str}", w_color))
+                weather_summary.append(WeatherSummaryEntry(
+                    region=tr(region["name"]),
+                    weather_text=w_text,
+                    temp_str=f"{t_max_str} / {t_min_str}",
+                    accent_color=w_color,
+                ))
         
         if weather_summary:
             bus.weather_updated.emit(weather_summary)
@@ -355,10 +379,10 @@ class WeatherWidget(BaseWidget):
         self.detail_table.setRowCount(len(dates))
         
         for row, date_str in enumerate(dates):
-            w_text, _ = get_weather_info(w_codes[row] if row < len(w_codes) else 0)
-            
+            w_text, w_col = get_weather_info(w_codes[row] if row < len(w_codes) else 0, self.is_dark)
+
             self.detail_table.setItem(row, 0, self._create_table_item(date_str))
-            self.detail_table.setItem(row, 1, self._create_table_item(w_text))
+            self.detail_table.setItem(row, 1, self._create_table_item(w_text, w_col, bold=True))
             self.detail_table.setItem(row, 2, self._create_table_item(f"{t_maxs[row]} ℃", "#ef5350", bold=True))
             self.detail_table.setItem(row, 3, self._create_table_item(f"{t_mins[row]} ℃", "#42a5f5", bold=True))
             

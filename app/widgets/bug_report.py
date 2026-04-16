@@ -55,11 +55,8 @@ class BugReportWidget(BaseWidget):
         title_lbl = QLabel(tr("バグレポート"))
         title_lbl.setStyleSheet("font-weight: bold; font-size: 15px;")
 
-        try:
-            from version import __version__
-            ver = f"v{__version__}"
-        except Exception:
-            ver = ""
+        from app.core.config import __version__
+        ver = f"v{__version__}"
 
         dest_lbl = QLabel(f"{BUG_REPORT_TO}  {ver}")
         dest_lbl.setStyleSheet("color: #666; font-size: 10px;")
@@ -236,7 +233,7 @@ class BugReportWidget(BaseWidget):
             cursor = self.edt_log.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
             self.edt_log.setTextCursor(cursor)
-        except Exception as e:
+        except OSError as e:
             self.edt_log.setPlainText(tr("[ログ読込失敗: {0}]").format(e))
 
     def _send_report(self):
@@ -245,11 +242,8 @@ class BugReportWidget(BaseWidget):
             self._set_status(f"⚠️  {tr('概要を入力してください。')}", error=True)
             return
 
-        try:
-            from version import __version__
-            ver_str = f"v{__version__}"
-        except Exception:
-            ver_str = ""
+        from app.core.config import __version__
+        ver_str = f"v{__version__}"
 
         category = self.cmb_category.currentText().split("  ", 1)[-1].strip()
         subject  = f"[LEE {ver_str}] {category}: {summary}"
