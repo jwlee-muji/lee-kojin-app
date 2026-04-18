@@ -33,13 +33,23 @@ pyinstaller ^
   --icon "img/icon.ico" ^
   --add-data "app/ui/themes;app/ui/themes" ^
   --collect-all yfinance ^
-  --hidden-import "pandas" ^
+  --collect-all google_auth_oauthlib ^
+  --collect-all googleapiclient ^
+  --collect-all numpy ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^
+  --hidden-import "bs4" ^
   --hidden-import "sqlite3" ^
   --hidden-import "smtplib" ^
   --hidden-import "email.mime.text" ^
   --hidden-import "email.mime.multipart" ^
+  --hidden-import "google.auth" ^
+  --hidden-import "google.auth.transport.requests" ^
+  --hidden-import "google.oauth2.credentials" ^
+  --hidden-import "google_auth_oauthlib.flow" ^
+  --hidden-import "googleapiclient.discovery" ^
+  --hidden-import "httplib2" ^
+  --hidden-import "uritemplate" ^
   main.py
 
 echo.

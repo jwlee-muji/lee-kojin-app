@@ -9,7 +9,6 @@
   5. 복사 완료 후 정상 exe를 --cleanup <_update.exe경로> 로 실행 후 종료
   6. 정상 exe 가 기동하면서 _update.exe 삭제 (이미 종료됐으므로 파일 잠금 없음)
 """
-import os
 import sys
 import hashlib
 import shutil
@@ -61,9 +60,10 @@ def check_for_update(timeout: int = 5):
 
 def _verify_checksum(exe_path: Path, sha256_url: str) -> bool:
     """GitHub Release の .sha256 ファイルと照合して整合性を確認します。
-    sha256_url が空の場合はスキップ (True を返す)。"""
+    sha256_url が空の場合は検証不可として False を返します (フェイル・クローズド)。"""
     if not sha256_url:
-        return True
+        logger.error("SHA256 ファイルが Release に含まれていません。セキュリティ上の理由でダウンロードを中止します。")
+        return False
     try:
         r = requests.get(sha256_url, timeout=15)
         r.raise_for_status()
@@ -80,8 +80,8 @@ def _verify_checksum(exe_path: Path, sha256_url: str) -> bool:
         logger.info("SHA256 検証成功")
         return True
     except requests.exceptions.RequestException as e:
-        logger.warning(f"SHA256 ファイルのダウンロードに失敗 (検証スキップ): {e}")
-        return True  # ネットワーク障害時はスキップ (ダウンロード済みファイルを使用)
+        logger.error(f"SHA256 ファイルのダウンロードに失敗しました。検証できないためダウンロードを中止します: {e}")
+        return False  # ネットワーク障害でも検証不可なら受け入れない
     except OSError as e:
         logger.error(f"SHA256 計算中に IO エラー: {e}")
         return False

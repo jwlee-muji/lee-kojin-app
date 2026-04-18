@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QTableWidgetItem, QMessageBox, QHeaderView,
     QSplitter, QComboBox, QCheckBox, QApplication, QGraphicsDropShadowEffect,
-    QScrollArea, QFrame, QSystemTrayIcon,
+    QScrollArea, QFrame,
 )
 from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFont, QBrush, QColor, QLinearGradient
@@ -169,6 +169,14 @@ class ImbalanceWidget(BaseWidget):
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
         self.date_edit.setDisplayFormat("yyyy/MM/dd")
+        self.date_edit.setFixedHeight(30)
+        self._btn_prev_day = QPushButton("◀"); self._btn_prev_day.setFixedSize(26, 30)
+        self._btn_next_day = QPushButton("▶"); self._btn_next_day.setFixedSize(26, 30)
+        self._btn_today    = QPushButton(tr("今日")); self._btn_today.setFixedHeight(30)
+        self._btn_prev_day.clicked.connect(lambda: self.date_edit.setDate(self.date_edit.date().addDays(-1)))
+        self._btn_next_day.clicked.connect(lambda: self.date_edit.setDate(self.date_edit.date().addDays(1)))
+        self._btn_today.clicked.connect(lambda: self.date_edit.setDate(QDate.currentDate()))
+        self.date_edit.dateChanged.connect(self.display_data)
 
         self.type_combo = QComboBox()
         self.type_combo.addItems([tr("余剰インバランス料金単価"), tr("不足インバランス料金単価")])
@@ -192,8 +200,9 @@ class ImbalanceWidget(BaseWidget):
         for w in (self.title_label, self.update_btn):
             top.addWidget(w)
         top.addSpacing(20)
-        for w in (self.date_edit, self.type_combo, self.show_btn,
-                  self.show_table_cb, self.show_graph_cb, self.status_label):
+        for w in (self._btn_prev_day, self.date_edit, self._btn_next_day, self._btn_today,
+                  self.type_combo, self.show_btn, self.show_table_cb, self.show_graph_cb,
+                  self.status_label):
             top.addWidget(w)
         top.addStretch()
         layout.addLayout(top)
@@ -667,12 +676,6 @@ class ImbalanceWidget(BaseWidget):
             if col in self.curves:
                 self.curves[col].setVisible(False)
 
-    def _copy_graph(self):
-        QApplication.clipboard().setPixmap(self.plot_widget.grab())
-        QMessageBox.information(
-            self, tr("完了"),
-            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)")
-        )
 
     def _check_high_price_alerts(self, rows, target_cols, today_yyyymmdd: int):
         if not rows: return

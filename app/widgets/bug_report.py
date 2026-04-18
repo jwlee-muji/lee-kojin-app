@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from app.ui.common import BaseWidget
 from app.core.i18n import tr
+from app.ui.theme import UIColors
 from app.api.email_api import SendBugReportWorker, BUG_REPORT_TO
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,10 @@ class BugReportWidget(BaseWidget):
     def __init__(self):
         super().__init__()
         self._worker = None
+        self._field_labels: list = []
         self._build_ui()
         self._load_log()
+        self.apply_theme_custom()
 
     # ── UI 構築 ──────────────────────────────────────────────────────────
 
@@ -48,7 +51,7 @@ class BugReportWidget(BaseWidget):
         # ── ヘッダー ────────────────────────────────────────────────────
         header = QFrame()
         header.setObjectName("bugHeader")
-        header.setStyleSheet("QFrame#bugHeader { border-bottom: 1px solid #333; }")
+        self._header_frame = header
         hrow = QHBoxLayout(header)
         hrow.setContentsMargins(16, 10, 16, 10)
 
@@ -59,7 +62,7 @@ class BugReportWidget(BaseWidget):
         ver = f"v{__version__}"
 
         dest_lbl = QLabel(f"{BUG_REPORT_TO}  {ver}")
-        dest_lbl.setStyleSheet("color: #666; font-size: 10px;")
+        self.dest_lbl = dest_lbl
 
         hrow.addWidget(title_lbl)
         hrow.addStretch()
@@ -176,7 +179,7 @@ class BugReportWidget(BaseWidget):
         # ── ステータス + ボタン行 ─────────────────────────────────────────
         footer = QFrame()
         footer.setObjectName("bugFooter")
-        footer.setStyleSheet("QFrame#bugFooter { border-top: 1px solid #333; }")
+        self._footer_frame = footer
         frow = QHBoxLayout(footer)
         frow.setContentsMargins(20, 10, 20, 10)
         frow.setSpacing(10)
@@ -206,11 +209,60 @@ class BugReportWidget(BaseWidget):
 
     # ── 内部メソッド ─────────────────────────────────────────────────────
 
-    @staticmethod
-    def _field_label(text: str) -> QLabel:
+    def _field_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 12px; color: #999; font-weight: 600;")
+        self._field_labels.append(lbl)
         return lbl
+
+    def apply_theme_custom(self):
+        is_dark = self.is_dark
+        pc = UIColors.get_panel_colors(is_dark)
+        bc = pc["border"]
+        dc = pc["text_dim"]
+        tc = pc["text"]
+        input_qss = (
+            f"border: 1px solid {bc}; border-radius: 6px; padding: 0 10px; font-size: 13px;"
+            f" background: {pc['bg']}; color: {tc};"
+        )
+        self._header_frame.setStyleSheet(f"QFrame#bugHeader {{ border-bottom: 1px solid {bc}; }}")
+        self._footer_frame.setStyleSheet(f"QFrame#bugFooter {{ border-top: 1px solid {bc}; }}")
+        self.dest_lbl.setStyleSheet(f"color: {dc}; font-size: 10px;")
+        for lbl in self._field_labels:
+            lbl.setStyleSheet(f"font-size: 12px; color: {dc}; font-weight: 600;")
+        self.cmb_category.setStyleSheet(
+            f"QComboBox {{ {input_qss} }}"
+            f"QComboBox:focus {{ border-color: #0078d4; }}"
+            f"QComboBox::drop-down {{ border: none; width: 24px; }}"
+        )
+        self.edt_summary.setStyleSheet(
+            f"QLineEdit {{ {input_qss} }}"
+            f"QLineEdit:focus {{ border-color: #0078d4; }}"
+        )
+        self.edt_detail.setStyleSheet(
+            f"QTextEdit {{ {input_qss} padding: 8px 10px; }}"
+            f"QTextEdit:focus {{ border-color: #0078d4; }}"
+        )
+        log_bg = "#161616" if is_dark else "#f9f9f9"
+        log_fg = "#aaaaaa" if is_dark else "#444444"
+        self.edt_log.setStyleSheet(
+            f"QTextEdit {{ border: 1px solid {bc}; border-radius: 6px;"
+            f" padding: 6px 8px; font-family: 'Consolas', monospace; font-size: 11px;"
+            f" color: {log_fg}; background: {log_bg}; }}"
+        )
+        tog_c = "#888888" if is_dark else "#666666"
+        tog_h = "#bbbbbb" if is_dark else "#333333"
+        self.btn_toggle_log.setStyleSheet(
+            f"QPushButton {{ border: none; text-align: left; color: {tog_c};"
+            f" font-size: 12px; padding: 0; background: transparent; }}"
+            f"QPushButton:hover {{ color: {tog_h}; }}"
+            f"QPushButton:checked {{ color: {tc}; }}"
+        )
+        reload_hover_bg = "#2a2a2a" if is_dark else "#e8e8e8"
+        self.btn_reload_log.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {bc}; border-radius: 4px;"
+            f" color: {tog_c}; background: transparent; font-size: 13px; }}"
+            f"QPushButton:hover {{ color: {tog_h}; background: {reload_hover_bg}; }}"
+        )
 
     def _on_summary_changed(self, text: str):
         n = len(text)

@@ -10,7 +10,9 @@ from app.core.config import DB_IMBALANCE, DB_HJKS, DB_JKM, BACKUP_DIR
 logger = logging.getLogger(__name__)
 
 # pragma_table_info 由来のカラム名に使える文字 (日本語・英数・スペース・括弧など)
-_SAFE_COL_RE = re.compile(r'^[\w\s\(\)\-\./\u3000-\u9fff\uff00-\uffef]+$')
+_SAFE_COL_RE   = re.compile(r'^[\w\s\(\)\-\./\u3000-\u9fff\uff00-\uffef]+$')
+# テーブル名: 英数字とアンダースコアのみ
+_SAFE_TABLE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
 def validate_column_name(name: str) -> str:
@@ -18,6 +20,14 @@ def validate_column_name(name: str) -> str:
     不正な場合は ValueError を送出します。"""
     if not name or not _SAFE_COL_RE.match(name):
         raise ValueError(f"不正なカラム名が検出されました: {name!r}")
+    return name
+
+
+def _validate_table_name(name: str) -> str:
+    """テーブル名が安全な識別子であることを検証します。
+    不正な場合は ValueError を送出します。"""
+    if not name or not _SAFE_TABLE_RE.match(name):
+        raise ValueError(f"不正なテーブル名が検出されました: {name!r}")
     return name
 
 @contextmanager
@@ -38,9 +48,24 @@ def get_db_connection(db_path: Path):
     conn = sqlite3.connect(str(db_path), timeout=15.0)
     try:
         conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA synchronous=NORMAL;')   # WAL + NORMAL: 안전성 유지하며 쓰기 성능 향상
         yield conn
     finally:
         conn.close()
+
+
+def ensure_index(db_path: "Path", table: str, column: str) -> None:
+    """指定テーブル・カラムのインデックスを初回のみ作成します。
+    インデックス名: idx_{table}_{column}"""
+    idx_name = f"idx_{table}_{column}"
+    try:
+        with get_db_connection(db_path) as conn:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})"
+            )
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.warning(f"インデックス作成をスキップしました ({idx_name}): {e}")
 
 
 def run_retention_policy(retention_days: int):
@@ -93,6 +118,7 @@ def _backup_and_delete_by_date(
     db_path: Path, table_name: str, backup_name: str, label: str, threshold_str: str
 ) -> None:
     """date カラムを持つテーブルの古いデータをバックアップ後に削除する汎用ヘルパー。"""
+    table_name = _validate_table_name(table_name)   # SQL インジェクション防止
     if not db_path.exists():
         return
     with get_db_connection(db_path) as conn:
@@ -134,3 +160,4 @@ def _vacuum_safely(conn: sqlite3.Connection, db_label: str) -> None:
             conn.isolation_level = original_isolation
         except Exception:
             pass  # クローズ直前のコネクションでも安全に続行
+

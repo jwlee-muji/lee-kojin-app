@@ -153,7 +153,7 @@ class AiChatWorker(BaseWorker):
             except Exception as e:
                 all_rate_limited = False
                 last_err = str(e)
-                logger.debug(f"{gemini_model}: error ({e}) — next model")
+                logger.warning(f"{gemini_model}: unexpected error ({e}) — next model")
 
         # Tier 3: Groq
         if self.groq_key:
@@ -196,7 +196,7 @@ class AiChatWorker(BaseWorker):
                 logger.debug(f"{model} key{idx}: 429 — rotating")
             except Exception as e:
                 last_exc = e
-                logger.debug(f"{model} key{idx}: {e} — rotating")
+                logger.warning(f"{model} key{idx}: unexpected error ({e}) — rotating")
 
         if any_rate_limited and not isinstance(last_exc, RateLimitError):
             # 一部 429 + 一部その他エラーの場合は RateLimitError として扱う

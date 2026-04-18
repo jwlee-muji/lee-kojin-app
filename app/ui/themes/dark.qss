@@ -31,7 +31,7 @@ QPushButton:disabled { background-color: #2d2d2d; color: #777777; border: 1px so
 QListWidget { background-color: #1e1e1e; border: none; border-right: 1px solid #3e3e42; outline: 0; }
 QListWidget::item { padding: 12px 10px; margin: 2px 8px; border-radius: 6px; font-size: 13px; color: #aaaaaa; }
 QListWidget::item:hover { background-color: #2a2d2e; color: #dddddd; }
-QListWidget::item:selected { background-color: #094771; color: #ffffff; font-weight: bold; }
+QListWidget::item:selected { background-color: #094771; color: #ffffff; font-weight: bold; border-left: 3px solid #4ec9b0; }
 QDateEdit, QComboBox { background-color: #333333; color: #d4d4d4; border: 1px solid #555555; border-radius: 3px; padding: 3px 5px; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 0px; }
 QScrollBar::handle:vertical { background: rgba(85, 85, 85, 150); border-radius: 5px; min-height: 20px; margin: 1px; }

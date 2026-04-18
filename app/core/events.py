@@ -8,6 +8,7 @@ class WeatherSummaryEntry(NamedTuple):
     weather_text: str   # 天気テキスト (例: "晴れ")
     temp_str:     str   # 気温文字列 (例: "28℃ / 18℃")
     accent_color: str   # WMO テーマカラー (例: "#FF9800")
+    wmo_code:     int = 0  # WMO 天気コード (背景演出用)
 
 
 class GlobalEventBus(QObject):
@@ -26,6 +27,11 @@ class GlobalEventBus(QObject):
     settings_saved  = Signal()
     page_requested  = Signal(int)   # page_index
     app_quitting    = Signal()      # 全ワーカースレッドへの安全終了通知
+
+    # ── Google 連携 ──────────────────────────────────────────────────────────
+    google_auth_changed = Signal(bool)       # 認証状態変化 (True=認証済, False=未認証)
+    gmail_new_mail      = Signal(str, int)   # (label_name, unread_count)
+    calendar_updated    = Signal(list)       # イベントリスト更新
 
 
 bus = GlobalEventBus()

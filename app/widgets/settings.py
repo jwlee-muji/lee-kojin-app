@@ -4,13 +4,15 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QSpinBox, QGroupBox, QFormLayout, QMessageBox,
     QScrollArea, QCheckBox, QComboBox, QFrame,
 )
-from PySide6.QtCore import Signal, Qt, QTimer, QThread
+from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
 from app.core.platform import set_autostart
 from app.core.i18n import tr, LANG_OPTIONS
 from app.ui.common import BaseWidget
+from app.ui.theme import UIColors
 from app.core.events import bus
+from app.api.database_worker import DataRetentionWorker
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +30,14 @@ _GEMINI_MODEL_CODES = [v for _, v in _GEMINI_MODELS]
 _MAX_TOKENS_OPTIONS = [512, 1024, 2048, 4096]
 
 
-class _RetentionWorker(QThread):
-    """手動データ整理をバックグラウンドで実行"""
-    finished = Signal()
-    error    = Signal(str)
-
-    def __init__(self, retention_days: int):
-        super().__init__()
-        self.retention_days = retention_days
-
-    def run(self):
-        try:
-            from app.core.database import run_retention_policy
-            run_retention_policy(self.retention_days)
-            self.finished.emit()
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class SettingsWidget(BaseWidget):
     def __init__(self):
         super().__init__()
         self._current_settings = {}
+        self._note_labels: list = []
         self._build_ui()
         self._load_data()
+        self.apply_theme_custom()
 
     # ── UI 構築 ──────────────────────────────────────────────────────────
 
@@ -63,7 +49,7 @@ class SettingsWidget(BaseWidget):
         # ── ヘッダー ────────────────────────────────────────────────────
         hdr = QFrame()
         hdr.setObjectName("settingsHeader")
-        hdr.setStyleSheet("QFrame#settingsHeader { border-bottom: 1px solid #2a2a2a; }")
+        self._hdr_frame = hdr
         hrow = QHBoxLayout(hdr)
         hrow.setContentsMargins(20, 14, 20, 14)
 
@@ -71,7 +57,7 @@ class SettingsWidget(BaseWidget):
         title_lbl = QLabel(tr("設定"))
         title_lbl.setStyleSheet("font-weight: bold; font-size: 16px;")
         ver_lbl = QLabel(f"v{__version__}")
-        ver_lbl.setStyleSheet("color: #666; font-size: 12px;")
+        self.ver_lbl = ver_lbl
 
         hrow.addWidget(title_lbl)
         hrow.addStretch()
@@ -92,6 +78,7 @@ class SettingsWidget(BaseWidget):
         c.addWidget(self._build_alert_section())
         c.addWidget(self._build_interval_section())
         c.addWidget(self._build_ai_section())
+        c.addWidget(self._build_google_section())
         c.addWidget(self._build_retention_section())
         c.addWidget(self._build_system_section())
         c.addWidget(self._build_language_section())
@@ -103,7 +90,7 @@ class SettingsWidget(BaseWidget):
         # ── フッター ─────────────────────────────────────────────────────
         footer = QFrame()
         footer.setObjectName("settingsFooter")
-        footer.setStyleSheet("QFrame#settingsFooter { border-top: 1px solid #2a2a2a; }")
+        self._footer_frame = footer
         frow = QHBoxLayout(footer)
         frow.setContentsMargins(20, 10, 20, 10)
         frow.setSpacing(10)
@@ -145,11 +132,10 @@ class SettingsWidget(BaseWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         return grp, form
 
-    @staticmethod
-    def _note(text: str) -> QLabel:
+    def _note(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #666; font-size: 11px;")
         lbl.setWordWrap(True)
+        self._note_labels.append(lbl)
         return lbl
 
     def _build_alert_section(self) -> QGroupBox:
@@ -301,6 +287,71 @@ class SettingsWidget(BaseWidget):
         form.addRow("", self._note(tr("変更は再起動後に適用されます")))
         return grp
 
+    def _build_google_section(self) -> QGroupBox:
+        grp, form = self._make_group("🔗   " + tr("Google 連携"))
+
+        # 인증 버튼 행
+        auth_row = QHBoxLayout()
+        self.btn_google_auth = QPushButton(tr("Google アカウントで認証"))
+        self.btn_google_auth.setObjectName("primaryActionBtn")
+        self.btn_google_auth.setFixedHeight(32)
+        self.btn_google_auth.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_google_auth.clicked.connect(self._on_google_auth)
+
+        self.btn_google_revoke = QPushButton(tr("認証を解除"))
+        self.btn_google_revoke.setObjectName("secondaryActionBtn")
+        self.btn_google_revoke.setFixedHeight(32)
+        self.btn_google_revoke.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_google_revoke.clicked.connect(self._on_google_revoke)
+
+        self.lbl_google_status = QLabel()
+        self.lbl_google_status.setStyleSheet("font-size: 12px;")
+
+        auth_row.addWidget(self.btn_google_auth)
+        auth_row.addWidget(self.btn_google_revoke)
+        auth_row.addWidget(self.lbl_google_status)
+        auth_row.addStretch()
+        auth_widget = QWidget()
+        auth_widget.setLayout(auth_row)
+
+        # 폴링 간격
+        self.spn_cal_int = QSpinBox()
+        self.spn_cal_int.setRange(1, 1440)
+        self.spn_cal_int.setSuffix(tr("  分"))
+        self.spn_cal_int.setFixedWidth(110)
+
+        self.spn_gmail_int = QSpinBox()
+        self.spn_gmail_int.setRange(1, 1440)
+        self.spn_gmail_int.setSuffix(tr("  分"))
+        self.spn_gmail_int.setFixedWidth(110)
+
+        self.spn_gmail_max = QSpinBox()
+        self.spn_gmail_max.setRange(10, 500)
+        self.spn_gmail_max.setSuffix(tr("  件"))
+        self.spn_gmail_max.setFixedWidth(110)
+
+        form.addRow("", auth_widget)
+        form.addRow(tr("Google カレンダー:"), self.spn_cal_int)
+        form.addRow(tr("Gmail:"), self.spn_gmail_int)
+        form.addRow(tr("メール取得件数:"), self.spn_gmail_max)
+        return grp
+
+    def _on_google_auth(self):
+        from app.api.google_auth import run_oauth_flow
+        ok = run_oauth_flow()
+        if ok:
+            self.lbl_google_status.setText(tr("認証済 ✅"))
+            self.lbl_google_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
+        else:
+            self.lbl_google_status.setText(tr("未認証"))
+            self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
+
+    def _on_google_revoke(self):
+        from app.api.google_auth import revoke_credentials
+        revoke_credentials()
+        self.lbl_google_status.setText(tr("未認証"))
+        self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
+
     def set_theme(self, is_dark: bool):
         if is_dark:
             cmb_style = (
@@ -341,6 +392,18 @@ class SettingsWidget(BaseWidget):
             w.setStyleSheet(cmb_style)
 
         super().set_theme(is_dark)
+        self.apply_theme_custom()
+
+    def apply_theme_custom(self):
+        is_dark = self.is_dark
+        pc = UIColors.get_panel_colors(is_dark)
+        bc = pc["border"]
+        dc = pc["text_dim"]
+        self._hdr_frame.setStyleSheet(f"QFrame#settingsHeader {{ border-bottom: 1px solid {bc}; }}")
+        self._footer_frame.setStyleSheet(f"QFrame#settingsFooter {{ border-top: 1px solid {bc}; }}")
+        self.ver_lbl.setStyleSheet(f"color: {dc}; font-size: 12px;")
+        for lbl in self._note_labels:
+            lbl.setStyleSheet(f"color: {dc}; font-size: 11px;")
 
     # ── データ読み書き ────────────────────────────────────────────────────
 
@@ -376,6 +439,19 @@ class SettingsWidget(BaseWidget):
         lidx = _LANG_CODES.index(lang) if lang in _LANG_CODES else 0
         self.cmb_language.setCurrentIndex(lidx)
 
+        # Google 設定
+        self.spn_cal_int.setValue(int(s.get("calendar_poll_interval", 5)))
+        self.spn_gmail_int.setValue(int(s.get("gmail_poll_interval", 5)))
+        self.spn_gmail_max.setValue(int(s.get("gmail_max_results", 50)))
+
+        from app.api.google_auth import is_authenticated
+        if is_authenticated():
+            self.lbl_google_status.setText(tr("認証済 ✅"))
+            self.lbl_google_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
+        else:
+            self.lbl_google_status.setText(tr("未認証"))
+            self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
+
     def _get_ui_settings(self) -> dict:
         return {
             "imbalance_alert":    self.spn_imb_alert.value(),
@@ -388,11 +464,14 @@ class SettingsWidget(BaseWidget):
             "jkm_interval":       self.spn_jkm_int.value(),
             "retention_days":     self.spn_retention.value(),
             "auto_start":         self.chk_auto_start.isChecked(),
-            "language":           _LANG_CODES[self.cmb_language.currentIndex()],
-            "gemini_model":       _GEMINI_MODEL_CODES[self.cmb_gemini_model.currentIndex()],
-            "ai_temperature":     round(self.spn_temperature.value(), 1),
-            "ai_max_tokens":      _MAX_TOKENS_OPTIONS[self.cmb_max_tokens.currentIndex()],
-            "chat_history_limit": self.spn_history.value(),
+            "language":               _LANG_CODES[self.cmb_language.currentIndex()],
+            "gemini_model":           _GEMINI_MODEL_CODES[self.cmb_gemini_model.currentIndex()],
+            "ai_temperature":         round(self.spn_temperature.value(), 1),
+            "ai_max_tokens":          _MAX_TOKENS_OPTIONS[self.cmb_max_tokens.currentIndex()],
+            "chat_history_limit":     self.spn_history.value(),
+            "calendar_poll_interval": self.spn_cal_int.value(),
+            "gmail_poll_interval":    self.spn_gmail_int.value(),
+            "gmail_max_results":      self.spn_gmail_max.value(),
         }
 
     def _save_data(self):
@@ -463,7 +542,7 @@ class SettingsWidget(BaseWidget):
         self.btn_run_retention.setText(tr("整理中..."))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
-        self._retention_worker = _RetentionWorker(self.spn_retention.value())
+        self._retention_worker = DataRetentionWorker(self.spn_retention.value())
         self._retention_worker.finished.connect(self._on_retention_finished)
         self._retention_worker.error.connect(self._on_retention_error)
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)

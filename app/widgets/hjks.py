@@ -24,6 +24,11 @@ class HjksWidget(BaseWidget):
         self._dates_str = []          # 집계 날짜 목록 캐시
         self.aggregated_data = []
 
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(50)
+        self._refresh_timer.timeout.connect(self._update_chart)
+
         self._build_ui()
         self.fetch_data()
 
@@ -95,7 +100,7 @@ class HjksWidget(BaseWidget):
             cb = QCheckBox(tr(region))
             cb.setChecked(True)
             cb.setCursor(Qt.PointingHandCursor)
-            cb.stateChanged.connect(self._update_chart)
+            cb.stateChanged.connect(lambda _: self._refresh_timer.start())
             left_layout.addWidget(cb)
             self.checkboxes[region] = cb
             
@@ -212,11 +217,17 @@ class HjksWidget(BaseWidget):
 
     def _select_all_regions(self):
         for cb in getattr(self, 'checkboxes', {}).values():
+            cb.blockSignals(True)
             cb.setChecked(True)
+            cb.blockSignals(False)
+        self._refresh_timer.start()
 
     def _deselect_all_regions(self):
         for cb in getattr(self, 'checkboxes', {}).values():
+            cb.blockSignals(True)
             cb.setChecked(False)
+            cb.blockSignals(False)
+        self._refresh_timer.start()
 
     def fetch_data(self):
         if not self.check_online_status(): return
@@ -397,6 +408,3 @@ class HjksWidget(BaseWidget):
         self.tooltip_label.raise_()
         self.tooltip_label.show()
 
-    def _copy_graph(self):
-        QApplication.clipboard().setPixmap(self.plot_widget.grab())
-        QMessageBox.information(self, tr("完了"), tr("グラフ画像をクリップボードにコピーしました。"))

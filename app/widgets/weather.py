@@ -313,6 +313,7 @@ class WeatherWidget(BaseWidget):
                     weather_text=w_text,
                     temp_str=f"{t_max_str} / {t_min_str}",
                     accent_color=w_color,
+                    wmo_code=w_code,
                 ))
         
         if weather_summary:

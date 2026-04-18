@@ -186,7 +186,7 @@ class LogViewerWidget(BaseWidget):
         mod_idx = self.module_combo.currentIndex()
         lc = UIColors.get_log_colors(self.is_dark)
 
-        self.log_text.setUpdatesEnabled(False)
+        html_parts = []
         for line in chunk:
             safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
@@ -214,18 +214,22 @@ class LogViewerWidget(BaseWidget):
                     level_html = f"<span style='color: {lc['info']};'>[{level_str}]</span>"
                 else:
                     level_html = f"<span>[{level_str}]</span>"
-                html_line = (
+                html_parts.append(
                     f"<span style='color: {lc['time']};'>{time_str}</span> - "
                     f"{level_html} "
                     f"<span style='color: {lc['module']};'>[{module_short}]</span> "
                     f"<span style='color: {lc['text']};'>{msg_str}</span>"
                 )
             else:
-                html_line = f"<span style='color: {lc['text']};'>{safe_line}</span>"
-                
-            self.log_text.appendHtml(html_line)
-            
-        self.log_text.setUpdatesEnabled(True)
+                html_parts.append(f"<span style='color: {lc['text']};'>{safe_line}</span>")
+
+        if html_parts:
+            # 全行を <p> で包んで一度に挿入 — appendHtml の N 回呼び出しを 1 回に削減
+            combined = "".join(
+                f"<p style='margin:0; padding:0; white-space:pre;'>{h}</p>"
+                for h in html_parts
+            )
+            self.log_text.appendHtml(combined)
         if at_bottom:
             bar.setValue(bar.maximum())
 

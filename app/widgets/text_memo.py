@@ -51,6 +51,14 @@ class TextMemoWidget(BaseWidget):
         self._dirty = False          # 未保存の変更フラグ
         self._rebuilding = False     # リスト再構築中フラグ (シグナル制御用)
         self._is_dark = True         # テーマフラグ
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(
+            lambda: self._filter_list(self.edt_search.text())
+        )
+
         self._build_ui()
         self._load_all()
 
@@ -99,7 +107,7 @@ class TextMemoWidget(BaseWidget):
             " padding: 0 8px; font-size: 12px; }"
             "QLineEdit:focus { border-color: #0078d4; }"
         )
-        self.edt_search.textChanged.connect(self._filter_list)
+        self.edt_search.textChanged.connect(lambda _: self._search_timer.start())
         ll.addWidget(self.edt_search)
 
         # メモリスト

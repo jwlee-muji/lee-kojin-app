@@ -11,7 +11,7 @@ import sqlite3
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QMessageBox, QHeaderView, QApplication, QSplitter,
-    QTableWidgetItem, QGraphicsDropShadowEffect
+    QTableWidgetItem, QGraphicsDropShadowEffect, QCheckBox
 )
 from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont
@@ -62,23 +62,51 @@ class JkmWidget(BaseWidget):
         top.addSpacing(16)
         top.addWidget(QLabel(tr("表示期間:")))
 
+        self._btn_start_prev = QPushButton("◀"); self._btn_start_prev.setFixedSize(26, 30)
         self.start_date = QDateEdit()
         self.start_date.setCalendarPopup(True)
         self.start_date.setDate(QDate.currentDate().addMonths(-6))
         self.start_date.setDisplayFormat("yyyy/MM/dd")
+        self.start_date.setFixedHeight(30)
+        self._btn_start_next = QPushButton("▶"); self._btn_start_next.setFixedSize(26, 30)
+        self._btn_start_prev.clicked.connect(lambda: self.start_date.setDate(self.start_date.date().addDays(-1)))
+        self._btn_start_next.clicked.connect(lambda: self.start_date.setDate(self.start_date.date().addDays(1)))
+        top.addWidget(self._btn_start_prev)
         top.addWidget(self.start_date)
+        top.addWidget(self._btn_start_next)
 
         top.addWidget(QLabel(tr("〜")))
 
+        self._btn_end_prev = QPushButton("◀"); self._btn_end_prev.setFixedSize(26, 30)
         self.end_date = QDateEdit()
         self.end_date.setCalendarPopup(True)
         self.end_date.setDate(QDate.currentDate())
         self.end_date.setDisplayFormat("yyyy/MM/dd")
+        self.end_date.setFixedHeight(30)
+        self._btn_end_next  = QPushButton("▶"); self._btn_end_next.setFixedSize(26, 30)
+        self._btn_end_today = QPushButton(tr("今日")); self._btn_end_today.setFixedHeight(30)
+        self._btn_end_prev.clicked.connect(lambda: self.end_date.setDate(self.end_date.date().addDays(-1)))
+        self._btn_end_next.clicked.connect(lambda: self.end_date.setDate(self.end_date.date().addDays(1)))
+        self._btn_end_today.clicked.connect(lambda: self.end_date.setDate(QDate.currentDate()))
+        top.addWidget(self._btn_end_prev)
         top.addWidget(self.end_date)
+        top.addWidget(self._btn_end_next)
+        top.addWidget(self._btn_end_today)
 
         self.show_btn = QPushButton(tr("表示"))
         self.show_btn.clicked.connect(self._refresh_chart)
         top.addWidget(self.show_btn)
+
+        self.show_table_cb = QCheckBox(tr("表表示"))
+        self.show_table_cb.setChecked(True)
+        self.show_table_cb.stateChanged.connect(self._toggle_views)
+        self.show_table_cb.setCursor(Qt.PointingHandCursor)
+        self.show_graph_cb = QCheckBox(tr("グラフ表示"))
+        self.show_graph_cb.setChecked(True)
+        self.show_graph_cb.stateChanged.connect(self._toggle_views)
+        self.show_graph_cb.setCursor(Qt.PointingHandCursor)
+        top.addWidget(self.show_table_cb)
+        top.addWidget(self.show_graph_cb)
 
         self.status_label = QLabel(tr("待機中"))
         self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
@@ -138,6 +166,10 @@ class JkmWidget(BaseWidget):
             self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_hover
         )
         
+    def _toggle_views(self):
+        self.table.setVisible(self.show_table_cb.isChecked())
+        self.plot_widget.setVisible(self.show_graph_cb.isChecked())
+
     def apply_theme_custom(self):
         is_dark = self.is_dark
         self.plot_widget.set_theme(is_dark)
@@ -321,9 +353,3 @@ class JkmWidget(BaseWidget):
         self.tooltip_label.raise_()
         self.tooltip_label.show()
 
-    def _copy_graph(self):
-        QApplication.clipboard().setPixmap(self.plot_widget.grab())
-        QMessageBox.information(
-            self, tr("完了"),
-            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"),
-        )

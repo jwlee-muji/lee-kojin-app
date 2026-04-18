@@ -4,6 +4,7 @@ import json
 import ctypes
 import base64
 import logging
+import threading
 from pathlib import Path
 
 _cfg_logger = logging.getLogger(__name__)
@@ -55,15 +56,15 @@ _DPAPI_PREFIX = "__dpapi__:"
 
 def encrypt_secret(value: str) -> str:
     """文字列を DPAPI で暗号化し '__dpapi__:<base64>' 形式の文字列を返す。
-    失敗時は平文のまま返す (暗号化なし・ログに警告記録)。"""
+    失敗時は空文字を返す (平文保存を避けるため)。呼び出し元は空文字を「保存しない」として扱うこと。"""
     if not value:
         return value
     try:
         encrypted = _dpapi_protect(value.encode("utf-8"))
         return _DPAPI_PREFIX + base64.b64encode(encrypted).decode("ascii")
     except Exception as e:
-        _cfg_logger.warning(f"シークレット暗号化に失敗しました (平文保存): {e}")
-        return value
+        _cfg_logger.warning(f"シークレット暗号化に失敗しました (値は保存されません。再入力が必要です): {e}")
+        return ""
 
 
 def decrypt_secret(value: str) -> str:
@@ -86,7 +87,7 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
     "user_smtp_password",
 })
 
-# --- 기본 경로 설정 ---
+# ── パス設定 ─────────────────────────────────────────────────────────────────
 APP_NAME = 'LEE電力モニター'
 APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
 
@@ -96,27 +97,44 @@ APP_DIR.mkdir(parents=True, exist_ok=True)
 
 from version import __version__  # noqa: E402 — アプリバージョンをここで一元管理
 
-LOG_FILE     = APP_DIR / 'app.log'
-INSTALL_FILE = APP_DIR / 'install_path.txt'
-SETTINGS_FILE = APP_DIR / 'settings.json'
+LOG_FILE          = APP_DIR / 'app.log'
+INSTALL_FILE      = APP_DIR / 'install_path.txt'
+SETTINGS_FILE     = APP_DIR / 'settings.json'
+GOOGLE_TOKEN_FILE = APP_DIR / 'google_token.json'
 
-# --- 데이터베이스 파일 경로 ---
-DB_IMBALANCE = APP_DIR / 'imbalance_data.db'
-DB_HJKS      = APP_DIR / 'hjks_data.db'
-DB_JKM       = APP_DIR / 'jkm_data.db'
+# ── データベースファイルパス ──────────────────────────────────────────────────
+DB_IMBALANCE  = APP_DIR / 'imbalance_data.db'
+DB_HJKS       = APP_DIR / 'hjks_data.db'
+DB_JKM        = APP_DIR / 'jkm_data.db'
+DB_JEPX_SPOT  = APP_DIR / 'jepx_spot.db'
 
 BACKUP_DIR   = APP_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- 외부 API 엔드포인트 (API Endpoints) ---
-API_IMBALANCE_BASE = "https://www.imbalanceprices-cs.jp"
-API_OCCTO_RESERVE  = "https://web-kohyo.occto.or.jp/kks-web-public/home/dailyData"
-API_OPEN_METEO     = "https://api.open-meteo.com/v1/forecast"
-API_HJKS_MAIN      = "https://hjks.jepx.or.jp/hjks/unit_status"
-API_HJKS_AJAX      = "https://hjks.jepx.or.jp/hjks/unit_status_ajax"
+# ── 外部 API エンドポイント ────────────────────────────────────────────────────
+API_IMBALANCE_BASE  = "https://www.imbalanceprices-cs.jp"
+API_OCCTO_RESERVE   = "https://web-kohyo.occto.or.jp/kks-web-public/home/dailyData"
+API_OPEN_METEO      = "https://api.open-meteo.com/v1/forecast"
+API_HJKS_MAIN       = "https://hjks.jepx.or.jp/hjks/unit_status"
+API_HJKS_AJAX       = "https://hjks.jepx.or.jp/hjks/unit_status_ajax"
+API_JEPX_SPOT_BASE  = "https://www.jepx.jp/market/excel"
 
-# --- 위젯별 설정 (Constants) ---
+# ── ウィジェット定数 ──────────────────────────────────────────────────────────
 JKM_TICKER = 'JKM=F'
+
+JEPX_SPOT_START_FY = 2005   # 収集開始会計年度
+JEPX_SPOT_AREAS = [          # (表示名, DBカラム名)
+    ("システム",  "system_price"),
+    ("北海道",    "hokkaido"),
+    ("東北",      "tohoku"),
+    ("東京",      "tokyo"),
+    ("中部",      "chubu"),
+    ("北陸",      "hokuriku"),
+    ("関西",      "kansai"),
+    ("中国",      "chugoku"),
+    ("四国",      "shikoku"),
+    ("九州",      "kyushu"),
+]
 
 WEATHER_REGIONS = [
     {"name": "北海道 (札幌)", "lat": 43.0642, "lon": 141.3469},
@@ -144,14 +162,14 @@ IMBALANCE_COLORS = [
     '#607D8B', '#FF6B6B', '#4ECDC4', '#45B7D1', '#CDDC39',
 ]
 
-# --- 인밸런스 CSV 컬럼 인덱스 (Imbalance column indices) ---
+# ── インバランス CSV カラムインデックス ───────────────────────────────────────
 DATE_COL_IDX         = 1
 TIME_COL_IDX         = 3
 YOJO_START_COL_IDX   = 5
 YOJO_END_COL_IDX     = 21
 FUSOKU_START_COL_IDX = 23
 
-# --- 설정 관리 (Settings) ---
+# ── 設定管理 ──────────────────────────────────────────────────────────────────
 DEFAULT_SETTINGS = {
     "imbalance_alert": 40.0,
     "reserve_low": 8.0,
@@ -173,6 +191,13 @@ DEFAULT_SETTINGS = {
     "user_groq_key": "",
     "user_smtp_user": "",
     "user_smtp_password": "",
+    # Google カレンダー設定
+    "calendar_poll_interval": 5,
+    "calendar_enabled_ids": [],
+    # Gmail 設定
+    "gmail_poll_interval": 5,
+    "gmail_alarm_labels": ["INBOX"],
+    "gmail_max_results": 50,
 }
 
 def _validate_settings(settings: dict) -> dict:
@@ -201,6 +226,9 @@ def _validate_settings(settings: dict) -> dict:
         "retention_days":      (1, 36500),
         "ai_max_tokens":       (128, 8192),
         "chat_history_limit":  (1, 200),
+        "calendar_poll_interval": (1, 1440),
+        "gmail_poll_interval":    (1, 1440),
+        "gmail_max_results":      (10, 500),
     }
     for key, (lo, hi) in _int_ranges.items():
         try:
@@ -219,56 +247,80 @@ def _validate_settings(settings: dict) -> dict:
 
 
 _settings_cache: dict | None = None
+_settings_lock = threading.Lock()   # _settings_cache 동시 접근 보호
 
 
 def load_settings() -> dict:
     """設定ファイルを読み込んで返す。2回目以降はメモリキャッシュを返す。"""
     global _settings_cache
-    if _settings_cache is not None:
-        return _settings_cache
-
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for key in _SENSITIVE_KEYS:
-                if key not in data:
-                    continue
-                val = data[key]
-                if key == "user_gemini_keys":
-                    data[key] = [decrypt_secret(k) for k in val if isinstance(k, str)]
-                elif isinstance(val, str):
-                    data[key] = decrypt_secret(val)
-            _settings_cache = _validate_settings({**DEFAULT_SETTINGS, **data})
+    with _settings_lock:
+        if _settings_cache is not None:
             return _settings_cache
-        except (json.JSONDecodeError, OSError, ValueError) as e:
-            _cfg_logger.warning(f"設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
 
-    _settings_cache = DEFAULT_SETTINGS.copy()
-    return _settings_cache
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in _SENSITIVE_KEYS:
+                    if key not in data:
+                        continue
+                    val = data[key]
+                    if key == "user_gemini_keys":
+                        data[key] = [decrypt_secret(k) for k in val if isinstance(k, str)]
+                    elif isinstance(val, str):
+                        data[key] = decrypt_secret(val)
+                _settings_cache = _validate_settings({**DEFAULT_SETTINGS, **data})
+                return _settings_cache
+            except (json.JSONDecodeError, OSError, ValueError) as e:
+                _cfg_logger.warning(f"設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
+
+        _settings_cache = DEFAULT_SETTINGS.copy()
+        return _settings_cache
 
 
 def save_settings(settings: dict) -> None:
     """設定を保存し、キャッシュを新しい値で更新する。"""
     global _settings_cache
+
+    # 暗号化失敗時のフォールバック用に既存ファイルの暗号化済み値を読んでおく
+    existing_raw: dict = {}
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            existing_raw = json.load(f)
+    except Exception:
+        pass
+
     to_save = dict(settings)
     for key in _SENSITIVE_KEYS:
         if key not in to_save:
             continue
         val = to_save[key]
         if key == "user_gemini_keys":
-            to_save[key] = [encrypt_secret(k) for k in val if isinstance(k, str)]
+            # 暗号化失敗したキー (空文字) はリストから除外して平文保存を防ぐ
+            to_save[key] = [enc for k in val if isinstance(k, str) and k
+                            for enc in [encrypt_secret(k)] if enc]
         elif isinstance(val, str):
-            to_save[key] = encrypt_secret(val)
-    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, indent=4)
-    _settings_cache = dict(settings)  # 平文をキャッシュ (次回 load_settings がファイルを再読しない)
+            enc = encrypt_secret(val)
+            if enc:
+                to_save[key] = enc
+            elif existing_raw.get(key):
+                # 暗号化失敗 — 既存の暗号化済み値をそのまま維持してユーザーキーの消失を防ぐ
+                to_save[key] = existing_raw[key]
+            else:
+                to_save.pop(key, None)
+
+    # ファイル書き込みとキャッシュ更新を同一ロック内で行い競合状態を防ぐ
+    with _settings_lock:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(to_save, f, indent=4)
+        _settings_cache = dict(settings)  # 平文をキャッシュ (次回 load_settings がファイルを再読しない)
 
 
 def invalidate_settings_cache() -> None:
     """キャッシュを破棄して次回 load_settings でファイルを再読みさせる。"""
     global _settings_cache
-    _settings_cache = None
+    with _settings_lock:
+        _settings_cache = None
 
 def get_theme_qss(theme_name: str) -> str:
     """분리된 .qss 파일에서 테마 데이터를 읽어옵니다."""

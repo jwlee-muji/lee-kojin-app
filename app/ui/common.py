@@ -1,11 +1,13 @@
-from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect
+from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect, QMessageBox
 from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon
 from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt
+from PySide6.QtSvg import QSvgRenderer
 import pyqtgraph as pg
 from app.core.config import load_settings
 from app.ui.theme import UIColors, Typography
 from typing import Optional
 from app.core.events import bus
+from app.core.i18n import tr
 
 
 _tint_icon_cache:   dict[tuple[str, bool], QIcon]         = {}
@@ -18,10 +20,11 @@ def get_tinted_icon(icon_path: str, is_dark: bool) -> QIcon:
     if key in _tint_icon_cache:
         return _tint_icon_cache[key]
     pixmap = QPixmap(icon_path)
-    painter = QPainter(pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
-    painter.end()
+    if not pixmap.isNull():
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
+        painter.end()
     icon = QIcon(pixmap)
     _tint_icon_cache[key] = icon
     return icon
@@ -32,17 +35,37 @@ def get_tinted_pixmap(icon_path: str, is_dark: bool, width: int = 26, height: in
     key = (icon_path, is_dark, width, height)
     if key in _tint_pixmap_cache:
         return _tint_pixmap_cache[key]
-    pixmap = QPixmap(icon_path).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-    painter = QPainter(pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
-    painter.end()
+
+    # 明示的に透明背景を作成し、SVGレンダラーで描画することで
+    # QPixmap() 直接ロード時に発生する白背景の問題を回避する
+    pixmap = QPixmap(width, height)
+    pixmap.fill(Qt.transparent)
+    renderer = QSvgRenderer(icon_path)
+    if renderer.isValid():
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+    else:
+        # SVG以外のフォーマット(PNG等)のフォールバック
+        src = QPixmap(icon_path).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter = QPainter(pixmap)
+        painter.drawPixmap(0, 0, src)
+        painter.end()
+
+    if not pixmap.isNull():
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(UIColors.icon_tint(is_dark)))
+        painter.end()
+
     _tint_pixmap_cache[key] = pixmap
     return pixmap
 
 
 def clear_tint_cache() -> None:
-    """テーマ切替時にアイコンキャッシュをクリアします。"""
+    """アイコンキャッシュを全クリアします。
+    キャッシュキーは (path, is_dark) なのでテーマ切替時はクリア不要。
+    リソース再ロード等が必要な場合にのみ呼び出してください。"""
     _tint_icon_cache.clear()
     _tint_pixmap_cache.clear()
 
@@ -151,7 +174,7 @@ class BaseWidget(QWidget):
         self.is_dark = True
         self.settings = load_settings()
         self.timer = QTimer(self)
-        self._active_workers = []
+        self._active_workers: list = []
         self._skel_effect: Optional[QGraphicsOpacityEffect] = None
         self._skel_anim: Optional[QPropertyAnimation] = None
         bus.app_quitting.connect(self._safe_terminate_workers)
@@ -183,6 +206,17 @@ class BaseWidget(QWidget):
                 if not worker.wait(1000):
                     worker.terminate()
                     worker.wait()
+
+    def _copy_graph(self, target_widget=None):
+        """グラフウィジェットをクリップボードにコピーします。target_widget が None の場合は self.plot_widget を使用。"""
+        widget = target_widget if target_widget is not None else getattr(self, 'plot_widget', None)
+        if widget is None:
+            return
+        QApplication.clipboard().setPixmap(widget.grab())
+        QMessageBox.information(
+            self, tr("完了"),
+            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"),
+        )
 
     def setup_timer(self, interval_minutes: int, timeout_slot, stagger_seconds: int = 0):
         """타이머를 설정합니다.

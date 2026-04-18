@@ -1,3 +1,31 @@
+class ThemePalette:
+    """アプリ全体の背景色パレット。散在していたハードコードを一元管理します。"""
+
+    # ── ダークテーマ背景 ──────────────────────────────────────────────────────
+    BG_PRIMARY_DARK   = "#1e1e1e"   # メインウィンドウ背景
+    BG_SECONDARY_DARK = "#252526"   # カード・パネル背景
+    BG_TERTIARY_DARK  = "#2d2d30"   # ホバー・強調背景
+    BG_INPUT_DARK     = "#3c3c3c"   # 入力フィールド背景
+
+    # ── ライトテーマ背景 ─────────────────────────────────────────────────────
+    BG_PRIMARY_LIGHT   = "#f4f4f4"
+    BG_SECONDARY_LIGHT = "#ffffff"
+    BG_TERTIARY_LIGHT  = "#f0f0f0"
+    BG_INPUT_LIGHT     = "#ffffff"
+
+    @staticmethod
+    def bg_primary(is_dark: bool) -> str:
+        return ThemePalette.BG_PRIMARY_DARK if is_dark else ThemePalette.BG_PRIMARY_LIGHT
+
+    @staticmethod
+    def bg_secondary(is_dark: bool) -> str:
+        return ThemePalette.BG_SECONDARY_DARK if is_dark else ThemePalette.BG_SECONDARY_LIGHT
+
+    @staticmethod
+    def bg_tertiary(is_dark: bool) -> str:
+        return ThemePalette.BG_TERTIARY_DARK if is_dark else ThemePalette.BG_TERTIARY_LIGHT
+
+
 class UIColors:
     """앱 전체에서 사용되는 하드코딩 색상을 중앙 집중화합니다."""
 
@@ -8,15 +36,27 @@ class UIColors:
     # --- 기본 텍스트 색상 ---
     TEXT_PRIMARY_DARK    = "#d4d4d4"
     TEXT_PRIMARY_LIGHT   = "#333333"
-    # WCAG AA 기준 4.5:1 이상 대비도를 확보하기 위해 #aaaaaa(4.2:1) → #bbbbbb(5.0:1)로 개선
+    # WCAG AA 기준 4.5:1 이상 대비도
+    # #bbbbbb on #1e1e1e ≈ 8.0:1 (AAA), #555555 on #f4f4f4 ≈ 6.6:1 (AA)
     TEXT_SECONDARY_DARK  = "#bbbbbb"
     TEXT_SECONDARY_LIGHT = "#555555"
     TEXT_EMPHASIS_DARK   = "#eeeeee"
     TEXT_EMPHASIS_LIGHT  = "#111111"
 
+    # --- 汎用テキスト色 (カード値・本文テキストの最も一般的な色) ---
+    TEXT_DEFAULT_DARK  = "#eeeeee"
+    TEXT_DEFAULT_LIGHT = "#333333"
+
+    # --- テーマ共通の補助テキスト色 ---
+    TEXT_MUTED = "#888888"
+
     # --- 강조 색상 ---
     ACCENT_DARK  = "#094771"
     ACCENT_LIGHT = "#1565c0"
+
+    # --- 네트워크 상태 색상 (테마 무관 시맨틱 색상) ---
+    ONLINE_COLOR  = "#4caf50"
+    OFFLINE_COLOR = "#ff5252"
 
     @staticmethod
     def icon_tint(is_dark: bool) -> str:
@@ -33,6 +73,11 @@ class UIColors:
     @staticmethod
     def text_emphasis(is_dark: bool) -> str:
         return UIColors.TEXT_EMPHASIS_DARK if is_dark else UIColors.TEXT_EMPHASIS_LIGHT
+
+    @staticmethod
+    def text_default(is_dark: bool) -> str:
+        """カード値・本文テキストに最も広く使われる汎用テキスト色。"""
+        return UIColors.TEXT_DEFAULT_DARK if is_dark else UIColors.TEXT_DEFAULT_LIGHT
 
     @staticmethod
     def get_imbalance_alert_colors(is_dark: bool, level: int):
@@ -134,21 +179,23 @@ def get_global_qss(theme: str) -> str:
     """
     is_dark = (theme == "dark")
 
-    bc = "#555555" if is_dark else "#cccccc"
-    tc = "#d4d4d4" if is_dark else "#333333"
-    primary_bg = "#094771" if is_dark else "#0d47a1"
-    primary_hover = "#0b5a8e" if is_dark else "#1565c0"
+    bc           = "#555555" if is_dark else "#cccccc"
+    tc           = UIColors.text_primary(is_dark)
+    primary_bg   = UIColors.ACCENT_DARK if is_dark else "#0d47a1"
+    primary_hover= "#0b5a8e" if is_dark else UIColors.ACCENT_LIGHT
     secondary_bg = "#444444" if is_dark else "#dddddd"
     secondary_hover = "#555555" if is_dark else "#cccccc"
-    toast_color = "#4caf50" if is_dark else "#388e3c"
-    main_bg    = "#1e1e1e" if is_dark else "#f4f4f4"
-    grp_border = "#303030" if is_dark else "#dedede"
-    grp_title  = "#b0b0b0" if is_dark else "#444444"
+    toast_color  = UIColors.ONLINE_COLOR if is_dark else "#388e3c"
+    main_bg      = ThemePalette.bg_primary(is_dark)
+    card_bg      = ThemePalette.bg_secondary(is_dark)
+    card_hover   = ThemePalette.bg_tertiary(is_dark)
+    grp_border   = "#303030" if is_dark else "#dedede"
+    grp_title    = "#b0b0b0" if is_dark else "#444444"
 
     return f"""
     /* 앱 전체 공통 툴팁 스타일 */
     QToolTip {{
-        background-color: {'#252526' if is_dark else '#ffffff'};
+        background-color: {card_bg};
         color: {tc};
         border: 1px solid {bc};
         border-radius: 4px;
@@ -200,19 +247,19 @@ def get_global_qss(theme: str) -> str:
         color: {tc}; font-size: 13px;
     }}
     QCheckBox#settingsCheckbox:hover {{
-        background-color: {'#333333' if is_dark else '#e8e8e8'};
+        background-color: {card_hover};
     }}
 
     /* SummaryCard Dynamic Property 적용 (하드코딩 제거) */
     SummaryCard[theme="dark"] {{
-        background-color: #252526;
+        background-color: {ThemePalette.BG_SECONDARY_DARK};
         border: 1px solid #3e3e42;
         border-radius: 8px;
     }}
-    SummaryCard[theme="dark"]:hover {{ background-color: #2d2d30; }}
+    SummaryCard[theme="dark"]:hover {{ background-color: {ThemePalette.BG_TERTIARY_DARK}; }}
 
     SummaryCard[theme="light"] {{
-        background-color: #ffffff;
+        background-color: {ThemePalette.BG_SECONDARY_LIGHT};
         border: 1px solid #dddddd;
         border-radius: 8px;
     }}
