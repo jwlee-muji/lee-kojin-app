@@ -4,28 +4,31 @@ echo ===================================
 echo LEE電力モニター - ビルドスクリプト
 echo ===================================
 
-REM venv のアクティベート (依存ライブラリをvenv に統一)
+REM venv のアクティベート
 call .venv\Scripts\activate.bat
 
-REM __pycache__ を完全削除して古い .pyc キャッシュを排除
-echo [1/4] __pycache__ を削除中...
+REM [1] __pycache__ を完全削除してキャッシュを排除
+echo [1/5] __pycache__ を削除中...
 for /d /r . %%d in (__pycache__) do (
     if exist "%%d" rmdir /s /q "%%d" 2>nul
 )
 
-REM 前回のビルド成果物を削除
-echo [2/4] 前回のビルドを削除中...
+REM [2] 前回のビルド成果物を完全削除
+echo [2/5] 前回のビルドを削除中...
 rmdir /s /q build 2>nul
 rmdir /s /q dist  2>nul
 del /f /q "LEE電力モニター.spec" 2>nul
 
-echo [3/4] PyInstaller をインストール中...
+REM [3] 依存関係を最新化
+echo [3/5] ビルドツールを更新中...
 pip install pyinstaller pyinstaller-hooks-contrib -q
 
-echo [3.5/4] リソース(QRC)をコンパイル中...
+REM [4] QRC リソースをコンパイル
+echo [3.5/5] リソース(QRC)をコンパイル中...
 pyside6-rcc resources.qrc -o resources_rc.py
 
-echo [4/4] ビルド開始...
+REM [5] PyInstaller ビルド
+echo [4/5] PyInstaller ビルド開始...
 pyinstaller ^
   --onefile ^
   --windowed ^
@@ -36,6 +39,7 @@ pyinstaller ^
   --collect-all google_auth_oauthlib ^
   --collect-all googleapiclient ^
   --collect-all numpy ^
+  --collect-all requests ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^
   --hidden-import "bs4" ^
@@ -46,12 +50,29 @@ pyinstaller ^
   --hidden-import "google.auth" ^
   --hidden-import "google.auth.transport.requests" ^
   --hidden-import "google.oauth2.credentials" ^
+  --hidden-import "google.oauth2.service_account" ^
   --hidden-import "google_auth_oauthlib.flow" ^
   --hidden-import "googleapiclient.discovery" ^
   --hidden-import "httplib2" ^
   --hidden-import "uritemplate" ^
   main.py
 
+if not exist "dist\LEE電力モニター.exe" (
+    echo [ERROR] ビルドに失敗しました。
+    pause
+    exit /b 1
+)
+
+REM [6] SHA256 ハッシュを生成 (GitHub Release での整合性検証用)
+echo [5/5] SHA256 ハッシュを生成中...
+powershell -NoProfile -Command "(Get-FileHash 'dist\LEE電力モニター.exe' -Algorithm SHA256).Hash.ToLower()" > "dist\LEE電力モニター.sha256"
+echo SHA256 ファイル: dist\LEE電力モニター.sha256
+
 echo.
-echo ビルド完了！dist フォルダを確認してください。
+echo ===================================
+echo ビルド完了！
+echo   EXE : dist\LEE電力モニター.exe
+echo   SHA : dist\LEE電力モニター.sha256
+echo ===================================
+echo GitHub Release には両ファイルをアップロードしてください。
 pause

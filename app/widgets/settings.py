@@ -2,9 +2,10 @@ import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDoubleSpinBox, QSpinBox, QGroupBox, QFormLayout, QMessageBox,
-    QScrollArea, QCheckBox, QComboBox, QFrame,
+    QScrollArea, QCheckBox, QComboBox, QFrame, QLineEdit,
+    QTableWidget, QTableWidgetItem, QHeaderView,
 )
-from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
 from app.core.platform import set_autostart
@@ -18,12 +19,11 @@ logger = logging.getLogger(__name__)
 
 _LANG_CODES = [code for _, code in LANG_OPTIONS]
 
-# Gemini フォールバックモデル (Tier 2) の選択肢
 _GEMINI_MODELS = [
-    ("gemini-2.5-flash  (推奨)",          "gemini-2.5-flash"),
-    ("gemini-2.5-pro  (高精度・低速)",    "gemini-2.5-pro"),
-    ("gemini-2.0-flash",                   "gemini-2.0-flash"),
-    ("gemini-2.0-flash-lite  (軽量)",     "gemini-2.0-flash-lite"),
+    ("gemini-2.5-flash  (推奨)",       "gemini-2.5-flash"),
+    ("gemini-2.5-pro  (高精度・低速)", "gemini-2.5-pro"),
+    ("gemini-2.0-flash",               "gemini-2.0-flash"),
+    ("gemini-2.0-flash-lite  (軽量)",  "gemini-2.0-flash-lite"),
 ]
 _GEMINI_MODEL_CODES = [v for _, v in _GEMINI_MODELS]
 
@@ -39,55 +39,60 @@ class SettingsWidget(BaseWidget):
         self._load_data()
         self.apply_theme_custom()
 
-    # ── UI 構築 ──────────────────────────────────────────────────────────
+    # ── UI 構築 ──────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── ヘッダー ────────────────────────────────────────────────────
+        # ヘッダー
         hdr = QFrame()
         hdr.setObjectName("settingsHeader")
         self._hdr_frame = hdr
         hrow = QHBoxLayout(hdr)
         hrow.setContentsMargins(20, 14, 20, 14)
-
         from app.core.config import __version__
         title_lbl = QLabel(tr("設定"))
         title_lbl.setStyleSheet("font-weight: bold; font-size: 16px;")
-        ver_lbl = QLabel(f"v{__version__}")
-        self.ver_lbl = ver_lbl
-
+        self.ver_lbl = QLabel(f"v{__version__}")
         hrow.addWidget(title_lbl)
         hrow.addStretch()
-        hrow.addWidget(ver_lbl)
+        hrow.addWidget(self.ver_lbl)
         root.addWidget(hdr)
 
-        # ── スクロールエリア ──────────────────────────────────────────────
+        # スクロールエリア
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         c = QVBoxLayout(container)
-        c.setContentsMargins(16, 14, 16, 14)
-        c.setSpacing(8)
+        c.setContentsMargins(16, 14, 16, 20)
+        c.setSpacing(10)
 
         c.addWidget(self._build_alert_section())
         c.addWidget(self._build_interval_section())
-        c.addWidget(self._build_ai_section())
         c.addWidget(self._build_google_section())
+        c.addWidget(self._build_ai_section())
         c.addWidget(self._build_retention_section())
-        c.addWidget(self._build_system_section())
-        c.addWidget(self._build_language_section())
-        c.addStretch()
+        c.addWidget(self._build_app_section())
 
+        try:
+            from app.core.config import get_session_email, ADMIN_EMAIL
+            _sess = get_session_email()
+            _admin = ADMIN_EMAIL.lower()
+            logger.debug(f"管理者判定: session={_sess!r} admin={_admin!r} match={_sess == _admin}")
+            if _sess == _admin:
+                c.addWidget(self._build_admin_section())
+        except Exception as e:
+            logger.error(f"管理者パネル構築エラー: {e}", exc_info=True)
+
+        c.addStretch()
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
 
-        # ── フッター ─────────────────────────────────────────────────────
+        # フッター
         footer = QFrame()
         footer.setObjectName("settingsFooter")
         self._footer_frame = footer
@@ -107,7 +112,7 @@ class SettingsWidget(BaseWidget):
         self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_reset.clicked.connect(self._reset_to_defaults)
 
-        self.btn_save = QPushButton(tr("設定を保存") + "  →")
+        self.btn_save = QPushButton("  " + tr("設定を保存") + "  →")
         self.btn_save.setObjectName("primaryActionBtn")
         self.btn_save.setFixedHeight(32)
         self.btn_save.setMinimumWidth(130)
@@ -119,17 +124,18 @@ class SettingsWidget(BaseWidget):
         frow.addWidget(self.btn_save)
         root.addWidget(footer)
 
-    # ── セクション構築 ────────────────────────────────────────────────────
+    # ── セクション共通ヘルパー ────────────────────────────────────────────────
 
     @staticmethod
     def _make_group(title: str) -> tuple[QGroupBox, QFormLayout]:
         grp = QGroupBox(title)
         grp.setObjectName("settingsGroup")
         form = QFormLayout(grp)
-        form.setContentsMargins(18, 18, 18, 16)
-        form.setSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        form.setContentsMargins(18, 14, 18, 16)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         return grp, form
 
     def _note(self, text: str) -> QLabel:
@@ -138,26 +144,62 @@ class SettingsWidget(BaseWidget):
         self._note_labels.append(lbl)
         return lbl
 
+    @staticmethod
+    def _spn_int(lo: int, hi: int, suffix: str, tip: str) -> QSpinBox:
+        w = QSpinBox()
+        w.setRange(lo, hi)
+        w.setSuffix(suffix)
+        w.setMinimumWidth(120)
+        w.setFixedHeight(28)
+        w.setToolTip(tip)
+        return w
+
+    @staticmethod
+    def _spn_float(lo: float, hi: float, suffix: str, tip: str, step: float = 1.0) -> QDoubleSpinBox:
+        w = QDoubleSpinBox()
+        w.setRange(lo, hi)
+        w.setSuffix(suffix)
+        w.setSingleStep(step)
+        w.setMinimumWidth(120)
+        w.setFixedHeight(28)
+        w.setToolTip(tip)
+        return w
+
+    @staticmethod
+    def _cmb(items: list[str], tip: str = "", min_width: int = 180) -> QComboBox:
+        w = QComboBox()
+        for item in items:
+            w.addItem(item)
+        w.setMinimumWidth(min_width)
+        w.setFixedHeight(28)
+        if tip:
+            w.setToolTip(tip)
+        return w
+
+    @staticmethod
+    def _sep() -> QFrame:
+        f = QFrame()
+        f.setFrameShape(QFrame.Shape.HLine)
+        f.setObjectName("settingsSep")
+        return f
+
+    # ── セクション構築 ────────────────────────────────────────────────────────
+
     def _build_alert_section(self) -> QGroupBox:
         grp, form = self._make_group("⚠️   " + tr("アラートしきい値"))
 
-        self.spn_imb_alert = QDoubleSpinBox()
-        self.spn_imb_alert.setRange(0, 1000)
-        self.spn_imb_alert.setSuffix(tr("  円"))
-        self.spn_imb_alert.setFixedWidth(110)
-        self.spn_imb_alert.setToolTip(tr("インバランス単価がこの値を超過した場合、警告を通知します。"))
-
-        self.spn_res_low = QDoubleSpinBox()
-        self.spn_res_low.setRange(0, 100)
-        self.spn_res_low.setSuffix(tr("  %"))
-        self.spn_res_low.setFixedWidth(110)
-        self.spn_res_low.setToolTip(tr("電力予備率がこの値を下回った場合、赤色の警告を通知します。"))
-
-        self.spn_res_warn = QDoubleSpinBox()
-        self.spn_res_warn.setRange(0, 100)
-        self.spn_res_warn.setSuffix(tr("  %"))
-        self.spn_res_warn.setFixedWidth(110)
-        self.spn_res_warn.setToolTip(tr("電力予備率がこの値を下回った場合、黄色の注意を通知します。"))
+        self.spn_imb_alert = self._spn_float(
+            0, 1000, "  円",
+            tr("インバランス単価がこの値を超過した場合、警告を通知します。"),
+        )
+        self.spn_res_low = self._spn_float(
+            0, 100, "  %",
+            tr("電力予備率がこの値を下回った場合、赤色の警告を通知します。"),
+        )
+        self.spn_res_warn = self._spn_float(
+            0, 100, "  %",
+            tr("電力予備率がこの値を下回った場合、黄色の注意を通知します。"),
+        )
 
         form.addRow(tr("インバランス単価 警告:"), self.spn_imb_alert)
         form.addRow(tr("電力予備率 警告 (赤):"),  self.spn_res_low)
@@ -167,19 +209,11 @@ class SettingsWidget(BaseWidget):
     def _build_interval_section(self) -> QGroupBox:
         grp, form = self._make_group("⏱️   " + tr("自動更新間隔"))
 
-        def _spn(tip: str) -> QSpinBox:
-            w = QSpinBox()
-            w.setRange(1, 1440)
-            w.setSuffix(tr("  分"))
-            w.setFixedWidth(110)
-            w.setToolTip(tip)
-            return w
-
-        self.spn_imb_int  = _spn(tr("インバランス単価のデータ取得間隔（分）"))
-        self.spn_res_int  = _spn(tr("電力予備率のデータ取得間隔（分）"))
-        self.spn_wea_int  = _spn(tr("全国天気予報のデータ取得間隔（分）"))
-        self.spn_hjks_int = _spn(tr("発電停止状況(HJKS)のデータ取得間隔（分）"))
-        self.spn_jkm_int  = _spn(tr("JKM LNG 価格のデータ取得間隔（分）"))
+        self.spn_imb_int  = self._spn_int(1, 1440, tr("  分"), tr("インバランス単価のデータ取得間隔（分）"))
+        self.spn_res_int  = self._spn_int(1, 1440, tr("  分"), tr("電力予備率のデータ取得間隔（分）"))
+        self.spn_wea_int  = self._spn_int(1, 1440, tr("  分"), tr("全国天気予報のデータ取得間隔（分）"))
+        self.spn_hjks_int = self._spn_int(1, 1440, tr("  分"), tr("発電停止状況(HJKS)のデータ取得間隔（分）"))
+        self.spn_jkm_int  = self._spn_int(1, 1440, tr("  分"), tr("JKM LNG 価格のデータ取得間隔（分）"))
 
         form.addRow(tr("インバランス単価:"),    self.spn_imb_int)
         form.addRow(tr("電力予備率:"),          self.spn_res_int)
@@ -188,68 +222,88 @@ class SettingsWidget(BaseWidget):
         form.addRow(tr("JKM LNG 価格:"),       self.spn_jkm_int)
         return grp
 
+    def _build_google_section(self) -> QGroupBox:
+        grp, form = self._make_group("🔗   " + tr("Google 連携"))
+
+        # アカウント表示
+        from app.api.google.auth import get_current_user_email
+        email = get_current_user_email() or tr("ログイン済み")
+        acct_w = QWidget()
+        acct_row = QHBoxLayout(acct_w)
+        acct_row.setContentsMargins(0, 0, 0, 0)
+        acct_row.setSpacing(6)
+        dot = QLabel("●")
+        dot.setStyleSheet("color: #4CAF50; font-size: 9px;")
+        acct_lbl = QLabel(email)
+        acct_lbl.setStyleSheet("font-size: 12px;")
+        acct_row.addWidget(dot)
+        acct_row.addWidget(acct_lbl)
+        acct_row.addStretch()
+
+        self.spn_cal_int = self._spn_int(1, 1440, tr("  分"),
+            tr("Google カレンダーのイベント取得間隔（分）"))
+        self.spn_gmail_int = self._spn_int(1, 1440, tr("  分"),
+            tr("Gmail の受信確認間隔（分）"))
+        self.spn_gmail_max = self._spn_int(10, 500, tr("  件"),
+            tr("一度に取得する Gmail メッセージの最大件数"))
+
+        form.addRow(tr("アカウント:"),       acct_w)
+        form.addRow(tr("カレンダー更新:"),   self.spn_cal_int)
+        form.addRow(tr("Gmail 更新:"),       self.spn_gmail_int)
+        form.addRow(tr("メール取得件数:"),   self.spn_gmail_max)
+        return grp
+
     def _build_ai_section(self) -> QGroupBox:
         grp, form = self._make_group("🤖   " + tr("AI チャット"))
 
-        # フォールバックモデル (Tier 2)
         self.cmb_gemini_model = QComboBox()
         for display, _ in _GEMINI_MODELS:
             self.cmb_gemini_model.addItem(display)
-        self.cmb_gemini_model.setMinimumWidth(230)
+        self.cmb_gemini_model.setMinimumWidth(250)
+        self.cmb_gemini_model.setFixedHeight(28)
         self.cmb_gemini_model.setToolTip(
             tr("Gemini 3.1 Flash Lite の次に試みるフォールバックモデル。\n通常は gemini-2.5-flash (推奨) で十分です。")
         )
 
-        # 応答温度
         self.spn_temperature = QDoubleSpinBox()
         self.spn_temperature.setRange(0.1, 2.0)
         self.spn_temperature.setSingleStep(0.1)
         self.spn_temperature.setDecimals(1)
-        self.spn_temperature.setFixedWidth(110)
+        self.spn_temperature.setMinimumWidth(120)
+        self.spn_temperature.setFixedHeight(28)
         self.spn_temperature.setToolTip(
-            tr("AIの回答の多様性を制御します。\n低い値 (0.1〜0.5): 正確・一貫した回答\n高い値 (1.0〜2.0): 多様・創造的な回答\n推奨: 0.7")
+            tr("AIの回答の多様性を制御します。\n低い値 (0.1〜0.5): 正確・一貫\n高い値 (1.0〜2.0): 多様・創造的\n推奨: 0.7")
         )
 
-        # 最大トークン数
         self.cmb_max_tokens = QComboBox()
         for v in _MAX_TOKENS_OPTIONS:
             self.cmb_max_tokens.addItem(f"{v:,}  トークン", v)
-        self.cmb_max_tokens.setMinimumWidth(160)
+        self.cmb_max_tokens.setMinimumWidth(180)
+        self.cmb_max_tokens.setFixedHeight(28)
         self.cmb_max_tokens.setToolTip(
-            tr("一回の回答で生成する最大文字数を制御します。\n長い回答が必要な場合は 4096 を選択。\n推奨: 2,048")
+            tr("一回の回答で生成する最大トークン数。長い回答が必要な場合は 4096 を選択。\n推奨: 2,048")
         )
 
-        # 会話履歴の保持数
-        self.spn_history = QSpinBox()
-        self.spn_history.setRange(4, 100)
+        self.spn_history = self._spn_int(4, 100, tr("  件"),
+            tr("AIに渡す過去の会話メッセージ数の上限。多いほどコンテキストが保たれますが API 使用量が増加します。\n推奨: 20"))
         self.spn_history.setSingleStep(2)
-        self.spn_history.setSuffix(tr("  件"))
-        self.spn_history.setFixedWidth(110)
-        self.spn_history.setToolTip(
-            tr("AIに渡す過去の会話メッセージ数の上限です。\n多いほどコンテキストが保たれますが API 使用量が増加します。\n推奨: 20")
-        )
 
-        form.addRow(tr("フォールバックモデル:"),  self.cmb_gemini_model)
-        form.addRow(tr("応答の温度:"),            self.spn_temperature)
-        form.addRow(tr("最大トークン数:"),         self.cmb_max_tokens)
-        form.addRow(tr("会話履歴の保持数:"),       self.spn_history)
+        form.addRow(tr("フォールバックモデル:"), self.cmb_gemini_model)
+        form.addRow(tr("応答の温度:"),           self.spn_temperature)
+        form.addRow(tr("最大トークン数:"),        self.cmb_max_tokens)
+        form.addRow(tr("会話履歴の保持数:"),      self.spn_history)
         form.addRow("", self._note(
-            tr("※ 優先順位: Gemini 3.1 Flash Lite → 上記モデル → Groq (llama-3.3-70b)")
+            tr("※ 優先順位: Gemini 2.5 Flash Lite → 上記モデル → Groq (llama-3.3-70b)")
         ))
         return grp
 
     def _build_retention_section(self) -> QGroupBox:
         grp, form = self._make_group("💾   " + tr("データ管理"))
 
-        self.spn_retention = QSpinBox()
-        self.spn_retention.setRange(30, 3650)
-        self.spn_retention.setSuffix(tr("  日"))
-        self.spn_retention.setFixedWidth(110)
-        self.spn_retention.setToolTip(
-            tr("この日数を超えた古いデータは自動的にバックアップされ、メインDBから削除されます。")
-        )
+        self.spn_retention = self._spn_int(30, 3650, tr("  日"),
+            tr("この日数を超えた古いデータは自動的にバックアップされ、メインDBから削除されます。"))
 
-        self.btn_run_retention = QPushButton(tr("今すぐ古いデータを整理"))
+        self.btn_run_retention = QPushButton("  " + tr("今すぐ整理実行") + "  ")
         self.btn_run_retention.setObjectName("secondaryActionBtn")
         self.btn_run_retention.setFixedHeight(30)
         self.btn_run_retention.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -258,12 +312,22 @@ class SettingsWidget(BaseWidget):
         )
         self.btn_run_retention.clicked.connect(self._manual_retention)
 
-        form.addRow(tr("データの保持期間:"), self.spn_retention)
+        form.addRow(tr("データ保持期間:"), self.spn_retention)
+        form.addRow("", self._note(
+            tr("※ 設定日数を超えたデータは backups フォルダへ自動バックアップされます。")
+        ))
         form.addRow("", self.btn_run_retention)
         return grp
 
-    def _build_system_section(self) -> QGroupBox:
-        grp, form = self._make_group("💻   " + tr("システム"))
+    def _build_app_section(self) -> QGroupBox:
+        """言語・システム設定の統合セクション。"""
+        grp, form = self._make_group("⚙️   " + tr("アプリ設定"))
+
+        self.cmb_language = QComboBox()
+        for display_name, _ in LANG_OPTIONS:
+            self.cmb_language.addItem(display_name)
+        self.cmb_language.setMinimumWidth(180)
+        self.cmb_language.setFixedHeight(28)
 
         self.chk_auto_start = QCheckBox(tr("Windows 起動時にバックグラウンドで自動実行する"))
         self.chk_auto_start.setObjectName("settingsCheckbox")
@@ -272,118 +336,210 @@ class SettingsWidget(BaseWidget):
             tr("PC起動時、自動的にバックグラウンド（トレイアイコン）で実行します。")
         )
 
+        form.addRow(tr("表示言語:"), self.cmb_language)
+        form.addRow("", self._note(tr("※ 言語変更は再起動後に適用されます。")))
         form.addRow("", self.chk_auto_start)
         return grp
 
-    def _build_language_section(self) -> QGroupBox:
-        grp, form = self._make_group("🌍   " + tr("言語 (Language)"))
+    def _build_admin_section(self) -> QGroupBox:
+        """管理者専用: ユーザー管理セクション。"""
+        grp = QGroupBox("👑   " + tr("ユーザー管理 (管理者専用)"))
+        grp.setObjectName("settingsGroup")
 
-        self.cmb_language = QComboBox()
-        for display_name, _ in LANG_OPTIONS:
-            self.cmb_language.addItem(display_name)
-        self.cmb_language.setMinimumWidth(180)
+        root = QVBoxLayout(grp)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(10)
 
-        form.addRow(tr("表示言語:"), self.cmb_language)
-        form.addRow("", self._note(tr("変更は再起動後に適用されます")))
+        # ── Sheets ID ──────────────────────────────────────────────────────
+        lbl_sheets = QLabel(tr("Google Sheets ID"))
+        lbl_sheets.setStyleSheet("font-weight: bold; font-size: 12px;")
+
+        sheets_row = QHBoxLayout()
+        sheets_row.setSpacing(8)
+        self.edt_sheets_id = QLineEdit()
+        self.edt_sheets_id.setPlaceholderText(tr("Spreadsheet ID または URL をそのまま貼り付け可"))
+        self.edt_sheets_id.setFixedHeight(32)
+
+        btn_sheets_save = QPushButton("  " + tr("保存") + "  ")
+        btn_sheets_save.setObjectName("secondaryActionBtn")
+        btn_sheets_save.setFixedHeight(32)
+        btn_sheets_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_sheets_save.clicked.connect(self._save_sheets_id)
+
+        sheets_row.addWidget(self.edt_sheets_id, 1)
+        sheets_row.addWidget(btn_sheets_save)
+
+        note_sheets = self._note(
+            tr("※ URL ごとペーストすると ID を自動抽出します。シートにはサービスアカウントの編集権限が必要です。")
+        )
+
+        sep1 = self._sep()
+
+        # ── ユーザー一覧 ────────────────────────────────────────────────────
+        tbl_hdr_row = QHBoxLayout()
+        lbl_users = QLabel(tr("登録ユーザー"))
+        lbl_users.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.lbl_users_status = QLabel()
+        self.lbl_users_status.setStyleSheet("font-size: 11px; color: #888;")
+        tbl_hdr_row.addWidget(lbl_users)
+        tbl_hdr_row.addStretch()
+        tbl_hdr_row.addWidget(self.lbl_users_status)
+
+        self.tbl_users = QTableWidget(0, 3)
+        self.tbl_users.setHorizontalHeaderLabels([tr("メールアドレス"), tr("名前"), tr("登録日")])
+        self.tbl_users.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tbl_users.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tbl_users.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.tbl_users.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_users.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tbl_users.setMinimumHeight(160)
+        self.tbl_users.setMaximumHeight(240)
+        self.tbl_users.setAlternatingRowColors(True)
+        self.tbl_users.verticalHeader().setVisible(False)
+
+        tbl_btn_row = QHBoxLayout()
+        tbl_btn_row.setSpacing(8)
+        btn_refresh = QPushButton("  " + tr("一覧を更新") + "  ")
+        btn_refresh.setObjectName("secondaryActionBtn")
+        btn_refresh.setFixedHeight(30)
+        btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_refresh.clicked.connect(self._refresh_user_list)
+
+        btn_remove = QPushButton("  " + tr("選択ユーザーを削除") + "  ")
+        btn_remove.setObjectName("secondaryActionBtn")
+        btn_remove.setFixedHeight(30)
+        btn_remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_remove.clicked.connect(self._remove_selected_user)
+
+        tbl_btn_row.addWidget(btn_refresh)
+        tbl_btn_row.addWidget(btn_remove)
+        tbl_btn_row.addStretch()
+
+        sep2 = self._sep()
+
+        # ── ユーザー追加 ────────────────────────────────────────────────────
+        lbl_add = QLabel(tr("ユーザーを追加"))
+        lbl_add.setStyleSheet("font-weight: bold; font-size: 12px;")
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(8)
+        self.edt_add_email = QLineEdit()
+        self.edt_add_email.setPlaceholderText(tr("メールアドレス"))
+        self.edt_add_email.setFixedHeight(32)
+
+        self.edt_add_name = QLineEdit()
+        self.edt_add_name.setPlaceholderText(tr("名前 (任意)"))
+        self.edt_add_name.setFixedWidth(150)
+        self.edt_add_name.setFixedHeight(32)
+
+        btn_add = QPushButton("  " + tr("追加") + "  ")
+        btn_add.setObjectName("primaryActionBtn")
+        btn_add.setFixedHeight(32)
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(self._add_user)
+
+        add_row.addWidget(self.edt_add_email, 1)
+        add_row.addWidget(self.edt_add_name)
+        add_row.addWidget(btn_add)
+
+        # 組み立て
+        root.addWidget(lbl_sheets)
+        root.addLayout(sheets_row)
+        root.addWidget(note_sheets)
+        root.addWidget(sep1)
+        root.addLayout(tbl_hdr_row)
+        root.addWidget(self.tbl_users)
+        root.addLayout(tbl_btn_row)
+        root.addWidget(sep2)
+        root.addWidget(lbl_add)
+        root.addLayout(add_row)
+
+        self.edt_sheets_id.setText(load_settings().get("sheets_registry_id", ""))
         return grp
 
-    def _build_google_section(self) -> QGroupBox:
-        grp, form = self._make_group("🔗   " + tr("Google 連携"))
+    # ── 管理者アクション ────────────────────────────────────────────────────
 
-        # 인증 버튼 행
-        auth_row = QHBoxLayout()
-        self.btn_google_auth = QPushButton(tr("Google アカウントで認証"))
-        self.btn_google_auth.setObjectName("primaryActionBtn")
-        self.btn_google_auth.setFixedHeight(32)
-        self.btn_google_auth.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_google_auth.clicked.connect(self._on_google_auth)
+    def _save_sheets_id(self):
+        import re
+        raw = self.edt_sheets_id.text().strip()
+        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", raw)
+        sheet_id = m.group(1) if m else raw
+        if sheet_id != raw:
+            self.edt_sheets_id.setText(sheet_id)
+        s = load_settings()
+        s["sheets_registry_id"] = sheet_id
+        save_settings(s)
+        self._show_toast("✅  Sheets ID " + tr("を保存しました"))
 
-        self.btn_google_revoke = QPushButton(tr("認証を解除"))
-        self.btn_google_revoke.setObjectName("secondaryActionBtn")
-        self.btn_google_revoke.setFixedHeight(32)
-        self.btn_google_revoke.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_google_revoke.clicked.connect(self._on_google_revoke)
+    def _refresh_user_list(self):
+        self.lbl_users_status.setText(tr("取得中..."))
+        QApplication.processEvents()
+        try:
+            from app.api.google.sheets import get_all_users
+            users = get_all_users()
+            self.tbl_users.setRowCount(0)
+            for u in users:
+                r = self.tbl_users.rowCount()
+                self.tbl_users.insertRow(r)
+                self.tbl_users.setItem(r, 0, QTableWidgetItem(u["email"]))
+                self.tbl_users.setItem(r, 1, QTableWidgetItem(u["name"]))
+                self.tbl_users.setItem(r, 2, QTableWidgetItem(u["added"]))
+            self.lbl_users_status.setText(tr("{0} 件").format(len(users)))
+        except Exception as e:
+            self.lbl_users_status.setText(str(e)[:60])
 
-        self.lbl_google_status = QLabel()
-        self.lbl_google_status.setStyleSheet("font-size: 12px;")
+    def _remove_selected_user(self):
+        if not self.tbl_users.selectedItems():
+            return
+        email = self.tbl_users.item(self.tbl_users.currentRow(), 0).text()
+        reply = QMessageBox.question(
+            self, tr("確認"),
+            tr("{0} を削除しますか？").format(email),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            from app.api.google.sheets import remove_user
+            remove_user(email)
+            self._refresh_user_list()
+        except Exception as e:
+            QMessageBox.warning(self, tr("エラー"), str(e))
 
-        auth_row.addWidget(self.btn_google_auth)
-        auth_row.addWidget(self.btn_google_revoke)
-        auth_row.addWidget(self.lbl_google_status)
-        auth_row.addStretch()
-        auth_widget = QWidget()
-        auth_widget.setLayout(auth_row)
+    def _add_user(self):
+        email = self.edt_add_email.text().strip()
+        name  = self.edt_add_name.text().strip()
+        if not email:
+            self.edt_add_email.setFocus()
+            return
+        try:
+            from app.api.google.sheets import add_user
+            add_user(email, name)
+            self.edt_add_email.clear()
+            self.edt_add_name.clear()
+            self._refresh_user_list()
+            self._show_toast("✅  " + tr("ユーザーを追加しました"))
+        except Exception as e:
+            QMessageBox.warning(self, tr("エラー"), str(e))
 
-        # 폴링 간격
-        self.spn_cal_int = QSpinBox()
-        self.spn_cal_int.setRange(1, 1440)
-        self.spn_cal_int.setSuffix(tr("  分"))
-        self.spn_cal_int.setFixedWidth(110)
-
-        self.spn_gmail_int = QSpinBox()
-        self.spn_gmail_int.setRange(1, 1440)
-        self.spn_gmail_int.setSuffix(tr("  分"))
-        self.spn_gmail_int.setFixedWidth(110)
-
-        self.spn_gmail_max = QSpinBox()
-        self.spn_gmail_max.setRange(10, 500)
-        self.spn_gmail_max.setSuffix(tr("  件"))
-        self.spn_gmail_max.setFixedWidth(110)
-
-        form.addRow("", auth_widget)
-        form.addRow(tr("Google カレンダー:"), self.spn_cal_int)
-        form.addRow(tr("Gmail:"), self.spn_gmail_int)
-        form.addRow(tr("メール取得件数:"), self.spn_gmail_max)
-        return grp
-
-    def _on_google_auth(self):
-        from app.api.google_auth import run_oauth_flow
-        ok = run_oauth_flow()
-        if ok:
-            self.lbl_google_status.setText(tr("認証済 ✅"))
-            self.lbl_google_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
-        else:
-            self.lbl_google_status.setText(tr("未認証"))
-            self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
-
-    def _on_google_revoke(self):
-        from app.api.google_auth import revoke_credentials
-        revoke_credentials()
-        self.lbl_google_status.setText(tr("未認証"))
-        self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
+    # ── テーマ ───────────────────────────────────────────────────────────────
 
     def set_theme(self, is_dark: bool):
         if is_dark:
             cmb_style = (
                 "QComboBox {"
-                "  background-color: #3d3d3d;"
-                "  color: #e0e0e0;"
-                "  border: 1px solid #666666;"
-                "  border-radius: 4px;"
-                "  padding: 4px 10px;"
+                "  background-color: #3d3d3d; color: #e0e0e0;"
+                "  border: 1px solid #666666; border-radius: 4px; padding: 4px 10px;"
                 "}"
                 "QComboBox:hover { border-color: #909090; }"
-                "QComboBox::drop-down {"
-                "  background-color: #505050;"
-                "  width: 22px;"
-                "  border-left: 1px solid #666666;"
-                "}"
+                "QComboBox::drop-down { background-color: #505050; width: 22px; border-left: 1px solid #666666; }"
                 "QComboBox QAbstractItemView {"
-                "  background-color: #464646;"
-                "  color: #e0e0e0;"
-                "  selection-background-color: #0e639c;"
-                "  selection-color: #ffffff;"
-                "  border: 1px solid #707070;"
-                "  outline: none;"
+                "  background-color: #464646; color: #e0e0e0;"
+                "  selection-background-color: #0e639c; selection-color: #ffffff;"
+                "  border: 1px solid #707070; outline: none;"
                 "}"
-                "QComboBox QAbstractItemView::item {"
-                "  padding: 5px 10px;"
-                "  min-height: 22px;"
-                "}"
-                "QComboBox QAbstractItemView::item:hover {"
-                "  background-color: #565656;"
-                "  color: #ffffff;"
-                "}"
+                "QComboBox QAbstractItemView::item { padding: 5px 10px; min-height: 22px; }"
+                "QComboBox QAbstractItemView::item:hover { background-color: #565656; color: #ffffff; }"
             )
         else:
             cmb_style = ""
@@ -399,13 +555,19 @@ class SettingsWidget(BaseWidget):
         pc = UIColors.get_panel_colors(is_dark)
         bc = pc["border"]
         dc = pc["text_dim"]
-        self._hdr_frame.setStyleSheet(f"QFrame#settingsHeader {{ border-bottom: 1px solid {bc}; }}")
-        self._footer_frame.setStyleSheet(f"QFrame#settingsFooter {{ border-top: 1px solid {bc}; }}")
+        self._hdr_frame.setStyleSheet(
+            f"QFrame#settingsHeader {{ border-bottom: 1px solid {bc}; }}"
+        )
+        self._footer_frame.setStyleSheet(
+            f"QFrame#settingsFooter {{ border-top: 1px solid {bc}; }}"
+        )
         self.ver_lbl.setStyleSheet(f"color: {dc}; font-size: 12px;")
         for lbl in self._note_labels:
             lbl.setStyleSheet(f"color: {dc}; font-size: 11px;")
+        for sep in self.findChildren(QFrame, "settingsSep"):
+            sep.setStyleSheet(f"QFrame#settingsSep {{ color: {bc}; }}")
 
-    # ── データ読み書き ────────────────────────────────────────────────────
+    # ── データ読み書き ────────────────────────────────────────────────────────
 
     def _load_data(self):
         self._current_settings = load_settings()
@@ -422,48 +584,39 @@ class SettingsWidget(BaseWidget):
         self.spn_retention.setValue(s.get("retention_days", 1460))
         self.chk_auto_start.setChecked(s.get("auto_start", False))
 
-        # AI 設定
         model = s.get("gemini_model", "gemini-2.5-flash")
-        midx = _GEMINI_MODEL_CODES.index(model) if model in _GEMINI_MODEL_CODES else 0
-        self.cmb_gemini_model.setCurrentIndex(midx)
-
+        self.cmb_gemini_model.setCurrentIndex(
+            _GEMINI_MODEL_CODES.index(model) if model in _GEMINI_MODEL_CODES else 0
+        )
         self.spn_temperature.setValue(float(s.get("ai_temperature", 0.7)))
 
         max_tok = int(s.get("ai_max_tokens", 2048))
-        tidx = _MAX_TOKENS_OPTIONS.index(max_tok) if max_tok in _MAX_TOKENS_OPTIONS else 2
-        self.cmb_max_tokens.setCurrentIndex(tidx)
-
+        self.cmb_max_tokens.setCurrentIndex(
+            _MAX_TOKENS_OPTIONS.index(max_tok) if max_tok in _MAX_TOKENS_OPTIONS else 2
+        )
         self.spn_history.setValue(int(s.get("chat_history_limit", 20)))
 
         lang = s.get("language", "auto")
-        lidx = _LANG_CODES.index(lang) if lang in _LANG_CODES else 0
-        self.cmb_language.setCurrentIndex(lidx)
+        self.cmb_language.setCurrentIndex(
+            _LANG_CODES.index(lang) if lang in _LANG_CODES else 0
+        )
 
-        # Google 設定
         self.spn_cal_int.setValue(int(s.get("calendar_poll_interval", 5)))
         self.spn_gmail_int.setValue(int(s.get("gmail_poll_interval", 5)))
         self.spn_gmail_max.setValue(int(s.get("gmail_max_results", 50)))
 
-        from app.api.google_auth import is_authenticated
-        if is_authenticated():
-            self.lbl_google_status.setText(tr("認証済 ✅"))
-            self.lbl_google_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
-        else:
-            self.lbl_google_status.setText(tr("未認証"))
-            self.lbl_google_status.setStyleSheet("color: #888; font-size: 12px;")
-
     def _get_ui_settings(self) -> dict:
         return {
-            "imbalance_alert":    self.spn_imb_alert.value(),
-            "reserve_low":        self.spn_res_low.value(),
-            "reserve_warn":       self.spn_res_warn.value(),
-            "imbalance_interval": self.spn_imb_int.value(),
-            "reserve_interval":   self.spn_res_int.value(),
-            "weather_interval":   self.spn_wea_int.value(),
-            "hjks_interval":      self.spn_hjks_int.value(),
-            "jkm_interval":       self.spn_jkm_int.value(),
-            "retention_days":     self.spn_retention.value(),
-            "auto_start":         self.chk_auto_start.isChecked(),
+            "imbalance_alert":        self.spn_imb_alert.value(),
+            "reserve_low":            self.spn_res_low.value(),
+            "reserve_warn":           self.spn_res_warn.value(),
+            "imbalance_interval":     self.spn_imb_int.value(),
+            "reserve_interval":       self.spn_res_int.value(),
+            "weather_interval":       self.spn_wea_int.value(),
+            "hjks_interval":          self.spn_hjks_int.value(),
+            "jkm_interval":           self.spn_jkm_int.value(),
+            "retention_days":         self.spn_retention.value(),
+            "auto_start":             self.chk_auto_start.isChecked(),
             "language":               _LANG_CODES[self.cmb_language.currentIndex()],
             "gemini_model":           _GEMINI_MODEL_CODES[self.cmb_gemini_model.currentIndex()],
             "ai_temperature":         round(self.spn_temperature.value(), 1),
@@ -485,7 +638,6 @@ class SettingsWidget(BaseWidget):
             self._toggle_auto_start(new_ui["auto_start"])
 
         language_changed = self._current_settings.get("language") != new_ui.get("language")
-
         new_settings = {**self._current_settings, **new_ui}
         save_settings(new_settings)
         self._current_settings = new_settings
@@ -494,7 +646,6 @@ class SettingsWidget(BaseWidget):
             self._show_toast(tr("変更は再起動後に適用されます"))
         else:
             self._show_toast("✅  " + tr("保存しました"))
-
         bus.settings_saved.emit()
 
     def _show_toast(self, msg: str):
@@ -509,7 +660,6 @@ class SettingsWidget(BaseWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-
         self.spn_imb_alert.setValue(40.0)
         self.spn_res_low.setValue(8.0)
         self.spn_res_warn.setValue(10.0)
@@ -523,10 +673,10 @@ class SettingsWidget(BaseWidget):
         self.cmb_language.setCurrentIndex(0)
         self.cmb_gemini_model.setCurrentIndex(0)
         self.spn_temperature.setValue(0.7)
-        self.cmb_max_tokens.setCurrentIndex(2)   # 2048
+        self.cmb_max_tokens.setCurrentIndex(2)
         self.spn_history.setValue(20)
 
-    # ── データ整理 ────────────────────────────────────────────────────────
+    # ── データ整理 ────────────────────────────────────────────────────────────
 
     def _manual_retention(self):
         days = int(self.spn_retention.value())
@@ -537,11 +687,9 @@ class SettingsWidget(BaseWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-
         self.btn_run_retention.setEnabled(False)
         self.btn_run_retention.setText(tr("整理中..."))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-
         self._retention_worker = DataRetentionWorker(self.spn_retention.value())
         self._retention_worker.finished.connect(self._on_retention_finished)
         self._retention_worker.error.connect(self._on_retention_error)
@@ -552,7 +700,7 @@ class SettingsWidget(BaseWidget):
     def _on_retention_finished(self):
         QApplication.restoreOverrideCursor()
         self.btn_run_retention.setEnabled(True)
-        self.btn_run_retention.setText(tr("今すぐ古いデータを整理"))
+        self.btn_run_retention.setText("  " + tr("今すぐ整理実行") + "  ")
         QMessageBox.information(
             self, tr("完了"),
             tr("古いデータのバックアップと削除が完了しました。\n(保存先: backups フォルダ)"),
@@ -561,13 +709,13 @@ class SettingsWidget(BaseWidget):
     def _on_retention_error(self, err: str):
         QApplication.restoreOverrideCursor()
         self.btn_run_retention.setEnabled(True)
-        self.btn_run_retention.setText(tr("今すぐ古いデータを整理"))
+        self.btn_run_retention.setText("  " + tr("今すぐ整理実行") + "  ")
         QMessageBox.warning(
             self, tr("エラー"),
             tr("処理中にエラーが発生しました:") + f"\n{err}",
         )
 
-    # ── 自動起動 (Windows レジストリ) ────────────────────────────────────
+    # ── 自動起動 ─────────────────────────────────────────────────────────────
 
     def _toggle_auto_start(self, enable: bool):
         set_autostart(enable)

@@ -24,6 +24,7 @@ build/
 
 # 内蔵シークレット (API キー等) — git に含めない
 app/core/_secrets.py
+app/api/google/_oauth_creds.py
 
 # IDE
 .vscode/

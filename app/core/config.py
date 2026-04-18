@@ -88,6 +88,20 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset({
 })
 
 # ── パス設定 ─────────────────────────────────────────────────────────────────
+ADMIN_EMAIL = "jw.lee@shirokumapower.com"
+
+# ── セッション中のログインメール (ファイル I/O を介さないインメモリ管理) ─────
+_session_email: str = ""
+
+
+def set_session_email(email: str) -> None:
+    global _session_email
+    _session_email = email.strip().lower()
+
+
+def get_session_email() -> str:
+    return _session_email
+
 APP_NAME = 'LEE電力モニター'
 APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
 
@@ -97,10 +111,12 @@ APP_DIR.mkdir(parents=True, exist_ok=True)
 
 from version import __version__  # noqa: E402 — アプリバージョンをここで一元管理
 
-LOG_FILE          = APP_DIR / 'app.log'
-INSTALL_FILE      = APP_DIR / 'install_path.txt'
-SETTINGS_FILE     = APP_DIR / 'settings.json'
-GOOGLE_TOKEN_FILE = APP_DIR / 'google_token.json'
+LOG_FILE             = APP_DIR / 'app.log'
+INSTALL_FILE         = APP_DIR / 'install_path.txt'
+SETTINGS_FILE        = APP_DIR / 'settings.json'
+GOOGLE_TOKEN_FILE    = APP_DIR / 'google_token.json'
+SERVICE_ACCOUNT_FILE = APP_DIR / 'service_account.json'
+USER_EMAIL_FILE      = APP_DIR / 'current_user.json'
 
 # ── データベースファイルパス ──────────────────────────────────────────────────
 DB_IMBALANCE  = APP_DIR / 'imbalance_data.db'
@@ -198,6 +214,8 @@ DEFAULT_SETTINGS = {
     "gmail_poll_interval": 5,
     "gmail_alarm_labels": ["INBOX"],
     "gmail_max_results": 50,
+    # ユーザー登録 Google Sheets ID
+    "sheets_registry_id": "",
 }
 
 def _validate_settings(settings: dict) -> dict:

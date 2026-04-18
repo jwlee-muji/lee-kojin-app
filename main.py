@@ -44,26 +44,22 @@ def main():
     # 다운로드 폴더에서 실행된 경우 이전 설치 경로로 이동
     from app.core.updater import handle_downloads_launch
     handle_downloads_launch()
-    
+
     logger.info("=== LEE電力モニター アプリ起動 ===")
 
-    from PySide6.QtWidgets import QApplication, QSplashScreen
-    from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtGui import QFont, QIcon
     from PySide6.QtCore import Qt
-    from app.ui.main_window import MainWindow
     from app.core.updater import UpdateManager
-    from app.core.i18n import init_language, tr
+    from app.core.i18n import init_language
 
-    # 언어 초기화: 설정 파일 → 시스템 로캘 순으로 결정
     init_language()
 
-    # 고해상도(HiDPI) 모니터 스케일링 지원 명시 (글자/그래프 흐림 방지)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 
     app = QApplication(sys.argv)
 
-    # PyInstaller --onefile環境ではリソースが sys._MEIPASS に展開される
-    base_dir  = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
+    base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
 
     app.setFont(QFont("Meiryo, Segoe UI, sans-serif", 9))
     app.setStyle("Fusion")
@@ -71,9 +67,8 @@ def main():
     from app.ui.theme import get_global_qss
     app.setStyleSheet(get_theme_qss("dark") + "\n" + get_global_qss("dark"))
 
-    app.setQuitOnLastWindowClosed(False)  # 트레이 아이콘을 위해 마지막 창이 닫혀도 앱 유지
+    app.setQuitOnLastWindowClosed(False)
 
-    # 앱 아이콘: Qt 가상 리소스(resources_rc) 우선, 없으면 파일 경로로 폴백
     _resources_rc_loaded = False
     try:
         import resources_rc  # noqa: F401
@@ -88,27 +83,49 @@ def main():
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
 
-    is_tray = '--tray' in sys.argv
+    # ── ウィンドウ管理 ────────────────────────────────────────────────────
+    from app.ui.login_window import LoginWindow
+    from app.core.events import bus
 
-    if not is_tray:
-        splash_pix = QPixmap(400, 200)
-        splash_pix.fill(QColor("#1e1e1e"))
-        painter = QPainter(splash_pix)
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Meiryo", 16, QFont.Bold))
-        painter.drawText(splash_pix.rect(), Qt.AlignCenter, f"{tr('LEE電力モニター')}\n\n{tr('起動中...')}")
-        painter.end()
-        
-        splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
-        splash.show()
-        app.processEvents()
+    _state = {"main_window": None}
 
-    window = MainWindow()
-    if not is_tray:
-        window.show()
-        splash.finish(window)
+    def _show_main(email: str):
+        # ① インメモリセッションメールを確実に設定 (SettingsWidget の管理者判定に使用)
+        from app.core.config import set_session_email
+        set_session_email(email)
+
+        # ② ファイルにも保存 (userinfo API 失敗時のフォールバック)
+        try:
+            from app.api.google.auth import _save_user_email
+            _save_user_email(email)
+        except Exception:
+            pass
+
+        from app.ui.main_window import MainWindow
+        win = MainWindow()
+        _state["main_window"] = win
+        login_win.hide()
+        win.show_with_animation()
+        logger.info(f"メインウィンドウ表示: {email}")
+
+    def _show_login():
+        _state["main_window"] = None   # 旧ウィンドウを GC
+        login_win.reset()
+        login_win.show_animated()
+        logger.info("ログイン画面に戻りました")
+
+    login_win = LoginWindow()
+    login_win.login_success.connect(_show_main)
+    bus.user_logged_out.connect(_show_login)
+
+    # --tray 起動は従来通りメインウィンドウを直接起動 (バックグラウンドデーモン用)
+    if '--tray' in sys.argv:
+        from app.ui.main_window import MainWindow
+        win = MainWindow()
+        _state["main_window"] = win
+        win.hide()
     else:
-        window.hide()
+        login_win.show_animated()
 
     update_manager = UpdateManager(app)
     update_manager.start_check()

@@ -11,11 +11,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Desktop App OAuth 2.0 認証情報
-# Google の公式仕様上、インストール型アプリ (installed application) の Client Secret は
-# 非機密 (non-sensitive) として扱われます。ソースコードへの埋め込みは推奨パターンです。
-# 参照: https://developers.google.com/identity/protocols/oauth2/native-app
-_CLIENT_ID     = "432665692180-8cnsam537cbe9pfl5spk77kocb2rjue6.apps.googleusercontent.com"
-_CLIENT_SECRET = "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"
+# _oauth_creds.py は .gitignore で管理し git には含めない。
+# PyInstaller ビルド時は自動バンドルされる。
+from app.api.google._oauth_creds import CLIENT_ID as _CLIENT_ID, CLIENT_SECRET as _CLIENT_SECRET
 
 
 def _mask_secrets(msg: str) -> str:
@@ -25,9 +23,32 @@ def _mask_secrets(msg: str) -> str:
     return msg
 
 SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.modify",
 ]
+
+
+def _save_user_email(email: str) -> None:
+    """認証済みユーザーのメールアドレスをファイルに保存します。"""
+    from app.core.config import USER_EMAIL_FILE
+    USER_EMAIL_FILE.write_text(
+        json.dumps({"email": email}, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
+def get_current_user_email() -> str | None:
+    """保存済みのログインユーザーのメールアドレスを返します。"""
+    from app.core.config import USER_EMAIL_FILE
+    if not USER_EMAIL_FILE.exists():
+        return None
+    try:
+        data = json.loads(USER_EMAIL_FILE.read_text(encoding="utf-8"))
+        return data.get("email")
+    except Exception:
+        return None
 
 
 def _token_path() -> Path:
@@ -125,10 +146,31 @@ def run_oauth_flow() -> bool:
         flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
         # port=0 → OS がランダムポートを割り当て。127.0.0.1 にのみバインドされ、
         # 外部ネットワークからはアクセス不可 (google_auth_oauthlib の仕様)。
-        creds = flow.run_local_server(port=0)
+        creds = flow.run_local_server(
+            port=0,
+            authorization_prompt_message="",   # stdout への URL 出力を抑制
+            success_message="認証が完了しました。このウィンドウを閉じてください。",
+            timeout_seconds=120,               # 2分でタイムアウト → failed 扱い
+        )
 
         if not _save_token(creds):
             return False
+
+        # ユーザーメールを取得して保存
+        try:
+            import requests as _req
+            resp = _req.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {creds.token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            email = resp.json().get("email", "")
+            if email:
+                _save_user_email(email)
+        except Exception as e:
+            logger.warning(f"ユーザーメール取得に失敗しました: {e}")
+
         logger.info("Google OAuth 인증 성공, 토큰 저장 완료")
         bus.google_auth_changed.emit(True)
         return True
@@ -141,8 +183,10 @@ def run_oauth_flow() -> bool:
 def revoke_credentials() -> None:
     """토큰 파일 삭제(로그아웃) + bus 알림."""
     from app.core.events import bus
+    from app.core.config import USER_EMAIL_FILE
     try:
         _token_path().unlink(missing_ok=True)
+        USER_EMAIL_FILE.unlink(missing_ok=True)
     except OSError:
         pass
     bus.google_auth_changed.emit(False)

@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QGraphicsOpacityEffect, QFrame,
 )
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QPropertyAnimation, QEasingCurve, QSize,
-    QByteArray,
+    Qt, QTimer, Signal, QPropertyAnimation, QVariantAnimation,
+    QEasingCurve, QSize, QByteArray,
 )
 from PySide6.QtGui import QAction, QIcon, QColor, QKeySequence, QShortcut
 from PySide6.QtNetwork import QNetworkInformation
@@ -112,8 +112,40 @@ class MainWindow(QMainWindow):
         self.theme_btn.clicked.connect(self._toggle_theme)
         sidebar_layout.addWidget(self.theme_btn)
 
+        # ── ログインユーザー表示 ────────────────────────────────────────────
+        from app.api.google.auth import get_current_user_email
+        _email = get_current_user_email() or ""
+        self.user_lbl = QLabel(_email)
+        self.user_lbl.setAlignment(Qt.AlignCenter)
+        self.user_lbl.setWordWrap(True)
+        self.user_lbl.setStyleSheet(
+            "color: #888; font-size: 10px; padding: 2px 4px;"
+        )
+        sidebar_layout.addWidget(self.user_lbl)
+
+        self.logout_btn = QPushButton(tr("ログアウト"))
+        self.logout_btn.setObjectName("logoutBtn")
+        self.logout_btn.setFixedHeight(34)
+        self.logout_btn.setStyleSheet(
+            "QPushButton#logoutBtn {"
+            "  margin: 2px 10px 8px 10px;"
+            "  padding: 4px 8px;"
+            "  color: #ff5252;"
+            "  background: transparent;"
+            "  border: 1px solid #ff5252;"
+            "  border-radius: 4px;"
+            "  font-size: 12px;"
+            "}"
+            "QPushButton#logoutBtn:hover {"
+            "  background: rgba(255,82,82,0.12);"
+            "}"
+        )
+        self.logout_btn.clicked.connect(self._do_logout)
+        sidebar_layout.addWidget(self.logout_btn)
+
         sidebar_w = max(160, min(int(screen.width() * 0.12), 210))
         sidebar_container.setMinimumWidth(sidebar_w)
+        self.sidebar_container = sidebar_container   # アニメーション用に保持
         self.main_splitter.addWidget(sidebar_container)
 
         # ── 컨텐츠 영역 ──────────────────────────────────────────────────────
@@ -671,3 +703,86 @@ class MainWindow(QMainWindow):
                 self._retention_worker.wait(1000)
         except RuntimeError:
             pass
+
+    # ── ログアウト ─────────────────────────────────────────────────────────
+
+    def _do_logout(self):
+        """Google 認証を解除してログイン画面に戻る。"""
+        reply = QMessageBox(self)
+        reply.setWindowTitle(tr("ログアウト"))
+        reply.setText(tr("ログアウトしますか？\nGoogle アカウントの認証は解除されます。"))
+        btn_yes = reply.addButton(tr("ログアウト"), QMessageBox.DestructiveRole)
+        reply.addButton(tr("キャンセル"), QMessageBox.RejectRole)
+        reply.exec()
+        if reply.clickedButton() is not btn_yes:
+            return
+
+        # ワーカーを停止
+        bus.app_quitting.emit()
+
+        # Google 認証を解除
+        try:
+            from app.api.google.auth import revoke_credentials
+            revoke_credentials()
+        except Exception:
+            pass
+
+        # ジオメトリを保存してウィンドウを閉じる
+        self._save_geometry()
+        self._is_quitting = True
+
+        # ログアウトシグナルを emit してから閉じる
+        bus.user_logged_out.emit()
+        QTimer.singleShot(50, self.close)
+
+    # ── アセンブルアニメーション ───────────────────────────────────────────
+
+    def show_with_animation(self):
+        """ログイン成功後のアセンブルアニメーションつき表示。
+        サイドバーが左からスライドインし、コンテンツがフェードインする。"""
+        self.show()
+
+        total_w = self.width()
+        target_sidebar_w = self.main_splitter.sizes()[0] if sum(self.main_splitter.sizes()) > 0 else 185
+
+        # サイドバーを幅 0 から開始
+        self.main_splitter.setSizes([0, total_w])
+
+        # サイドバー: 幅アニメーション (スライドイン)
+        self._anim_sw = QVariantAnimation(self)
+        self._anim_sw.setStartValue(0)
+        self._anim_sw.setEndValue(target_sidebar_w)
+        self._anim_sw.setDuration(520)
+        self._anim_sw.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim_sw.valueChanged.connect(
+            lambda v: self.main_splitter.setSizes([int(v), total_w - int(v)])
+        )
+
+        # サイドバー: 不透明度アニメーション
+        eff_sb = QGraphicsOpacityEffect(self.sidebar_container)
+        self.sidebar_container.setGraphicsEffect(eff_sb)
+        self._anim_sb_op = QPropertyAnimation(eff_sb, b"opacity", self)
+        self._anim_sb_op.setStartValue(0.0)
+        self._anim_sb_op.setEndValue(1.0)
+        self._anim_sb_op.setDuration(400)
+        self._anim_sb_op.setEasingCurve(QEasingCurve.OutCubic)
+
+        # コンテンツ: 不透明度アニメーション (200ms 遅延)
+        eff_ct = QGraphicsOpacityEffect(self.content_stack)
+        self.content_stack.setGraphicsEffect(eff_ct)
+        eff_ct.setOpacity(0.0)
+        self._anim_ct_op = QPropertyAnimation(eff_ct, b"opacity", self)
+        self._anim_ct_op.setStartValue(0.0)
+        self._anim_ct_op.setEndValue(1.0)
+        self._anim_ct_op.setDuration(440)
+        self._anim_ct_op.setEasingCurve(QEasingCurve.OutCubic)
+
+        def _cleanup():
+            self.sidebar_container.setGraphicsEffect(None)
+            self.content_stack.setGraphicsEffect(None)
+
+        self._anim_ct_op.finished.connect(_cleanup)
+
+        self._anim_sw.start()
+        self._anim_sb_op.start()
+        QTimer.singleShot(220, self._anim_ct_op.start)

@@ -33,5 +33,9 @@ class GlobalEventBus(QObject):
     gmail_new_mail      = Signal(str, int)   # (label_name, unread_count)
     calendar_updated    = Signal(list)       # イベントリスト更新
 
+    # ── 認証・セッション ──────────────────────────────────────────────────────
+    user_authenticated  = Signal(str)        # ログイン成功 (email)
+    user_logged_out     = Signal()           # ログアウト
+
 
 bus = GlobalEventBus()
