@@ -33,3 +33,8 @@ app/api/google/_oauth_creds.py
 # OS
 Thumbs.db
 .DS_Store
+
+# Tool / generated files
+.claude/
+missing_keys.txt
+resources_rc.py

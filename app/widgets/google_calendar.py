@@ -24,6 +24,7 @@ from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QCursor, QDrag,
 )
 from app.ui.common import BaseWidget
+from app.ui.theme import UIColors
 from app.core.i18n import tr
 from app.core.events import bus
 
@@ -115,20 +116,34 @@ class MiniCalendarWidget(QWidget):
     def set_events(self, events: list, cal_colors: dict):
         self._event_dates.clear(); self._event_colors.clear()
         for ev in events:
-            ds = (ev.get("start", {}).get("date") or
-                  ev.get("start", {}).get("dateTime", ""))
-            if not ds:
-                continue
+            start = ev.get("start", {})
+            end_d = ev.get("end", {})
+            color = cal_colors.get(ev.get("_calendar_id", ""), "#4285F4")
             try:
-                p   = ds[:10].split("-")
-                key = (int(p[0]), int(p[1]), int(p[2]))
-                self._event_dates.add(key)
-                color = cal_colors.get(ev.get("_calendar_id", ""), "#4285F4")
-                self._event_colors.setdefault(key, [])
-                if color not in self._event_colors[key]:
-                    self._event_colors[key].append(color)
+                if "date" in start:
+                    s_date = QDate.fromString(start["date"], Qt.ISODate)
+                    e_date = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+                    d = s_date
+                    while d < e_date:
+                        key = (d.year(), d.month(), d.day())
+                        self._event_dates.add(key)
+                        self._event_colors.setdefault(key, []).append(color) if color not in self._event_colors.get(key, []) else None
+                        d = d.addDays(1)
+                elif "dateTime" in start:
+                    s_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    e_dt = datetime.fromisoformat(end_d.get("dateTime", start["dateTime"]).replace("Z", "+00:00")).astimezone()
+                    s_date = QDate(s_dt.year, s_dt.month, s_dt.day)
+                    e_date = QDate(e_dt.year, e_dt.month, e_dt.day)
+                    if e_dt.hour == 0 and e_dt.minute == 0 and e_dt.second == 0 and s_date != e_date:
+                        e_date = e_date.addDays(-1)
+                    d = s_date
+                    while d <= e_date:
+                        key = (d.year(), d.month(), d.day())
+                        self._event_dates.add(key)
+                        self._event_colors.setdefault(key, []).append(color) if color not in self._event_colors.get(key, []) else None
+                        d = d.addDays(1)
             except Exception as e:
-                logger.debug(f"イベント日付パース失敗 ({ds!r}): {e}")
+                logger.debug(f"Event date parsing failed: {e}")
         self.update()
 
     def navigate(self, delta: int):
@@ -162,15 +177,16 @@ class MiniCalendarWidget(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         W, H = self.width(), self.height()
         d = self._is_dark
+        pc = UIColors.get_panel_colors(d)
 
-        bg       = QColor("#1e1e1e" if d else "#ffffff")
-        txt_c    = QColor("#e0e0e0" if d else "#212121")
-        sub_c    = QColor("#888888")
-        sat_c    = QColor("#42A5F5")   # 土: 파랑
-        sun_c    = QColor("#EF5350")   # 日: 빨강
-        today_bg = QColor("#1a73e8")
-        sel_bg   = QColor("#1e4d78" if d else "#1a73e8")
-        rng_bg   = QColor(30, 77, 120, 90) if d else QColor(26, 115, 232, 45)
+        bg       = QColor(pc["bg"])
+        txt_c    = QColor(pc["text"])
+        sub_c    = QColor(pc["text_dim"])
+        sat_c    = QColor("#42A5F5" if d else "#1a73e8")
+        sun_c    = QColor("#EF5350" if d else "#d32f2f")
+        today_bg = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+        sel_bg   = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+        rng_bg   = QColor(sel_bg); rng_bg.setAlpha(60 if d else 30)
 
         p.fillRect(0, 0, W, H, bg)
         HEADER_H = 36; DAY_H_ROW = 20
@@ -240,10 +256,10 @@ class MiniCalendarWidget(QWidget):
 
             colors = self._event_colors.get(key, [])
             if colors:
-                dot_r = 3; total = min(len(colors), 3)
+                dot_r = 2; total = min(len(colors), 3)
                 gap = dot_r * 2 + 2
-                sx  = cx + cw // 2 - (total * gap) // 2
-                dy  = cy + ch - dot_r - 3
+                sx  = cx + cw // 2 - (total * gap) // 2 + 1
+                dy  = cy + ch - dot_r - 4
                 p.setPen(Qt.NoPen)
                 for di, c in enumerate(colors[:3]):
                     p.setBrush(QColor(c))
@@ -326,15 +342,16 @@ class _WeekStrip(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         W, H = self.width(), self.height()
         d = self._is_dark
+        pc = UIColors.get_panel_colors(d)
 
-        bg    = QColor("#252526" if d else "#f8f9fa")
-        txt   = QColor("#e0e0e0" if d else "#3c4043")
-        sub   = QColor("#888888" if d else "#70757a")
-        sat_c   = QColor("#4285F4")   # 土: 파랑
-        sun_c   = QColor("#EA4335")   # 日: 빨강
-        today_c = QColor("#1a73e8")
-        sel_c   = QColor("#0e639c" if d else "#1a73e8")
-        rng_c   = QColor(30, 77, 120, 100) if d else QColor(26, 115, 232, 40)
+        bg      = QColor(pc["bg"])
+        txt     = QColor(pc["text"])
+        sub     = QColor(pc["text_dim"])
+        sat_c   = QColor("#42A5F5" if d else "#1a73e8")
+        sun_c   = QColor("#EF5350" if d else "#d32f2f")
+        today_c = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+        sel_c   = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+        rng_c   = QColor(sel_c); rng_c.setAlpha(60 if d else 30)
 
         p.fillRect(0, 0, W, H, bg)
 
@@ -421,13 +438,15 @@ class _DayColHeader(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         W, H = self.width(), self.H
         d = self._is_dark
+        pc = UIColors.get_panel_colors(d)
 
-        bg      = QColor("#252526" if d else "#f8f9fa")
-        txt     = QColor("#e0e0e0" if d else "#3c4043")
-        sub     = QColor("#888" if d else "#70757a")
-        sat_c   = QColor("#4285F4")   # 土: 파랑
-        sun_c   = QColor("#EA4335")   # 日: 빨강
-        today_c = QColor("#1a73e8"); sel_c = QColor("#0e639c" if d else "#1a73e8")
+        bg      = QColor(pc["bg"])
+        txt     = QColor(pc["text"])
+        sub     = QColor(pc["text_dim"])
+        sat_c   = QColor("#42A5F5" if d else "#1a73e8")
+        sun_c   = QColor("#EF5350" if d else "#d32f2f")
+        today_c = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+        sel_c   = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
 
         p.fillRect(0, 0, W, H, bg)
         dow = self._date.dayOfWeek()
@@ -471,14 +490,101 @@ class _TimeRuler(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         d = self._is_dark
-        p.fillRect(0, 0, RULER_W, DAY_H, QColor("#1e1e1e" if d else "#ffffff"))
+        pc = UIColors.get_panel_colors(d)
+        p.fillRect(0, 0, RULER_W, DAY_H, QColor(pc["bg"]))
         p.setFont(QFont("Segoe UI", 8))
-        p.setPen(QColor("#666666" if d else "#70757a"))
+        p.setPen(QColor(pc["text_dim"]))
         for hour in range(1, 24):
             y = int(hour * HOUR_H)
             p.drawText(QRect(0, y - 9, RULER_W - 6, 18),
                        Qt.AlignRight | Qt.AlignVCenter, f"{hour:02d}:00")
         p.end()
+
+
+# ── AllDayColumn (종일 일정 전용 고정 영역) ──────────────────────────────────
+
+class _AllDayColumn(QWidget):
+    """스크롤 영역 바깥에 상단 고정되는 종일 이벤트 전용 열."""
+    event_clicked = Signal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._date: QDate = QDate.currentDate()
+        self._events: list = []
+        self._cal_colors: dict = {}
+        self._is_dark: bool = True
+        self._is_today: bool = False
+        self._hovered_ev = None
+        self.setMouseTracking(True)
+
+    def set_day(self, date: QDate, events: list, cal_colors: dict, is_today: bool = False):
+        self._date = date
+        self._events = events
+        self._cal_colors = cal_colors
+        self._is_today = is_today
+        self.update()
+
+    def set_theme(self, is_dark: bool):
+        self._is_dark = is_dark
+        self.update()
+
+    def _ev_rect(self, idx: int) -> QRect:
+        return QRect(2, 2 + idx * 22, self.width() - 4, 20)
+
+    def _ev_at(self, pos: QPoint) -> dict | None:
+        for i, ev in enumerate(self._events):
+            if self._ev_rect(i).contains(pos):
+                return ev
+        return None
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        W, H = self.width(), self.height()
+        d = self._is_dark
+        pc = UIColors.get_panel_colors(d)
+
+        # 배경 그리기 (오늘 파란 틴트 적용)
+        p.fillRect(0, 0, W, H, QColor(pc["bg"]))
+        if self._is_today:
+            tint = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT); tint.setAlpha(14 if d else 9)
+            p.fillRect(0, 0, W, H, tint)
+
+        txt_c = QColor(pc["text"])
+        for i, ev in enumerate(self._events):
+            rect = self._ev_rect(i)
+            color = QColor(self._cal_colors.get(ev.get("_calendar_id", ""), "#4285F4"))
+            chip_bg = QColor(color); chip_bg.setAlpha(60 if d else 45)
+            
+            p.setPen(Qt.NoPen); p.setBrush(chip_bg)
+            p.drawRoundedRect(rect, 3, 3)
+            p.setBrush(color)
+            p.drawRoundedRect(rect.x(), rect.y(), 3, rect.height(), 1, 1)
+            
+            p.setPen(txt_c); p.setFont(QFont("Segoe UI", 7))
+            title = ev.get("summary", tr("(タイトルなし)"))
+            t_rect = QRect(rect.x() + 6, rect.y() + 2, rect.width() - 8, rect.height() - 4)
+            p.drawText(t_rect, Qt.AlignLeft | Qt.AlignVCenter, title[:20] + ("…" if len(title) > 20 else ""))
+        p.end()
+
+    def mouseMoveEvent(self, e):
+        ev = self._ev_at(e.position().toPoint())
+        if ev:
+            self.setCursor(QCursor(Qt.PointingHandCursor))
+            if ev != self._hovered_ev:
+                self._hovered_ev = ev
+                self.setToolTip(ev.get("summary", tr("(タイトルなし)")))
+        else:
+            self.setCursor(QCursor(Qt.ArrowCursor))
+            if self._hovered_ev:
+                self._hovered_ev = None
+                self.setToolTip("")
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            ev = self._ev_at(e.position().toPoint())
+            if ev:
+                self.event_clicked.emit(ev)
 
 
 # ── TimedDayColumn ────────────────────────────────────────────────────────────
@@ -555,8 +661,20 @@ class _TimedDayColumn(QWidget):
                     start["dateTime"].replace("Z", "+00:00")).astimezone()
                 e_dt  = datetime.fromisoformat(
                     end_d["dateTime"].replace("Z", "+00:00")).astimezone()
-                s_min = s_dt.hour * 60 + s_dt.minute
-                e_min = e_dt.hour * 60 + e_dt.minute
+                
+                s_date = QDate(s_dt.year, s_dt.month, s_dt.day)
+                e_date = QDate(e_dt.year, e_dt.month, e_dt.day)
+                
+                if s_date < self._date:
+                    s_min = 0
+                else:
+                    s_min = s_dt.hour * 60 + s_dt.minute
+                    
+                if e_date > self._date or (e_date == self._date and e_dt.hour == 0 and e_dt.minute == 0 and s_date < e_date):
+                    e_min = 24 * 60
+                else:
+                    e_min = e_dt.hour * 60 + e_dt.minute
+                    
                 e_min = max(s_min + SNAP_MIN, min(e_min, 24 * 60))
                 timed.append({"ev": ev, "s_min": s_min, "e_min": e_min})
             except Exception as e:
@@ -599,9 +717,6 @@ class _TimedDayColumn(QWidget):
         h     = max(SNAP_MIN, int(_min_to_y(item["e_min"])) - y)
         return QRect(x, y, w, h)
 
-    def _allday_events(self) -> list:
-        return [ev for ev in self._events if "date" in ev.get("start", {})]
-
     # ── 그리기 ────────────────────────────────────────────────────────────────
 
     def paintEvent(self, _event):
@@ -609,36 +724,20 @@ class _TimedDayColumn(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         W = self.width()
         d = self._is_dark
+        pc = UIColors.get_panel_colors(d)
 
-        bg_c    = QColor("#1e1e1e" if d else "#ffffff")
-        grid_c  = QColor("#2e2e2e" if d else "#dadce0")   # 시간선 강화
-        half_c  = QColor("#262626" if d else "#edeef0")   # 30분선
-        now_c   = QColor("#EA4335")
-        txt_c   = QColor("#e0e0e0" if d else "#212121")
-        allday_bg = QColor("#252526" if d else "#eef1ff")
+        bg_c    = QColor(pc["bg"])
+        grid_c  = QColor(pc["border"])
+        half_c  = QColor(pc["border"]); half_c.setAlpha(half_c.alpha() // 2)
+        now_c   = QColor("#EA4335" if d else "#d32f2f")
+        txt_c   = QColor(pc["text"])
 
         p.fillRect(0, 0, W, DAY_H, bg_c)
 
         # 오늘 열 파란 틴트 — 한눈에 구분
         if self._is_today:
-            tint = QColor("#1a73e8"); tint.setAlpha(14 if d else 9)
+            tint = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT); tint.setAlpha(14 if d else 9)
             p.fillRect(0, 0, W, DAY_H, tint)
-
-        # 종일 이벤트 (상단 고정 칩)
-        allday = self._allday_events()
-        for ai, ev in enumerate(allday):
-            cal_id = ev.get("_calendar_id", "")
-            color  = QColor(self._cal_colors.get(cal_id, "#4285F4"))
-            chip_bg = QColor(color); chip_bg.setAlpha(60 if d else 45)
-            cy_ad = ai * 22
-            p.setPen(Qt.NoPen); p.setBrush(chip_bg)
-            p.drawRoundedRect(2, cy_ad, W - 4, 20, 3, 3)
-            # 왼쪽 강조 바 (종일 이벤트)
-            p.setBrush(color)
-            p.drawRoundedRect(2, cy_ad, 3, 20, 1, 1)
-            p.setPen(txt_c); p.setFont(QFont("Segoe UI", 7))
-            p.drawText(QRect(8, cy_ad + 2, W - 12, 16), Qt.AlignLeft | Qt.AlignVCenter,
-                       (ev.get("summary", "") or "")[:20])
 
         # 시간 그리드선
         for hour in range(24):
@@ -729,8 +828,9 @@ class _TimedDayColumn(QWidget):
         if self._creating and self._create_e > self._create_s:
             y1 = int(_min_to_y(self._create_s))
             y2 = int(_min_to_y(self._create_e))
-            gc = QColor("#1a73e8"); gc.setAlpha(90)
-            p.setPen(QPen(QColor("#1a73e8"), 1))
+            accent = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+            gc = QColor(accent); gc.setAlpha(90)
+            p.setPen(QPen(accent, 1))
             p.setBrush(gc)
             p.drawRoundedRect(2, y1, W - 4, max(4, y2 - y1), 3, 3)
             p.setPen(QColor("white"))
@@ -748,8 +848,9 @@ class _TimedDayColumn(QWidget):
             gy1     = int(_min_to_y(gs_min))
             gy2     = int(_min_to_y(ge_min))
             gh      = max(8, gy2 - gy1)
-            ghost_fill = QColor("#1a73e8"); ghost_fill.setAlpha(55)
-            ghost_bd   = QColor("#1a73e8"); ghost_bd.setAlpha(200)
+            accent = QColor(UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT)
+            ghost_fill = QColor(accent); ghost_fill.setAlpha(55)
+            ghost_bd   = QColor(accent); ghost_bd.setAlpha(200)
             p.setPen(QPen(ghost_bd, 1.5))
             p.setBrush(ghost_fill)
             p.drawRoundedRect(2, gy1, W - 4, gh, 3, 3)
@@ -969,7 +1070,9 @@ class _MultiDayView(QWidget):
         super().__init__(parent)
         self._columns:  list[_TimedDayColumn] = []
         self._headers:  list[_DayColHeader]   = []
+        self._allday_columns: list[_AllDayColumn] = []
         self._col_seps: list[QFrame]          = []
+        self._allday_seps: list[QFrame]       = []
         self._build_ui()
 
     def _build_ui(self):
@@ -999,6 +1102,31 @@ class _MultiDayView(QWidget):
         sep_line.setFrameShape(QFrame.HLine); sep_line.setFixedHeight(1)
         main.addWidget(sep_line)
 
+        # ── 종일 이벤트 고정 행 (스크롤 없음) ─────────────────────────────────
+        self._allday_row_widget = QWidget()
+        self._allday_row_widget.setMinimumHeight(24)
+        allday_layout = QHBoxLayout(self._allday_row_widget)
+        allday_layout.setContentsMargins(0, 0, 0, 0); allday_layout.setSpacing(0)
+        
+        spacer_ad = QWidget(); spacer_ad.setFixedWidth(RULER_W); allday_layout.addWidget(spacer_ad)
+        rs_ad = QFrame(); rs_ad.setObjectName("colSep")
+        rs_ad.setFrameShape(QFrame.VLine); rs_ad.setFixedWidth(1); allday_layout.addWidget(rs_ad)
+
+        for i in range(self._MAX_COLS):
+            ad_col = _AllDayColumn()
+            ad_col.event_clicked.connect(self.event_clicked)
+            self._allday_columns.append(ad_col); allday_layout.addWidget(ad_col, 1)
+            if i < self._MAX_COLS - 1:
+                sep = QFrame(); sep.setObjectName("colSep")
+                sep.setFrameShape(QFrame.VLine); sep.setFixedWidth(1)
+                self._allday_seps.append(sep); allday_layout.addWidget(sep)
+        
+        main.addWidget(self._allday_row_widget)
+
+        sep_line2 = QFrame(); sep_line2.setObjectName("colHdrSep")
+        sep_line2.setFrameShape(QFrame.HLine); sep_line2.setFixedHeight(1)
+        main.addWidget(sep_line2)
+
         # ── 스크롤 영역 ───────────────────────────────────────────────────────
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -1025,7 +1153,7 @@ class _MultiDayView(QWidget):
         main.addWidget(self._scroll, 1)
 
         # 초기 스크롤: 오전 8시
-        QTimer.singleShot(150, lambda: self._scroll.verticalScrollBar().setValue(
+        QTimer.singleShot(2250, lambda: self._scroll.verticalScrollBar().setValue(
             max(0, int(8 * HOUR_H - self._scroll.height() / 3))
         ))
 
@@ -1034,31 +1162,67 @@ class _MultiDayView(QWidget):
         n_days = min(max(sel_start.daysTo(sel_end) + 1, 1), self._MAX_COLS)
         today  = QDate.currentDate()
 
-        dke: dict[str, list] = {}
+        dke_timed: dict[str, list] = {}
+        dke_allday: dict[str, list] = {}
+        
         for ev in events:
-            ds = (ev.get("start", {}).get("date") or
-                  ev.get("start", {}).get("dateTime", ""))[:10]
-            if ds:
-                dke.setdefault(ds, []).append(ev)
+            start = ev.get("start", {})
+            end_d = ev.get("end", {})
+            try:
+                if "date" in start:
+                    s_date = QDate.fromString(start["date"], Qt.ISODate)
+                    e_date = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+                    d = s_date
+                    while d < e_date:
+                        key = f"{d.year()}-{d.month():02d}-{d.day():02d}"
+                        dke_allday.setdefault(key, []).append(ev)
+                        d = d.addDays(1)
+                elif "dateTime" in start:
+                    s_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    e_dt = datetime.fromisoformat(end_d.get("dateTime", start["dateTime"]).replace("Z", "+00:00")).astimezone()
+                    s_date = QDate(s_dt.year, s_dt.month, s_dt.day)
+                    e_date = QDate(e_dt.year, e_dt.month, e_dt.day)
+                    if e_dt.hour == 0 and e_dt.minute == 0 and e_dt.second == 0 and s_date != e_date:
+                        e_date = e_date.addDays(-1)
+                    d = s_date
+                    while d <= e_date:
+                        key = f"{d.year()}-{d.month():02d}-{d.day():02d}"
+                        dke_timed.setdefault(key, []).append(ev)
+                        d = d.addDays(1)
+            except Exception as e:
+                logger.debug(f"Event parsing failed: {e}")
+
+        # 종일 이벤트 행의 동적 높이 계산
+        max_allday = 0
+        for i in range(self._MAX_COLS):
+            if i < n_days:
+                d = sel_start.addDays(i)
+                key = f"{d.year()}-{d.month():02d}-{d.day():02d}"
+                max_allday = max(max_allday, len(dke_allday.get(key, [])))
+        self._allday_row_widget.setFixedHeight(max(24, max_allday * 22 + 4))
 
         for i in range(self._MAX_COLS):
             if i < n_days:
-                self._columns[i].show(); self._headers[i].show()
+                self._columns[i].show(); self._headers[i].show(); self._allday_columns[i].show()
                 d   = sel_start.addDays(i)
                 key = f"{d.year()}-{d.month():02d}-{d.day():02d}"
-                self._columns[i].set_day(d, dke.get(key, []), cal_colors,
-                                          is_today=(d == today), is_selected=True)
+                self._columns[i].set_day(d, dke_timed.get(key, []), cal_colors, is_today=(d == today), is_selected=True)
+                self._allday_columns[i].set_day(d, dke_allday.get(key, []), cal_colors, is_today=(d == today))
                 self._headers[i].set_date(d, d == today, True)
             else:
-                self._columns[i].hide(); self._headers[i].hide()
+                self._columns[i].hide(); self._headers[i].hide(); self._allday_columns[i].hide()
 
         for i, sep in enumerate(self._col_seps):
+            sep.setVisible(i < n_days - 1)
+        for i, sep in enumerate(self._allday_seps):
             sep.setVisible(i < n_days - 1)
 
     def set_theme(self, is_dark: bool):
         self._ruler.set_theme(is_dark)
         for col in self._columns:
             col.set_theme(is_dark)
+        for ad_col in self._allday_columns:
+            ad_col.set_theme(is_dark)
         for hdr in self._headers:
             hdr.set_theme(is_dark)
 
@@ -1182,16 +1346,19 @@ class EventDetailDialog(QDialog):
 
     def _apply_theme(self):
         d = self._is_dark
-        bg = "#1e1e1e" if d else "#ffffff"; bd = "#3e3e42" if d else "#e0e0e0"
-        txt = "#e0e0e0" if d else "#212121"
+        pc = UIColors.get_panel_colors(d)
+        bg = pc["bg"]
+        bd = pc["border"]
+        txt = pc["text"]
+        accent = UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT
         self.setStyleSheet(f"""
             QDialog, QWidget {{ background: {bg}; color: {txt}; }}
             QFrame {{ border: none; }}
             QFrame[frameShape="4"] {{ border-top: 1px solid {bd}; }}
             QPushButton#primaryActionBtn {{
-                background: #0e639c; color: #fff; border: none;
+                background: {accent}; color: #fff; border: none;
                 border-radius: 4px; padding: 0 16px; font-weight: bold; }}
-            QPushButton#primaryActionBtn:hover {{ background: #1177bb; }}
+            QPushButton#primaryActionBtn:hover {{ background: {'#1177bb' if d else '#1976d2'}; }}
             QPushButton#secondaryActionBtn {{
                 background: {'#3e3e42' if d else '#e0e0e0'}; color: {txt};
                 border: none; border-radius: 4px; padding: 0 12px; }}
@@ -1201,11 +1368,13 @@ class EventDetailDialog(QDialog):
                 border: 1px solid #5c1a1a; border-radius: 4px; padding: 0 12px; }}
             QPushButton#deleteBtnDlg:hover {{ background: #5c1a1a; }}
             QLineEdit, QTextEdit, QDateTimeEdit {{
-                background: {'#2d2d2d' if d else '#f8f8f8'};
+                background: {'#2d2d2d' if d else '#ffffff'};
                 border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
+            QLineEdit:focus, QTextEdit:focus, QDateTimeEdit:focus {{ border: 1px solid {accent}; }}
             QComboBox {{
-                background: {'#3d3d3d' if d else '#f0f0f0'};
+                background: {'#3d3d3d' if d else '#ffffff'};
                 border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
+            QComboBox:focus {{ border: 1px solid {accent}; }}
             QCheckBox {{ color: {txt}; }}
         """)
 
@@ -1385,7 +1554,7 @@ class GoogleCalendarWidget(BaseWidget):
 
         self._build_ui()
         bus.google_auth_changed.connect(self._on_auth_changed)
-        QTimer.singleShot(0, self._check_auth_and_load)
+        QTimer.singleShot(2250, self._check_auth_and_load)
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -1500,7 +1669,7 @@ class GoogleCalendarWidget(BaseWidget):
     # ── 데이터 ────────────────────────────────────────────────────────────────
 
     def _check_auth_and_load(self):
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if is_authenticated():
             self._auth_overlay.hide(); self._refresh_calendars()
             self._start_auto_timer()
@@ -1513,12 +1682,12 @@ class GoogleCalendarWidget(BaseWidget):
 
     def _auto_refresh(self):
         """조용한 자동 갱신."""
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if is_authenticated():
             self._refresh_events()
 
     def _refresh_calendars(self):
-        from app.api.calendar_api import FetchCalendarListWorker
+        from app.api.google.calendar import FetchCalendarListWorker
         self._status_lbl.setText(tr("読込中..."))
         w = FetchCalendarListWorker()
         w.data_fetched.connect(self._on_calendars_fetched)
@@ -1539,8 +1708,9 @@ class GoogleCalendarWidget(BaseWidget):
                 self._sel_start, self._sel_end, [], self._cal_colors)
             return
 
-        from app.api.calendar_api import FetchEventsWorker, make_time_range
+        from app.api.google.calendar import FetchEventsWorker, make_time_range
         self._status_lbl.setText(tr("読込中..."))
+        self.set_loading(True, self._multi_day_view)
         time_min, time_max = make_time_range(self._sel_start)
         w = FetchEventsWorker(list(self._cal_enabled), time_min, time_max)
         w.data_fetched.connect(self._on_events_fetched)
@@ -1587,15 +1757,33 @@ class GoogleCalendarWidget(BaseWidget):
         self._refresh_events()
 
     def _on_events_fetched(self, events: list):
+        self.set_loading(False, self._multi_day_view)
         self._events = events
         ev_dates: set = set()
         for ev in events:
-            ds = (ev.get("start", {}).get("date") or ev.get("start", {}).get("dateTime", ""))
-            if not ds: continue
+            start = ev.get("start", {})
+            end_d = ev.get("end", {})
             try:
-                p = ds[:10].split("-"); ev_dates.add((int(p[0]), int(p[1]), int(p[2])))
+                if "date" in start:
+                    s_date = QDate.fromString(start["date"], Qt.ISODate)
+                    e_date = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+                    d = s_date
+                    while d < e_date:
+                        ev_dates.add((d.year(), d.month(), d.day()))
+                        d = d.addDays(1)
+                elif "dateTime" in start:
+                    s_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    e_dt = datetime.fromisoformat(end_d.get("dateTime", start["dateTime"]).replace("Z", "+00:00")).astimezone()
+                    s_date = QDate(s_dt.year, s_dt.month, s_dt.day)
+                    e_date = QDate(e_dt.year, e_dt.month, e_dt.day)
+                    if e_dt.hour == 0 and e_dt.minute == 0 and e_dt.second == 0 and s_date != e_date:
+                        e_date = e_date.addDays(-1)
+                    d = s_date
+                    while d <= e_date:
+                        ev_dates.add((d.year(), d.month(), d.day()))
+                        d = d.addDays(1)
             except Exception as e:
-                logger.debug(f"イベント日付セット構築失敗 ({ds!r}): {e}")
+                logger.debug(f"イベント日付セット構築失敗: {e}")
         self._event_date_set = ev_dates
         cnt = len(events)
         self._status_lbl.setText(tr("{0}件のイベント").format(cnt) if cnt else tr("イベントなし"))
@@ -1617,9 +1805,19 @@ class GoogleCalendarWidget(BaseWidget):
         dlg.exec()
 
     def _on_range_selected(self, start: QDate, end: QDate):
-        self._sel_start = start; self._sel_end = end
-        if (start.year() != self._week_strip._week_start().year() or
-                start.month() != self._week_strip._week_start().month()):
+        if start == end:
+            prev_ws = _week_sunday(self._sel_start)
+            prev_we = prev_ws.addDays(6)
+            if prev_ws <= start <= prev_we:
+                self._sel_start = start; self._sel_end = start
+            else:
+                self._sel_start = _week_sunday(start)
+                self._sel_end = self._sel_start.addDays(6)
+        else:
+            self._sel_start = start; self._sel_end = end
+
+        if (self._sel_start.year() != self._week_strip._week_start().year() or
+                self._sel_start.month() != self._week_strip._week_start().month()):
             self._refresh_events()
         else:
             self._render_view()
@@ -1680,7 +1878,7 @@ class GoogleCalendarWidget(BaseWidget):
         self._right_stack.setCurrentIndex(1)
 
     def _on_save_event(self, cal_id: str, body: dict, event_id: str):
-        from app.api.calendar_api import CreateEventWorker, UpdateEventWorker
+        from app.api.google.calendar import CreateEventWorker, UpdateEventWorker
         w = UpdateEventWorker(cal_id, event_id, body) if event_id \
             else CreateEventWorker(cal_id, body)
         w.success.connect(lambda _: self._on_save_success())
@@ -1691,7 +1889,7 @@ class GoogleCalendarWidget(BaseWidget):
         self._right_stack.setCurrentIndex(0); self._refresh_events()
 
     def _on_delete_event_from_dialog(self, cal_id: str, event_id: str):
-        from app.api.calendar_api import DeleteEventWorker
+        from app.api.google.calendar import DeleteEventWorker
         w = DeleteEventWorker(cal_id, event_id)
         w.success.connect(lambda _: self._refresh_events())
         w.error.connect(self._on_error)
@@ -1734,7 +1932,7 @@ class GoogleCalendarWidget(BaseWidget):
             except Exception as exc:
                 logger.error(f"Drop time calculation error: {exc}"); return
 
-        from app.api.calendar_api import UpdateEventWorker
+        from app.api.google.calendar import UpdateEventWorker
         w = UpdateEventWorker(cal_id, event_id, body)
         w.success.connect(lambda _: self._refresh_events())
         w.error.connect(self._on_error)
@@ -1765,7 +1963,7 @@ class GoogleCalendarWidget(BaseWidget):
             body["start"] = {"dateTime": new_s_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
             body["end"]   = {"dateTime": new_e_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
 
-            from app.api.calendar_api import UpdateEventWorker
+            from app.api.google.calendar import UpdateEventWorker
             w = UpdateEventWorker(cal_id, event_id, body)
             w.success.connect(lambda _: self._refresh_events())
             w.error.connect(self._on_error)
@@ -1775,6 +1973,7 @@ class GoogleCalendarWidget(BaseWidget):
             logger.error(f"Resize time calc error: {exc}")
 
     def _on_error(self, err: str):
+        self.set_loading(False, self._multi_day_view)
         self._status_lbl.setText(tr("エラー")); logger.error(f"Calendar error: {err}")
 
     def _on_auth_changed(self, authenticated: bool):
@@ -1784,6 +1983,7 @@ class GoogleCalendarWidget(BaseWidget):
         else:
             self._auth_overlay.show()
             self._auto_timer.stop()
+            self.set_loading(False, self._multi_day_view)
             self._multi_day_view.update_view(self._sel_start, self._sel_end, [], {})
             self._status_lbl.setText("")
 
@@ -1798,10 +1998,12 @@ class GoogleCalendarWidget(BaseWidget):
 
     def apply_theme_custom(self):
         d   = self.is_dark
-        bg  = "#1e1e1e" if d else "#ffffff"
+        pc  = UIColors.get_panel_colors(d)
+        bg  = pc["bg"]
         bg2 = "#252526" if d else "#f5f5f5"
-        bd  = "#3e3e42" if d else "#e0e0e0"
-        txt = "#e0e0e0" if d else "#212121"
+        bd  = pc["border"]
+        txt = pc["text"]
+        accent = UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT
         self.setStyleSheet(f"""
             QWidget {{ background: {bg}; color: {txt}; }}
             QFrame#calHdr  {{ background: {bg2}; border-bottom: 1px solid {bd}; }}
@@ -1809,13 +2011,13 @@ class GoogleCalendarWidget(BaseWidget):
             QFrame#colSep   {{ border: none; border-left: 1px solid {bd}; max-width: 1px; }}
             QFrame#colHdrSep {{ border: none; border-top: 1px solid {bd}; max-height: 1px; }}
             QPushButton#primaryActionBtn {{
-                background: #0e639c; color: #fff; border: none;
+                background: {accent}; color: #fff; border: none;
                 border-radius: 4px; padding: 0 14px; font-weight: bold; }}
-            QPushButton#primaryActionBtn:hover {{ background: #1177bb; }}
+            QPushButton#primaryActionBtn:hover {{ background: {'#1177bb' if d else '#1976d2'}; }}
             QPushButton#todayBtn {{
                 background: {'#3e3e42' if d else '#e8f0fe'};
                 color: {'#e0e0e0' if d else '#1a73e8'};
-                border: 1px solid {'#555' if d else '#1a73e8'};
+                border: 1px solid {bd};
                 border-radius: 4px; font-weight: bold; }}
             QPushButton#todayBtn:hover {{ background: {'#505055' if d else '#d2e3fc'}; }}
             QPushButton#secondaryActionBtn {{
@@ -1823,11 +2025,13 @@ class GoogleCalendarWidget(BaseWidget):
                 color: {txt}; border: none; border-radius: 4px; padding: 0 12px; }}
             QPushButton#secondaryActionBtn:hover {{ background: {'#505055' if d else '#d0d0d0'}; }}
             QLineEdit, QTextEdit, QDateTimeEdit {{
-                background: {'#2d2d2d' if d else '#f8f8f8'};
+                background: {'#2d2d2d' if d else '#ffffff'};
                 border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
+            QLineEdit:focus, QTextEdit:focus, QDateTimeEdit:focus {{ border: 1px solid {accent}; }}
             QComboBox {{
-                background: {'#3d3d3d' if d else '#f0f0f0'};
+                background: {'#3d3d3d' if d else '#ffffff'};
                 border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
+            QComboBox:focus {{ border: 1px solid {accent}; }}
             QCheckBox {{ color: {txt}; spacing: 6px; }}
             QScrollBar:vertical {{ background: {bg2}; width: 6px; }}
             QScrollBar::handle:vertical {{ background: {'#555' if d else '#ccc'}; border-radius: 3px; }}
@@ -1843,6 +2047,6 @@ class GoogleCalendarWidget(BaseWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if is_authenticated() and not self._calendars:
             self._refresh_calendars()

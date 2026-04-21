@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QColor
 from app.core.config import HJKS_REGIONS, HJKS_METHODS, HJKS_COLORS, load_settings
-from app.api.hjks_api import FetchHjksWorker, AggregateHjksWorker
+from app.api.market.hjks import FetchHjksWorker, AggregateHjksWorker
 from app.ui.common import BaseWidget
 from app.core.i18n import tr
 from app.core.events import bus
@@ -30,7 +30,7 @@ class HjksWidget(BaseWidget):
         self._refresh_timer.timeout.connect(self._update_chart)
 
         self._build_ui()
-        self.fetch_data()
+        QTimer.singleShot(2250, self.fetch_data)
 
         # 다른 위젯과 API 요청이 겹치지 않도록 15초 지연 후 정규 타이머 시작
         self.setup_timer(self.settings.get("hjks_interval", 180), self.fetch_data, stagger_seconds=15)
@@ -407,4 +407,3 @@ class HjksWidget(BaseWidget):
         self.tooltip_label.move(tx, ty)
         self.tooltip_label.raise_()
         self.tooltip_label.show()
-

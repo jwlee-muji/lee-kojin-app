@@ -19,7 +19,7 @@ from app.core.config import (
 )
 from app.core.database import get_db_connection, validate_column_name
 from app.core.i18n import tr
-from app.api.imbalance_api import UpdateImbalanceWorker
+from app.api.market.imbalance import UpdateImbalanceWorker
 from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
@@ -331,7 +331,7 @@ class ImbalanceWidget(BaseWidget):
         self.setup_timer(self.settings.get("imbalance_interval", 5), self.update_database)
 
         # 최초 기동 시 자동 수집 및 표시
-        self.update_database()
+        QTimer.singleShot(2250, self.update_database)
 
     def set_loading(self, is_loading: bool):
         super().set_loading(is_loading, self.splitter)

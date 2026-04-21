@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDoubleSpinBox, QSpinBox, QGroupBox, QFormLayout, QMessageBox,
     QScrollArea, QCheckBox, QComboBox, QFrame, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QPropertyAnimation
 from PySide6.QtWidgets import QApplication
 from app.core.config import load_settings, save_settings
 from app.core.platform import set_autostart
@@ -28,6 +28,50 @@ _GEMINI_MODELS = [
 _GEMINI_MODEL_CODES = [v for _, v in _GEMINI_MODELS]
 
 _MAX_TOKENS_OPTIONS = [512, 1024, 2048, 4096]
+
+
+# ── Admin Workers ────────────────────────────────────────────────────────────
+
+class FetchUsersWorker(QThread):
+    success = Signal(list)
+    error = Signal(str)
+    def run(self):
+        try:
+            from app.api.google.sheets import get_all_users
+            self.success.emit(get_all_users())
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RemoveUserWorker(QThread):
+    success = Signal()
+    error = Signal(str)
+    def __init__(self, email):
+        super().__init__()
+        self.email = email
+    def run(self):
+        try:
+            from app.api.google.sheets import remove_user
+            remove_user(self.email)
+            self.success.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class AddUserWorker(QThread):
+    success = Signal()
+    error = Signal(str)
+    def __init__(self, email, name):
+        super().__init__()
+        self.email = email
+        self.name = name
+    def run(self):
+        try:
+            from app.api.google.sheets import add_user
+            add_user(self.email, self.name)
+            self.success.emit()
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class SettingsWidget(BaseWidget):
@@ -64,7 +108,6 @@ class SettingsWidget(BaseWidget):
         # スクロールエリア
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         c = QVBoxLayout(container)
@@ -102,8 +145,16 @@ class SettingsWidget(BaseWidget):
 
         self.toast_label = QLabel()
         self.toast_label.setObjectName("successToast")
-        self.toast_label.setStyleSheet("font-size: 12px;")
+        self.toast_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #4caf50;")
+        
+        self._toast_effect = QGraphicsOpacityEffect(self.toast_label)
+        self.toast_label.setGraphicsEffect(self._toast_effect)
+        self._toast_anim = QPropertyAnimation(self._toast_effect, b"opacity")
+        self._toast_anim.setDuration(300)
         self.toast_label.hide()
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._hide_toast)
 
         self.btn_reset = QPushButton(tr("初期化"))
         self.btn_reset.setObjectName("secondaryActionBtn")
@@ -138,9 +189,9 @@ class SettingsWidget(BaseWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         return grp, form
 
-    def _note(self, text: str) -> QLabel:
+    def _note(self, text: str, word_wrap: bool = False) -> QLabel:
         lbl = QLabel(text)
-        lbl.setWordWrap(True)
+        lbl.setWordWrap(word_wrap)
         self._note_labels.append(lbl)
         return lbl
 
@@ -150,7 +201,7 @@ class SettingsWidget(BaseWidget):
         w.setRange(lo, hi)
         w.setSuffix(suffix)
         w.setMinimumWidth(120)
-        w.setFixedHeight(28)
+        w.setFixedHeight(32)
         w.setToolTip(tip)
         return w
 
@@ -161,7 +212,7 @@ class SettingsWidget(BaseWidget):
         w.setSuffix(suffix)
         w.setSingleStep(step)
         w.setMinimumWidth(120)
-        w.setFixedHeight(28)
+        w.setFixedHeight(32)
         w.setToolTip(tip)
         return w
 
@@ -171,7 +222,7 @@ class SettingsWidget(BaseWidget):
         for item in items:
             w.addItem(item)
         w.setMinimumWidth(min_width)
-        w.setFixedHeight(28)
+        w.setFixedHeight(32)
         if tip:
             w.setToolTip(tip)
         return w
@@ -260,7 +311,7 @@ class SettingsWidget(BaseWidget):
         for display, _ in _GEMINI_MODELS:
             self.cmb_gemini_model.addItem(display)
         self.cmb_gemini_model.setMinimumWidth(250)
-        self.cmb_gemini_model.setFixedHeight(28)
+        self.cmb_gemini_model.setFixedHeight(32)
         self.cmb_gemini_model.setToolTip(
             tr("Gemini 3.1 Flash Lite の次に試みるフォールバックモデル。\n通常は gemini-2.5-flash (推奨) で十分です。")
         )
@@ -270,7 +321,7 @@ class SettingsWidget(BaseWidget):
         self.spn_temperature.setSingleStep(0.1)
         self.spn_temperature.setDecimals(1)
         self.spn_temperature.setMinimumWidth(120)
-        self.spn_temperature.setFixedHeight(28)
+        self.spn_temperature.setFixedHeight(32)
         self.spn_temperature.setToolTip(
             tr("AIの回答の多様性を制御します。\n低い値 (0.1〜0.5): 正確・一貫\n高い値 (1.0〜2.0): 多様・創造的\n推奨: 0.7")
         )
@@ -279,7 +330,7 @@ class SettingsWidget(BaseWidget):
         for v in _MAX_TOKENS_OPTIONS:
             self.cmb_max_tokens.addItem(f"{v:,}  トークン", v)
         self.cmb_max_tokens.setMinimumWidth(180)
-        self.cmb_max_tokens.setFixedHeight(28)
+        self.cmb_max_tokens.setFixedHeight(32)
         self.cmb_max_tokens.setToolTip(
             tr("一回の回答で生成する最大トークン数。長い回答が必要な場合は 4096 を選択。\n推奨: 2,048")
         )
@@ -327,7 +378,7 @@ class SettingsWidget(BaseWidget):
         for display_name, _ in LANG_OPTIONS:
             self.cmb_language.addItem(display_name)
         self.cmb_language.setMinimumWidth(180)
-        self.cmb_language.setFixedHeight(28)
+        self.cmb_language.setFixedHeight(32)
 
         self.chk_auto_start = QCheckBox(tr("Windows 起動時にバックグラウンドで自動実行する"))
         self.chk_auto_start.setObjectName("settingsCheckbox")
@@ -370,7 +421,8 @@ class SettingsWidget(BaseWidget):
         sheets_row.addWidget(btn_sheets_save)
 
         note_sheets = self._note(
-            tr("※ URL ごとペーストすると ID を自動抽出します。シートにはサービスアカウントの編集権限が必要です。")
+            tr("※ URL ごとペーストすると ID を自動抽出します。シートにはサービスアカウントの編集権限が必要です。"),
+            word_wrap=True
         )
 
         sep1 = self._sep()
@@ -473,20 +525,22 @@ class SettingsWidget(BaseWidget):
 
     def _refresh_user_list(self):
         self.lbl_users_status.setText(tr("取得中..."))
-        QApplication.processEvents()
-        try:
-            from app.api.google.sheets import get_all_users
-            users = get_all_users()
-            self.tbl_users.setRowCount(0)
-            for u in users:
-                r = self.tbl_users.rowCount()
-                self.tbl_users.insertRow(r)
-                self.tbl_users.setItem(r, 0, QTableWidgetItem(u["email"]))
-                self.tbl_users.setItem(r, 1, QTableWidgetItem(u["name"]))
-                self.tbl_users.setItem(r, 2, QTableWidgetItem(u["added"]))
-            self.lbl_users_status.setText(tr("{0} 件").format(len(users)))
-        except Exception as e:
-            self.lbl_users_status.setText(str(e)[:60])
+        self._fetch_users_worker = FetchUsersWorker()
+        self._fetch_users_worker.success.connect(self._on_users_fetched)
+        self._fetch_users_worker.error.connect(lambda e: self.lbl_users_status.setText(str(e)[:60]))
+        self._fetch_users_worker.finished.connect(self._fetch_users_worker.deleteLater)
+        self._fetch_users_worker.start()
+        self.track_worker(self._fetch_users_worker)
+
+    def _on_users_fetched(self, users):
+        self.tbl_users.setRowCount(0)
+        for u in users:
+            r = self.tbl_users.rowCount()
+            self.tbl_users.insertRow(r)
+            self.tbl_users.setItem(r, 0, QTableWidgetItem(u["email"]))
+            self.tbl_users.setItem(r, 1, QTableWidgetItem(u["name"]))
+            self.tbl_users.setItem(r, 2, QTableWidgetItem(u["added"]))
+        self.lbl_users_status.setText(tr("{0} 件").format(len(users)))
 
     def _remove_selected_user(self):
         if not self.tbl_users.selectedItems():
@@ -499,12 +553,13 @@ class SettingsWidget(BaseWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        try:
-            from app.api.google.sheets import remove_user
-            remove_user(email)
-            self._refresh_user_list()
-        except Exception as e:
-            QMessageBox.warning(self, tr("エラー"), str(e))
+        self.lbl_users_status.setText(tr("削除中..."))
+        self._remove_user_worker = RemoveUserWorker(email)
+        self._remove_user_worker.success.connect(self._refresh_user_list)
+        self._remove_user_worker.error.connect(lambda e: QMessageBox.warning(self, tr("エラー"), str(e)))
+        self._remove_user_worker.finished.connect(self._remove_user_worker.deleteLater)
+        self._remove_user_worker.start()
+        self.track_worker(self._remove_user_worker)
 
     def _add_user(self):
         email = self.edt_add_email.text().strip()
@@ -512,15 +567,19 @@ class SettingsWidget(BaseWidget):
         if not email:
             self.edt_add_email.setFocus()
             return
-        try:
-            from app.api.google.sheets import add_user
-            add_user(email, name)
-            self.edt_add_email.clear()
-            self.edt_add_name.clear()
-            self._refresh_user_list()
-            self._show_toast("✅  " + tr("ユーザーを追加しました"))
-        except Exception as e:
-            QMessageBox.warning(self, tr("エラー"), str(e))
+        self.lbl_users_status.setText(tr("追加中..."))
+        self._add_user_worker = AddUserWorker(email, name)
+        self._add_user_worker.success.connect(self._on_user_added)
+        self._add_user_worker.error.connect(lambda e: QMessageBox.warning(self, tr("エラー"), str(e)))
+        self._add_user_worker.finished.connect(self._add_user_worker.deleteLater)
+        self._add_user_worker.start()
+        self.track_worker(self._add_user_worker)
+
+    def _on_user_added(self):
+        self.edt_add_email.clear()
+        self.edt_add_name.clear()
+        self._refresh_user_list()
+        self._show_toast("✅  " + tr("ユーザーを追加しました"))
 
     # ── テーマ ───────────────────────────────────────────────────────────────
 
@@ -532,6 +591,7 @@ class SettingsWidget(BaseWidget):
                 "  border: 1px solid #666666; border-radius: 4px; padding: 4px 10px;"
                 "}"
                 "QComboBox:hover { border-color: #909090; }"
+                "QComboBox:focus { border: 1px solid #0e639c; }"
                 "QComboBox::drop-down { background-color: #505050; width: 22px; border-left: 1px solid #666666; }"
                 "QComboBox QAbstractItemView {"
                 "  background-color: #464646; color: #e0e0e0;"
@@ -541,11 +601,44 @@ class SettingsWidget(BaseWidget):
                 "QComboBox QAbstractItemView::item { padding: 5px 10px; min-height: 22px; }"
                 "QComboBox QAbstractItemView::item:hover { background-color: #565656; color: #ffffff; }"
             )
+            spin_style = (
+                "QSpinBox, QDoubleSpinBox {"
+                "  background-color: #3d3d3d; color: #e0e0e0;"
+                "  border: 1px solid #666666; border-radius: 4px; padding: 4px 10px;"
+                "}"
+                "QSpinBox:hover, QDoubleSpinBox:hover { border-color: #909090; }"
+                "QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #0e639c; }"
+            )
         else:
-            cmb_style = ""
+            cmb_style = (
+                "QComboBox {"
+                "  background-color: #ffffff; color: #333333;"
+                "  border: 1px solid #cccccc; border-radius: 4px; padding: 4px 10px;"
+                "}"
+                "QComboBox:hover { border-color: #999999; }"
+                "QComboBox:focus { border: 1px solid #1a73e8; }"
+                "QComboBox::drop-down { background-color: #f0f0f0; width: 22px; border-left: 1px solid #cccccc; }"
+                "QComboBox QAbstractItemView {"
+                "  background-color: #ffffff; color: #333333;"
+                "  selection-background-color: #1a73e8; selection-color: #ffffff;"
+                "  border: 1px solid #cccccc; outline: none;"
+                "}"
+                "QComboBox QAbstractItemView::item { padding: 5px 10px; min-height: 22px; }"
+                "QComboBox QAbstractItemView::item:hover { background-color: #f0f0f0; color: #1a73e8; }"
+            )
+            spin_style = (
+                "QSpinBox, QDoubleSpinBox {"
+                "  background-color: #ffffff; color: #333333;"
+                "  border: 1px solid #cccccc; border-radius: 4px; padding: 4px 10px;"
+                "}"
+                "QSpinBox:hover, QDoubleSpinBox:hover { border-color: #999999; }"
+                "QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #1a73e8; }"
+            )
 
-        for w in (self.cmb_gemini_model, self.cmb_max_tokens, self.cmb_language):
+        for w in self.findChildren(QComboBox):
             w.setStyleSheet(cmb_style)
+        for w in self.findChildren(QSpinBox) + self.findChildren(QDoubleSpinBox):
+            w.setStyleSheet(spin_style)
 
         super().set_theme(is_dark)
         self.apply_theme_custom()
@@ -565,7 +658,30 @@ class SettingsWidget(BaseWidget):
         for lbl in self._note_labels:
             lbl.setStyleSheet(f"color: {dc}; font-size: 11px;")
         for sep in self.findChildren(QFrame, "settingsSep"):
-            sep.setStyleSheet(f"QFrame#settingsSep {{ color: {bc}; }}")
+            sep.setStyleSheet(f"QFrame#settingsSep {{ border-top: 1px solid {bc}; }}")
+
+        line_edit_style = f"""
+            QLineEdit {{
+                background-color: {'#3d3d3d' if is_dark else '#ffffff'};
+                color: {'#e0e0e0' if is_dark else '#333333'};
+                border: 1px solid {'#666666' if is_dark else '#cccccc'};
+                border-radius: 4px; padding: 4px 10px;
+            }}
+            QLineEdit:hover {{ border-color: {'#909090' if is_dark else '#999999'}; }}
+            QLineEdit:focus {{ border: 1px solid {'#0e639c' if is_dark else '#1a73e8'}; }}
+        """
+        for w in self.findChildren(QLineEdit):
+            w.setStyleSheet(line_edit_style)
+
+        scroll_style = f"""
+            QScrollArea {{ border: none; background: transparent; }}
+            QScrollBar:vertical {{ background: transparent; width: 8px; }}
+            QScrollBar::handle:vertical {{ background: {'rgba(255,255,255,0.2)' if is_dark else 'rgba(0,0,0,0.2)'}; border-radius: 4px; }}
+            QScrollBar::handle:vertical:hover {{ background: {'rgba(255,255,255,0.3)' if is_dark else 'rgba(0,0,0,0.3)'}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """
+        for w in self.findChildren(QScrollArea):
+            w.setStyleSheet(scroll_style)
 
     # ── データ読み書き ────────────────────────────────────────────────────────
 
@@ -651,7 +767,20 @@ class SettingsWidget(BaseWidget):
     def _show_toast(self, msg: str):
         self.toast_label.setText(msg)
         self.toast_label.show()
-        QTimer.singleShot(3500, self.toast_label.hide)
+        self._toast_anim.stop()
+        self._toast_anim.setStartValue(0.0)
+        self._toast_anim.setEndValue(1.0)
+        if self._toast_anim.receivers(self._toast_anim.finished):
+            self._toast_anim.finished.disconnect()
+        self._toast_anim.start()
+        self._toast_timer.start(3500)
+
+    def _hide_toast(self):
+        self._toast_anim.stop()
+        self._toast_anim.setStartValue(1.0)
+        self._toast_anim.setEndValue(0.0)
+        self._toast_anim.finished.connect(self.toast_label.hide)
+        self._toast_anim.start()
 
     def _reset_to_defaults(self):
         reply = QMessageBox.question(

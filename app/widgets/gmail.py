@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QUrl, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QCursor, QAction, QBrush
 from app.ui.common import BaseWidget
+from app.ui.theme import UIColors
 from app.core.i18n import tr
 from app.core.events import bus
 
@@ -66,20 +67,22 @@ class LabelEditDialog(QDialog):
 
     def _build_ui(self, all_labels: list, visible_ids: list | None, is_dark: bool):
         d   = is_dark
-        bg  = "#1e1e1e" if d else "#ffffff"
-        bg2 = "#252526" if d else "#f5f5f5"
-        bd  = "#3e3e42" if d else "#e0e0e0"
-        txt = "#e0e0e0" if d else "#212121"
+        pc  = UIColors.get_panel_colors(d)
+        bg  = pc["bg"]
+        bg2 = pc["hover"]
+        bd  = pc["border"]
+        txt = pc["text"]
+        accent = UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT
         self.setStyleSheet(f"""
             QDialog, QWidget {{ background: {bg}; color: {txt}; }}
             QListWidget {{ background: {bg2}; border: 1px solid {bd}; border-radius: 4px; }}
             QListWidget::item {{ padding: 6px 8px; }}
-            QListWidget::item:selected {{ background: rgba(14,99,156,0.4); }}
+            QListWidget::item:selected {{ background: {accent}; color: #ffffff; }}
             QPushButton {{ background: {'#3e3e42' if d else '#e0e0e0'};
                            color: {txt}; border: none; border-radius: 4px; padding: 0 10px; }}
             QPushButton:hover {{ background: {'#505055' if d else '#d0d0d0'}; }}
-            QPushButton#applyBtn {{ background: #0e639c; color: #fff; font-weight: bold; }}
-            QPushButton#applyBtn:hover {{ background: #1177bb; }}
+            QPushButton#applyBtn {{ background: {accent}; color: #fff; font-weight: bold; }}
+            QPushButton#applyBtn:hover {{ background: {'#1177bb' if d else '#1976d2'}; }}
         """)
 
         layout = QVBoxLayout(self)
@@ -238,15 +241,6 @@ class LabelListPanel(QWidget):
             QTreeWidget::item {
                 padding: 5px 8px;
             }
-            QTreeWidget::item:selected {
-                background: rgba(26, 115, 232, 0.22);
-                color: #7ec8ff;
-                border-left: 3px solid #1a73e8;
-                padding-left: 5px;
-            }
-            QTreeWidget::item:hover:!selected {
-                background: rgba(255, 255, 255, 0.08);
-            }
             QTreeWidget::branch {
                 background: transparent;
             }
@@ -379,13 +373,13 @@ class LabelListPanel(QWidget):
         if unread > 0:
             item.setText(0, f"{name}{alarm_icon}  ({unread})")
             font = item.font(0); font.setBold(True); item.setFont(0, font)
-            # 다크: 밝은 파랑 / 라이트: 구글 블루 (흰 배경 가독성)
-            item.setForeground(0, QBrush(QColor("#5ab3ff" if self._is_dark else "#1a73e8")))
+            unread_color = "#5ab3ff" if self._is_dark else UIColors.ACCENT_LIGHT
+            item.setForeground(0, QBrush(QColor(unread_color)))
         else:
             item.setText(0, f"{name}{alarm_icon}")
             font = item.font(0); font.setBold(False); item.setFont(0, font)
-            # 다크: 밝은 회색 / 라이트: 진한 회색 (흰 배경에서 #c8c8c8은 거의 안 보임)
-            item.setForeground(0, QBrush(QColor("#c8c8c8" if self._is_dark else "#444444")))
+            pc = UIColors.get_panel_colors(self._is_dark)
+            item.setForeground(0, QBrush(QColor(pc["text"])))
 
     def _on_item_changed(self):
         items = self._list.selectedItems()
@@ -624,24 +618,11 @@ class MailListPanel(QWidget):
         self._list.setObjectName("mailList")
         self._list.setStyleSheet("""
             QListWidget { border: none; outline: none; }
-            QListWidget::item {
-                border-bottom: 1px solid rgba(255,255,255,0.06);
-                padding: 0;
-            }
-            QListWidget::item:selected { background: rgba(14, 99, 156, 0.35); }
-            QListWidget::item:hover:!selected { background: rgba(255,255,255,0.04); }
         """)
         self._list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self._list.currentItemChanged.connect(self._on_item_changed)
         self._list.verticalScrollBar().valueChanged.connect(self._on_scroll)
         layout.addWidget(self._list, 1)
-
-        # 로딩 상태 표시
-        self._loading_lbl = QLabel(tr("読込中..."))
-        self._loading_lbl.setAlignment(Qt.AlignCenter)
-        self._loading_lbl.setStyleSheet("color: #666; font-size: 13px;")
-        self._loading_lbl.hide()
-        layout.addWidget(self._loading_lbl, 1)
 
         # 빈 상태 표시
         self._empty_lbl = QLabel(tr("このラベルにメールはありません"))
@@ -663,17 +644,11 @@ class MailListPanel(QWidget):
         self._hdr_lbl.setText(label_name)
 
     def set_loading(self, loading: bool):
-        """로딩 중 표시 토글."""
         if loading:
-            self._list.hide()
             self._empty_lbl.hide()
-            self._loading_lbl.show()
             self._count_lbl.setText("")
-        else:
-            self._loading_lbl.hide()
 
     def set_mails(self, mails: list, next_token: str):
-        self._loading_lbl.hide()
         self._list.clear()
         self._next_page_token = next_token
         if mails:
@@ -814,39 +789,29 @@ class MailPreviewPanel(QWidget):
         self._empty_lbl.setAlignment(Qt.AlignCenter)
         self._empty_lbl.setStyleSheet("color: #555; font-size: 14px;")
 
-        # 로딩 상태
-        self._loading_lbl = QLabel(tr("読込中..."))
-        self._loading_lbl.setAlignment(Qt.AlignCenter)
-        self._loading_lbl.setStyleSheet("color: #666; font-size: 13px;")
-
         layout.addWidget(self._meta_panel)
         layout.addWidget(sep)
         layout.addWidget(self._browser, 1)
         layout.addWidget(self._empty_lbl, 1)
-        layout.addWidget(self._loading_lbl, 1)
 
         self._meta_panel.hide()
         sep.hide()
         self._browser.hide()
-        self._loading_lbl.hide()
         self._sep = sep
 
     def set_theme(self, is_dark: bool):
         self._is_dark = is_dark
 
     def show_loading(self):
-        """본문 조회 중 — 스피너 대신 텍스트 표시."""
+        """본문 조회 중 — 스켈레톤 로딩 애니메이션용 뷰 상태 준비."""
         self._meta_panel.hide()
         self._sep.hide()
-        self._browser.hide()
         self._empty_lbl.hide()
-        self._loading_lbl.show()
 
     def show_empty(self):
         self._meta_panel.hide()
         self._sep.hide()
         self._browser.hide()
-        self._loading_lbl.hide()
         self._empty_lbl.show()
 
     def show_mail(self, mail: dict):
@@ -890,7 +855,6 @@ class MailPreviewPanel(QWidget):
                 f"<p style='color:#888'>{tr('(本文なし)')}</p>"
             )
 
-        self._loading_lbl.hide()
         self._empty_lbl.hide()
         self._meta_panel.show()
         self._sep.show()
@@ -920,7 +884,7 @@ class GmailWidget(BaseWidget):
         self._auto_refresh_timer.timeout.connect(self._auto_refresh)
         self._build_ui()
         bus.google_auth_changed.connect(self._on_auth_changed)
-        QTimer.singleShot(0, self._check_auth_and_load)
+        QTimer.singleShot(2250, self._check_auth_and_load)
 
     # ── UI 구성 ──────────────────────────────────────────────────────────────
 
@@ -1015,7 +979,7 @@ class GmailWidget(BaseWidget):
     # ── 데이터 로드 ──────────────────────────────────────────────────────────
 
     def _check_auth_and_load(self):
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if is_authenticated():
             self._auth_overlay.hide()
             self._refresh_labels_and_mail()
@@ -1032,13 +996,13 @@ class GmailWidget(BaseWidget):
 
     def _auto_refresh(self):
         """조용한 자동 갱신 — UI에 '読込中...' 표시 없이 백그라운드 새로 고침."""
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if not is_authenticated():
             return
         self._refresh_labels_and_mail()
 
     def _refresh_labels_and_mail(self):
-        from app.api.gmail_api import FetchLabelsWorker
+        from app.api.google.gmail import FetchLabelsWorker
         self._status_lbl.setText(tr("読込中..."))
         w = FetchLabelsWorker()
         w.data_fetched.connect(self._on_labels_fetched)
@@ -1048,10 +1012,10 @@ class GmailWidget(BaseWidget):
         self.track_worker(w)
 
     def _fetch_mail_list(self, label_id: str, page_token: str = ""):
-        from app.api.gmail_api import FetchMailListWorker
+        from app.api.google.gmail import FetchMailListWorker
         if not page_token:
-            # 첫 페이지 — 로딩 표시
             self._mail_panel.set_loading(True)
+            self.set_loading(True, self._mail_panel._list)
             self._status_lbl.setText(tr("読込中..."))
         max_r = self.settings.get("gmail_max_results", 50)
         w = FetchMailListWorker([label_id], max_results=max_r, page_token=page_token)
@@ -1068,14 +1032,18 @@ class GmailWidget(BaseWidget):
         self._fetch_mail_list(self._selected_label_id, page_token)
 
     def _poll_new_mail(self):
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if not is_authenticated():
             return
-        alarm_labels = self._label_panel.get_alarm_labels()
-        if not alarm_labels:
-            return
-        from app.api.gmail_api import PollNewMailWorker
-        w = PollNewMailWorker(alarm_labels, self._prev_unread_counts)
+            
+        # 감시할 라벨: 알람 설정된 라벨 + 수신함(INBOX) + 현재 선택된 라벨
+        target_labels = set(self._label_panel.get_alarm_labels())
+        target_labels.add("INBOX")
+        if self._selected_label_id:
+            target_labels.add(self._selected_label_id)
+
+        from app.api.google.gmail import PollNewMailWorker
+        w = PollNewMailWorker(list(target_labels), self._prev_unread_counts)
         w.new_mail.connect(self._on_new_mail_detected)
         w.finished.connect(w.deleteLater)
         w.start()
@@ -1094,6 +1062,7 @@ class GmailWidget(BaseWidget):
         self._fetch_mail_list(self._selected_label_id)
 
     def _on_mails_fetched(self, mails: list, next_token: str):
+        self.set_loading(False, self._mail_panel._list)
         self._mail_panel.set_header(self._selected_label_name)
         self._mail_panel.set_mails(mails, next_token)
         self._preview_panel.show_empty()
@@ -1123,7 +1092,8 @@ class GmailWidget(BaseWidget):
 
         # HTML 없으면 전체 본문 조회 — 로딩 표시 먼저
         self._preview_panel.show_loading()
-        from app.api.gmail_api import FetchMailDetailWorker
+        self.set_loading(True, self._preview_panel._browser)
+        from app.api.google.gmail import FetchMailDetailWorker
         w = FetchMailDetailWorker(mail_id)
         w.data_fetched.connect(lambda detail: self._on_mail_detail_fetched(detail))
         w.error.connect(self._on_error)
@@ -1132,33 +1102,57 @@ class GmailWidget(BaseWidget):
         self.track_worker(w)
 
     def _on_mail_detail_fetched(self, mail: dict):
+        self.set_loading(False, self._preview_panel._browser)
         self._preview_panel.show_mail(mail)
         self._maybe_mark_read(mail)
 
     def _maybe_mark_read(self, mail: dict):
         if not mail.get("is_unread", False):
             return
-        from app.api.gmail_api import MarkReadWorker
-        mid = mail.get("id", "")
-        w = MarkReadWorker(mid)
-        w.success.connect(self._mail_panel.mark_read)
+            
+        # 낙관적 업데이트: 즉시 읽음 처리하여 UI(목록, 라벨 트리) 실시간 반영
+        mail["is_unread"] = False
+        mail_id = mail.get("id", "")
+        self._mail_panel.mark_read(mail_id)
+
+        for lid in mail.get("label_ids", []):
+            for lbl in self._labels:
+                if lbl.get("id") == lid:
+                    current = lbl.get("messagesUnread", 0)
+                    new_count = max(0, current - 1)
+                    lbl["messagesUnread"] = new_count
+                    self._prev_unread_counts[lid] = new_count
+                    self._label_panel.update_unread(lid, new_count)
+                    break
+
+        from app.api.google.gmail import MarkReadWorker
+        w = MarkReadWorker(mail_id)
         w.finished.connect(w.deleteLater)
         w.start()
         self.track_worker(w)
 
-    def _on_new_mail_detected(self, label_name: str, unread_count: int):
-        # unread 캐시 갱신
+    def _on_new_mail_detected(self, label_name_or_id: str, unread_count: int):
+        # unread 캐시 및 라벨 UI 실시간 갱신
+        matched_id = None
         for lbl in self._labels:
-            if lbl.get("name") == label_name or lbl.get("id") == label_name:
-                self._prev_unread_counts[lbl.get("id", "")] = unread_count
-                self._label_panel.update_unread(lbl.get("id", ""), unread_count)
+            if lbl.get("name") == label_name_or_id or lbl.get("id") == label_name_or_id:
+                matched_id = lbl.get("id", "")
+                self._prev_unread_counts[matched_id] = unread_count
+                lbl["messagesUnread"] = unread_count
+                self._label_panel.update_unread(matched_id, unread_count)
+                
+                # 새 메일이 온 라벨이 현재 보고 있는 라벨이면 목록도 조용히 갱신
+                if matched_id == self._selected_label_id:
+                    self._fetch_mail_list(matched_id)
                 break
-        # 전역 버스 알림 → tray 알림
-        bus.gmail_new_mail.emit(label_name, unread_count)
+                
+        # 전역 알림은 사용자가 알람을 켜둔 라벨인 경우에만 발송
+        if matched_id and matched_id in self._label_panel.get_alarm_labels():
+            bus.gmail_new_mail.emit(label_name_or_id, unread_count)
 
     def _on_mark_all_read(self):
         """全既読: 現在のラベルの未読メールをすべて既読にする。"""
-        from app.api.gmail_api import MarkAllReadWorker
+        from app.api.google.gmail import MarkAllReadWorker
         self._status_lbl.setText(tr("処理中..."))
         w = MarkAllReadWorker(self._selected_label_id)
         w.success.connect(self._on_mark_all_read_done)
@@ -1188,6 +1182,8 @@ class GmailWidget(BaseWidget):
 
     def _on_error(self, err: str):
         self._mail_panel.set_loading(False)
+        self.set_loading(False, self._mail_panel._list)
+        self.set_loading(False, self._preview_panel._browser)
         self._status_lbl.setText(tr("エラー"))
         logger.error(f"Gmail error: {err}")
 
@@ -1215,12 +1211,14 @@ class GmailWidget(BaseWidget):
 
     def apply_theme_custom(self):
         is_dark = self.is_dark
-        bg   = "#1e1e1e" if is_dark else "#ffffff"
-        bg2  = "#252526" if is_dark else "#f5f5f5"
-        bg3  = "#2d2d2d" if is_dark else "#fafafa"
-        bd   = "#3e3e42" if is_dark else "#e0e0e0"
-        txt  = "#e0e0e0" if is_dark else "#212121"
-        sub  = "#999999" if is_dark else "#5f6368"
+        pc   = UIColors.get_panel_colors(is_dark)
+        bg   = pc["bg"]
+        bg2  = pc["hover"]
+        bg3  = bg
+        bd   = pc["border"]
+        txt  = pc["text"]
+        sub  = pc["text_dim"]
+        accent = UIColors.ACCENT_DARK if is_dark else UIColors.ACCENT_LIGHT
         self.setStyleSheet(f"""
             QWidget {{ background: {bg}; color: {txt}; }}
             QLabel {{ background: transparent; }}
@@ -1235,8 +1233,18 @@ class GmailWidget(BaseWidget):
                 border-right: 1px solid {bd};
                 color: {txt};
             }}
+            QTreeWidget#labelList::item:selected {{
+                background: {'rgba(14, 99, 156, 0.4)' if is_dark else 'rgba(26, 115, 232, 0.15)'};
+                border-left: 3px solid {accent};
+            }}
+            QTreeWidget#labelList::item:hover:!selected {{
+                background: {'rgba(255,255,255,0.04)' if is_dark else 'rgba(0,0,0,0.03)'};
+            }}
             QListWidget#mailList {{ background: {bg}; border-right: 1px solid {bd}; }}
-            QTextBrowser {{ background: #ffffff; color: #202124; border: none; }}
+            QListWidget#mailList::item {{ border-bottom: 1px solid {bd}; padding: 0; }}
+            QListWidget#mailList::item:selected {{ background: {'rgba(14, 99, 156, 0.4)' if is_dark else 'rgba(26, 115, 232, 0.15)'}; }}
+            QListWidget#mailList::item:hover:!selected {{ background: {'rgba(255,255,255,0.04)' if is_dark else 'rgba(0,0,0,0.03)'}; }}
+            QTextBrowser {{ background: #ffffff; color: #202124; border: 1px solid {bd}; border-radius: 4px; margin: 4px; }}
             QLabel#mailSecondary {{ color: {sub}; background: transparent; }}
             QPushButton#secondaryActionBtn {{
                 background: {'#3e3e42' if is_dark else '#e0e0e0'};
@@ -1264,7 +1272,7 @@ class GmailWidget(BaseWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        from app.api.google_auth import is_authenticated
+        from app.api.google.auth import is_authenticated
         if is_authenticated() and not self._labels:
             self._refresh_labels_and_mail()
             self._start_poll_timer()

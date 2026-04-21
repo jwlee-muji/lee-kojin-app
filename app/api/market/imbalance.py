@@ -12,6 +12,45 @@ from app.core.database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_imbalance_csv(csv_content: str) -> tuple[list[str], list[list[str]]]:
+    """CSV 문자열을 파싱하여 (헤더 리스트, 행 리스트) 튜플을 반환합니다.
+    - 선두 3행 스킵 (岡電의 메타데이터 행)
+    - 중복 컬럼명에는 _1, _2 ... 접미사 부여
+    - 컬럼 수 불일치 행·빈 행은 건너뜀
+    - 수치 내 쉼표 제거 및 공백 트림
+    """
+    reader = csv.reader(csv_content.splitlines())
+    for _ in range(3):
+        next(reader, None)
+
+    headers = next(reader, None)
+    if not headers:
+        raise ValueError("CSVのヘッダーが見つかりません。")
+    headers = [str(h).strip().replace('\ufeff', '') for h in headers]
+
+    seen: dict[str, int] = {}
+    unique_headers: list[str] = []
+    for h in headers:
+        if h in seen:
+            seen[h] += 1
+            unique_headers.append(f"{h}_{seen[h]}")
+        else:
+            seen[h] = 0
+            unique_headers.append(h)
+    headers = unique_headers
+
+    rows: list[list[str]] = []
+    for row in reader:
+        if not row:
+            continue
+        if len(row) != len(headers):
+            continue
+        rows.append([val.replace(',', '').strip() if isinstance(val, str) else val for val in row])
+
+    return headers, rows
+
+
 class UpdateImbalanceWorker(BaseWorker):
     finished = Signal(str)
 
@@ -30,36 +69,7 @@ class UpdateImbalanceWorker(BaseWorker):
             csv_content = r.content.decode('cp932', errors='replace')
             logger.info("CSVデータのダウンロードに成功しました。DBへの保存を開始します。")
 
-            # Pandas 제거: 내장 csv 파서 사용
-            reader = csv.reader(csv_content.splitlines())
-            for _ in range(3):
-                next(reader, None)  # 첫 3줄 스킵
-                
-            headers = next(reader, None)
-            if not headers:
-                raise ValueError("CSVのヘッダーが見つかりません。")
-            headers = [str(h).strip().replace('\ufeff', '') for h in headers]
-            
-            # Pandas가 수행해주던 중복 컬럼명 방지 처리 (예: 変更S -> 変更S_1)
-            seen = {}
-            unique_headers = []
-            for h in headers:
-                if h in seen:
-                    seen[h] += 1
-                    unique_headers.append(f"{h}_{seen[h]}")
-                else:
-                    seen[h] = 0
-                    unique_headers.append(h)
-            headers = unique_headers
-            
-            rows = []
-            for row in reader:
-                if not row: continue
-                # CSV 하단의 꼬리말이나 잘못된 빈 줄을 건너뛰는 방어 로직
-                if len(row) != len(headers):
-                    continue
-                clean_row = [val.replace(',', '').strip() if isinstance(val, str) else val for val in row]
-                rows.append(clean_row)
+            headers, rows = _parse_imbalance_csv(csv_content)
 
             with get_db_connection(DB_IMBALANCE) as conn:
                 cols_def = ", ".join([f'"{h}" TEXT' for h in headers])

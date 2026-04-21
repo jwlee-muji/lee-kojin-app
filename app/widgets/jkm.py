@@ -19,7 +19,7 @@ from app.ui.common import ExcelCopyTableWidget, BaseWidget, BasePlotWidget
 from app.core.config import JKM_TICKER, DB_JKM, load_settings
 from app.core.database import get_db_connection
 from app.core.i18n import tr
-from app.api.jkm_api import FetchJkmWorker
+from app.api.market.jkm import FetchJkmWorker
 from app.core.events import bus
 
 pg.setConfigOptions(antialias=True)
@@ -37,7 +37,7 @@ class JkmWidget(BaseWidget):
         self._last_lows = []
 
         self._build_ui()
-        self._refresh_chart()
+        QTimer.singleShot(2250, self._refresh_chart)
 
         # 다른 위젯과 API 요청이 겹치지 않도록 30초 지연 후 정규 타이머 시작
         self.setup_timer(self.settings.get("jkm_interval", 180), self._on_fetch, stagger_seconds=30)
@@ -48,19 +48,23 @@ class JkmWidget(BaseWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # 상단 컨트롤
-        top = QHBoxLayout()
+        # ── 상단 컨트롤 (3줄 분할로 너비 확보) ──
+        # 1행: 타이틀 및 상태 표시
+        row1 = QHBoxLayout()
         title = QLabel(tr("JKM LNG スポット価格 (USD/MMBtu)"))
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        top.addWidget(title)
-        top.addSpacing(20)
+        row1.addWidget(title)
+        row1.addStretch()
+        self.status_label = QLabel(tr("待機中"))
+        self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        row1.addWidget(self.status_label)
+        layout.addLayout(row1)
+        
+        layout.addSpacing(10)
 
-        self.fetch_btn = QPushButton(tr("Yahoo Finance から取込"))
-        self.fetch_btn.clicked.connect(self._on_fetch)
-        top.addWidget(self.fetch_btn)
-
-        top.addSpacing(16)
-        top.addWidget(QLabel(tr("表示期間:")))
+        # 2행: 날짜 선택 및 데이터 취득
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(tr("表示期間:")))
 
         self._btn_start_prev = QPushButton("◀"); self._btn_start_prev.setFixedSize(26, 30)
         self.start_date = QDateEdit()
@@ -71,11 +75,11 @@ class JkmWidget(BaseWidget):
         self._btn_start_next = QPushButton("▶"); self._btn_start_next.setFixedSize(26, 30)
         self._btn_start_prev.clicked.connect(lambda: self.start_date.setDate(self.start_date.date().addDays(-1)))
         self._btn_start_next.clicked.connect(lambda: self.start_date.setDate(self.start_date.date().addDays(1)))
-        top.addWidget(self._btn_start_prev)
-        top.addWidget(self.start_date)
-        top.addWidget(self._btn_start_next)
+        row2.addWidget(self._btn_start_prev)
+        row2.addWidget(self.start_date)
+        row2.addWidget(self._btn_start_next)
 
-        top.addWidget(QLabel(tr("〜")))
+        row2.addWidget(QLabel(tr("〜")))
 
         self._btn_end_prev = QPushButton("◀"); self._btn_end_prev.setFixedSize(26, 30)
         self.end_date = QDateEdit()
@@ -88,14 +92,29 @@ class JkmWidget(BaseWidget):
         self._btn_end_prev.clicked.connect(lambda: self.end_date.setDate(self.end_date.date().addDays(-1)))
         self._btn_end_next.clicked.connect(lambda: self.end_date.setDate(self.end_date.date().addDays(1)))
         self._btn_end_today.clicked.connect(lambda: self.end_date.setDate(QDate.currentDate()))
-        top.addWidget(self._btn_end_prev)
-        top.addWidget(self.end_date)
-        top.addWidget(self._btn_end_next)
-        top.addWidget(self._btn_end_today)
+        row2.addWidget(self._btn_end_prev)
+        row2.addWidget(self.end_date)
+        row2.addWidget(self._btn_end_next)
+        row2.addWidget(self._btn_end_today)
 
         self.show_btn = QPushButton(tr("表示"))
+        self.show_btn.setFixedHeight(30)
         self.show_btn.clicked.connect(self._refresh_chart)
-        top.addWidget(self.show_btn)
+        row2.addWidget(self.show_btn)
+        
+        row2.addStretch()
+        
+        self.fetch_btn = QPushButton(tr("Yahoo Finance から取込"))
+        self.fetch_btn.setFixedHeight(30)
+        self.fetch_btn.clicked.connect(self._on_fetch)
+        row2.addWidget(self.fetch_btn)
+        
+        layout.addLayout(row2)
+        
+        layout.addSpacing(5)
+
+        # 3행: 표시 토글 및 툴바 메뉴
+        row3 = QHBoxLayout()
 
         self.show_table_cb = QCheckBox(tr("表表示"))
         self.show_table_cb.setChecked(True)
@@ -105,27 +124,23 @@ class JkmWidget(BaseWidget):
         self.show_graph_cb.setChecked(True)
         self.show_graph_cb.stateChanged.connect(self._toggle_views)
         self.show_graph_cb.setCursor(Qt.PointingHandCursor)
-        top.addWidget(self.show_table_cb)
-        top.addWidget(self.show_graph_cb)
-
-        self.status_label = QLabel(tr("待機中"))
-        self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
-        top.addWidget(self.status_label)
-        top.addStretch()
-        layout.addLayout(top)
-
-        # 그래프 복사 버튼
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(6, 2, 6, 2)
-        self.copy_btn = QPushButton(tr("グラフ画像をコピー"))
-        self.copy_btn.clicked.connect(self._copy_graph)
+        row3.addWidget(self.show_table_cb)
+        row3.addWidget(self.show_graph_cb)
+        
+        row3.addStretch()
         
         self.reset_zoom_btn = QPushButton(tr("ビュー初期化"))
+        self.reset_zoom_btn.setFixedHeight(30)
         self.reset_zoom_btn.clicked.connect(lambda: self.plot_widget.enableAutoRange())
-        toolbar.addStretch()
-        toolbar.addWidget(self.reset_zoom_btn)
-        toolbar.addWidget(self.copy_btn)
-        layout.addLayout(toolbar)
+        row3.addWidget(self.reset_zoom_btn)
+        
+        self.copy_btn = QPushButton(tr("グラフ画像をコピー"))
+        self.copy_btn.setFixedHeight(30)
+        self.copy_btn.clicked.connect(self._copy_graph)
+        row3.addWidget(self.copy_btn)
+        
+        layout.addLayout(row3)
+        layout.addSpacing(10)
 
         # 스플리터: 테이블(좌) + 그래프(우)
         splitter = QSplitter(Qt.Horizontal)
@@ -352,4 +367,3 @@ class JkmWidget(BaseWidget):
         self.tooltip_label.move(tx, ty)
         self.tooltip_label.raise_()
         self.tooltip_label.show()
-

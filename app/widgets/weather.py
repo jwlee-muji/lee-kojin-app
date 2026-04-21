@@ -5,13 +5,13 @@ from PySide6.QtWidgets import (
     QSplitter, QTableWidgetItem, QHeaderView, QMessageBox, QFrame, QPushButton,
     QApplication,
 )
-from PySide6.QtCore import QThread, Signal, Qt, QTimer
+from PySide6.QtCore import QThread, Signal, Qt, QTimer, QPropertyAnimation, Property, QEasingCurve
 from PySide6.QtGui import QFont, QColor, QBrush, QPixmap
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import WEATHER_REGIONS, BASE_DIR, load_settings
 from app.core.i18n import tr
-from app.api.weather_api import FetchWeatherWorker
+from app.api.market.weather import FetchWeatherWorker
 from app.core.events import bus, WeatherSummaryEntry
 
 logger = logging.getLogger(__name__)
@@ -108,16 +108,22 @@ class RegionCard(QFrame):
         tc       = UIColors.text_emphasis(is_dark)
         tc_dim   = UIColors.text_secondary(is_dark)
         self.setStyleSheet("QFrame { background: transparent; }")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(4)
+        
+        self._hover_margin = 0
+        self._anim = QPropertyAnimation(self, b"hoverMargin")
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(10, 10, 10, 10)
+        self._layout.setSpacing(4)
 
         # 지역명
         name_lbl = QLabel(tr(region_name))
         name_lbl.setStyleSheet(
             f"font-weight: bold; font-size: 14px; color: {tc}; background: transparent;"
         )
-        layout.addWidget(name_lbl)
+        self._layout.addWidget(name_lbl)
 
         # 오늘 날씨 정보 파싱 (빈 리스트 방어 처리)
         w_code = today_data.get("weather_code",                    [0])[0] if today_data.get("weather_code")                    else 0
@@ -149,11 +155,13 @@ class RegionCard(QFrame):
 
         t_max_str = f"{t_max}℃" if t_max is not None else "—"
         t_min_str = f"{t_min}℃" if t_min is not None else "—"
+        c_max = "#ff8a80" if is_dark else "#d32f2f"
+        c_min = "#82b1ff" if is_dark else "#1976d2"
 
         temp_lbl = QLabel(
-            f"<span style='color:#ef5350;'>{t_max_str}</span>"
+            f"<span style='color:{c_max};'>{t_max_str}</span>"
             f" <span style='color:{tc};'>/</span>"
-            f" <span style='color:#42a5f5;'>{t_min_str}</span>"
+            f" <span style='color:{c_min};'>{t_min_str}</span>"
         )
         temp_lbl.setStyleSheet("font-size: 10pt; background: transparent;")
 
@@ -170,8 +178,29 @@ class RegionCard(QFrame):
         info_layout.addStretch()
         info_layout.addWidget(temp_lbl)
 
-        layout.addLayout(info_layout)
-        layout.addWidget(pop_lbl, alignment=Qt.AlignRight)
+        self._layout.addLayout(info_layout)
+        self._layout.addWidget(pop_lbl, alignment=Qt.AlignRight)
+
+    @Property(int)
+    def hoverMargin(self):
+        return self._hover_margin
+
+    @hoverMargin.setter
+    def hoverMargin(self, val):
+        self._hover_margin = val
+        self._layout.setContentsMargins(10 + val, 10, 10, 10)
+
+    def enterEvent(self, event):
+        self._anim.stop()
+        self._anim.setEndValue(8)
+        self._anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._anim.stop()
+        self._anim.setEndValue(0)
+        self._anim.start()
+        super().leaveEvent(event)
 
 
 class WeatherWidget(BaseWidget):
@@ -182,7 +211,7 @@ class WeatherWidget(BaseWidget):
         self._build_ui()
         
         # 실행 시 날씨 갱신 (이후 1시간마다 자동 갱신)
-        self.fetch_weather()
+        QTimer.singleShot(2250, self.fetch_weather)
         self.setup_timer(self.settings.get("weather_interval", 60), self.fetch_weather)
         
     def apply_settings_custom(self):
@@ -253,19 +282,20 @@ class WeatherWidget(BaseWidget):
             f"font-size: 16px; font-weight: bold; padding-bottom: 10px; color: {UIColors.text_emphasis(is_dark)};"
         )
         
+        pc = UIColors.get_panel_colors(is_dark)
+        accent = UIColors.ACCENT_DARK if is_dark else UIColors.ACCENT_LIGHT
+        
         if is_dark:
-            self.region_list.setStyleSheet("""
-                QListWidget { background-color: #1e1e1e; border: none; border-right: 1px solid #3e3e42; outline: 0; }
-                QListWidget::item { border-bottom: 1px solid #2d2d30; margin: 0px; border-radius: 0px; }
-                QListWidget::item:hover { background-color: #252526; }
-                QListWidget::item:selected { background-color: #2d2d30; border-left: 4px solid #094771; }
+            self.region_list.setStyleSheet(f"""
+                QListWidget {{ background-color: {pc['bg']}; border: none; border-right: 1px solid {pc['border']}; outline: 0; }}
+                QListWidget::item {{ border-bottom: 1px solid {pc['border']}; margin: 0px; padding: 2px 0px; border-radius: 0px; }}
+                QListWidget::item:selected {{ background-color: rgba(9, 71, 113, 0.3); border-left: 4px solid {accent}; }}
             """)
         else:
-            self.region_list.setStyleSheet("""
-                QListWidget { background-color: #ffffff; border: none; border-right: 1px solid #dddddd; outline: 0; }
-                QListWidget::item { border-bottom: 1px solid #eeeeee; margin: 0px; border-radius: 0px; }
-                QListWidget::item:hover { background-color: #fafafa; }
-                QListWidget::item:selected { background-color: #f4f8ff; border-left: 4px solid #2196f3; }
+            self.region_list.setStyleSheet(f"""
+                QListWidget {{ background-color: {pc['bg']}; border: none; border-right: 1px solid {pc['border']}; outline: 0; }}
+                QListWidget::item {{ border-bottom: 1px solid {pc['border']}; margin: 0px; padding: 2px 0px; border-radius: 0px; }}
+                QListWidget::item:selected {{ background-color: rgba(26, 115, 232, 0.1); border-left: 4px solid {accent}; }}
             """)
 
         self._populate_region_list()
@@ -281,6 +311,7 @@ class WeatherWidget(BaseWidget):
         self.refresh_btn.setEnabled(False)
         self.status_label.setText(tr("天気データを取得中..."))
         self.status_label.setStyleSheet("color: #64b5f6;")
+        self.set_loading(True, self.detail_table)
         
         self.worker = FetchWeatherWorker()
         self.worker.finished.connect(self._on_fetch_success)
@@ -291,6 +322,7 @@ class WeatherWidget(BaseWidget):
 
     def _on_fetch_success(self, data_list):
         self.refresh_btn.setEnabled(True)
+        self.set_loading(False, self.detail_table)
         self.weather_data = data_list
         self.status_label.setText(tr("取得完了"))
         self.status_label.setStyleSheet("color: #4caf50;")
@@ -321,6 +353,7 @@ class WeatherWidget(BaseWidget):
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)
+        self.set_loading(False, self.detail_table)
         self.status_label.setText(tr("取得失敗"))
         self.status_label.setStyleSheet("color: #ff5252;")
         QMessageBox.warning(self, tr("エラー"), err_msg)
@@ -384,11 +417,17 @@ class WeatherWidget(BaseWidget):
 
             self.detail_table.setItem(row, 0, self._create_table_item(date_str))
             self.detail_table.setItem(row, 1, self._create_table_item(w_text, w_col, bold=True))
-            self.detail_table.setItem(row, 2, self._create_table_item(f"{t_maxs[row]} ℃", "#ef5350", bold=True))
-            self.detail_table.setItem(row, 3, self._create_table_item(f"{t_mins[row]} ℃", "#42a5f5", bold=True))
+            
+            c_max = "#ff8a80" if self.is_dark else "#d32f2f"
+            c_min = "#82b1ff" if self.is_dark else "#1976d2"
+            self.detail_table.setItem(row, 2, self._create_table_item(f"{t_maxs[row]} ℃", c_max, bold=True))
+            self.detail_table.setItem(row, 3, self._create_table_item(f"{t_mins[row]} ℃", c_min, bold=True))
             
             pop_val = pops[row]
-            pop_color = "#66bb6a" if pop_val < 30 else "#ffa726" if pop_val < 60 else "#ef5350"
+            if self.is_dark:
+                pop_color = "#81c784" if pop_val < 30 else "#ffb74d" if pop_val < 60 else "#e57373"
+            else:
+                pop_color = "#388e3c" if pop_val < 30 else "#f57c00" if pop_val < 60 else "#d32f2f"
             self.detail_table.setItem(row, 4, self._create_table_item(f"{pop_val} %", pop_color, bold=True))
             
             psum_val = p_sums[row]

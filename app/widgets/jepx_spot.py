@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from app.api.jepx_spot_api import (
+from app.api.market.jepx_spot import (
     FetchJepxSpotHistoryWorker, FetchJepxSpotTodayWorker,
     current_fiscal_year, fiscal_year_range,
 )
@@ -358,8 +358,8 @@ class JepxSpotWidget(BaseWidget):
 
         self._setup_ui()
         # DB インデックスを初回のみ非同期で作成 (起動時間に影響しない)
-        QTimer.singleShot(0, self._ensure_db_index)
-        QTimer.singleShot(200, self._start_history_fetch)
+        QTimer.singleShot(2250, self._ensure_db_index)
+        QTimer.singleShot(3000, self._start_history_fetch)
         self._setup_poll_timer()
 
     # ── UI 構築 ───────────────────────────────────────────────────────────────
@@ -397,9 +397,9 @@ class JepxSpotWidget(BaseWidget):
 
         self._chart = _SpotChart()
         self._splitter.addWidget(self._chart)
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([400, 640])
+        self._splitter.setSizes([450, 550])
+        self._splitter.setStretchFactor(0, 4)
+        self._splitter.setStretchFactor(1, 6)
 
         self._status = QLabel("")
         self._status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -915,22 +915,9 @@ class JepxSpotWidget(BaseWidget):
                 self._table.setItem(r_idx, c, it2)
 
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.Interactive)
-        self._table.resizeColumnsToContents()
-        self._fit_table_to_content(len(col_hdrs))
-
-    def _fit_table_to_content(self, col_count: int):
-        col_total = sum(self._table.columnWidth(c) for c in range(col_count))
-        needed    = col_total + self._table.frameWidth() * 2 + 4
-        # setMinimumWidth は上位レイアウトに伝播してウィンドウ幅を強制拡大するため使用しない。
-        # スプリッターの利用可能幅内でのみ調整し、画面外へのはみ出しを防ぐ。
-        splitter_w = self._splitter.width()
-        if splitter_w > 0:
-            table_w = min(needed, max(200, splitter_w - 200))
-            self._splitter.setSizes([table_w, max(200, splitter_w - table_w)])
-        else:
-            # ウィジェット未表示時は比率のみ設定
-            self._splitter.setSizes([needed, max(200, needed // 2)])
+        hdr.setSectionResizeMode(QHeaderView.Stretch)
+        if col_hdrs:
+            hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
 
     # ── グラフレンダリング ────────────────────────────────────────────────────
 

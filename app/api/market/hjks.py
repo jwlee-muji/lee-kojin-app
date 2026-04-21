@@ -71,25 +71,22 @@ class FetchHjksWorker(BaseWorker):
                 if not area_options:
                     area_options = [(r, str(i)) for i, r in enumerate(HJKS_REGIONS, 1)]
 
+                # フォームトークンを初回レスポンスから一度だけ抽出 — ループ内の再GETを省略
+                base_form_data: dict[str, str] = {}
+                for inp in soup.find_all('input'):
+                    name = inp.get('name')
+                    if name:
+                        base_form_data[name] = inp.get('value', '')
+
                 ajax_url = "https://hjks.jepx.or.jp/hjks/unit_status_ajax"
-                
-                # 3. 順次取得 (同一セッションのKeep-Aliveを使うため10回でも非常に高速です)
+
+                # 3. 順次取得 (同一セッションのKeep-Aliveを使うため高速)
                 for region_name, area_val in area_options:
-                    # HTML用ヘッダーに戻してメインページにアクセスし、セキュリティトークンを取得
-                    if "X-Requested-With" in session.headers:
-                        del session.headers["X-Requested-With"]
+                    session.headers.pop("X-Requested-With", None)
                     session.headers.update({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
-                    
-                    res_m = session.get(main_url, timeout=10)
-                    soup_m = BeautifulSoup(res_m.content, 'html.parser')
-                    
-                    form_data = {}
-                    for inp in soup_m.find_all('input'):
-                        name = inp.get('name')
-                        if name:
-                            form_data[name] = inp.get('value', '')
-                    form_data['area'] = area_val
-                    
+
+                    form_data = {**base_form_data, 'area': area_val}
+
                     # サーバー側のセッションに選択エリアを認識させるための完全なPOST送信
                     session.post(main_url, data=form_data, timeout=10)
                     
@@ -192,10 +189,14 @@ class AggregateHjksWorker(QThread):
             today_str = datetime.now().strftime("%Y-%m-%d")
             with get_db_connection(DB_HJKS) as conn:
                 query = """
-                    SELECT date, region, method, operating_kw, stopped_kw 
-                    FROM hjks_capacity WHERE date IN (
-                        SELECT DISTINCT date FROM hjks_capacity WHERE date >= ? ORDER BY date LIMIT 14
-                    ) ORDER BY date
+                    WITH target_dates AS (
+                        SELECT DISTINCT date FROM hjks_capacity
+                        WHERE date >= ? ORDER BY date LIMIT 14
+                    )
+                    SELECT h.date, h.region, h.method, h.operating_kw, h.stopped_kw
+                    FROM hjks_capacity h
+                    WHERE h.date IN (SELECT date FROM target_dates)
+                    ORDER BY h.date
                 """
                 rows = conn.execute(query, [today_str]).fetchall()
         except sqlite3.Error as e:

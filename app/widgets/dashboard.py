@@ -114,6 +114,8 @@ class _WeatherIllust(QWidget):
         self.update()
 
     def _tick(self):
+        if not self.isVisible():
+            return
         self._phase = (self._phase + 0.05) % (2 * math.pi)
         if self._category == "stormy":
             if _random.random() < 0.04:
@@ -452,12 +454,12 @@ class SummaryCard(QFrame):
             self._anim_target = float(target_val)
             self._anim_format = format_str
             self._anim_step = 0
-            self._anim_max_steps = 30  # 約1秒かけてカウントアップ (30フレーム)
+            self._anim_max_steps = 60  # 約1秒かけてカウントアップ (60フレーム)
             
             if not hasattr(self, '_anim_timer'):
                 self._anim_timer = QTimer(self)
                 self._anim_timer.timeout.connect(self._on_anim_step)
-            self._anim_timer.start(33)
+            self._anim_timer.start(16)
         else:
             self.value_lbl.setText(val_str)
             
@@ -532,10 +534,10 @@ class SummaryCard(QFrame):
     def hoverOffset(self, val):
         self._hover_offset = val
         if hasattr(self, 'shadow'):
-            self.shadow.setOffset(0, 4 + val * 4)
-            self.shadow.setBlurRadius(15 + val * 10)
-            base_alpha = 100 if self.is_dark else 30
-            target_alpha = 150 if self.is_dark else 60
+            self.shadow.setOffset(0, 4 + val * 6)
+            self.shadow.setBlurRadius(15 + val * 12)
+            base_alpha = 120 if self.is_dark else 40
+            target_alpha = 180 if self.is_dark else 80
             current_alpha = int(base_alpha + (target_alpha - base_alpha) * val)
             self.shadow.setColor(QColor(0, 0, 0, current_alpha))
 
@@ -598,10 +600,10 @@ class SummaryCard(QFrame):
         self.value_lbl.setStyleSheet(f"font-size: {Typography.DISPLAY}; font-weight: bold; background: transparent; color: {vc};")
         
         if hasattr(self, 'shadow'):
-            self.shadow.setOffset(0, 4 + self._hover_offset * 4)
-            self.shadow.setBlurRadius(15 + self._hover_offset * 10)
-            base_alpha = 100 if self.is_dark else 30
-            target_alpha = 150 if self.is_dark else 60
+            self.shadow.setOffset(0, 4 + self._hover_offset * 6)
+            self.shadow.setBlurRadius(15 + self._hover_offset * 12)
+            base_alpha = 120 if self.is_dark else 40
+            target_alpha = 180 if self.is_dark else 80
             current_alpha = int(base_alpha + (target_alpha - base_alpha) * self._hover_offset)
             self.shadow.setColor(QColor(0, 0, 0, current_alpha))
 
@@ -851,12 +853,12 @@ class SpotDashCard(QFrame):
         )
         self.btn_today.setStyleSheet(tog)
         self.btn_tomorrow.setStyleSheet(tog)
-        base_alpha   = 100 if self.is_dark else 30
-        target_alpha = 150 if self.is_dark else 60
+        base_alpha   = 120 if self.is_dark else 40
+        target_alpha = 180 if self.is_dark else 80
         current_alpha = int(base_alpha + (target_alpha - base_alpha) * self._hover_offset)
         self.shadow.setColor(QColor(0, 0, 0, current_alpha))
-        self.shadow.setOffset(0, 4 + self._hover_offset * 4)
-        self.shadow.setBlurRadius(15 + self._hover_offset * 10)
+        self.shadow.setOffset(0, 4 + self._hover_offset * 6)
+        self.shadow.setBlurRadius(15 + self._hover_offset * 12)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -887,10 +889,10 @@ class SpotDashCard(QFrame):
     def hoverOffset(self, val):
         self._hover_offset = val
         if hasattr(self, 'shadow'):
-            self.shadow.setOffset(0, 4 + val * 4)
-            self.shadow.setBlurRadius(15 + val * 10)
-            base_alpha   = 100 if self.is_dark else 30
-            target_alpha = 150 if self.is_dark else 60
+            self.shadow.setOffset(0, 4 + val * 6)
+            self.shadow.setBlurRadius(15 + self._hover_offset * 12)
+            base_alpha   = 120 if self.is_dark else 40
+            target_alpha = 180 if self.is_dark else 80
             current_alpha = int(base_alpha + (target_alpha - base_alpha) * val)
             self.shadow.setColor(QColor(0, 0, 0, current_alpha))
 
@@ -956,15 +958,13 @@ class DashboardWidget(BaseWidget):
         bus.hjks_updated.connect(self.refresh_hjks)
         bus.weather_updated.connect(self.update_weather)
 
-        self.refresh_data()  # 최초 1회 로드
+        QTimer.singleShot(2250, self.refresh_data)  # 최초 1회 로드
 
         self.weather_cycle_timer = QTimer(self)
         self.weather_cycle_timer.timeout.connect(self._cycle_weather)
-        self.weather_cycle_timer.start(3000)
 
         self.spot_cycle_timer = QTimer(self)
         self.spot_cycle_timer.timeout.connect(self._cycle_spot)
-        self.spot_cycle_timer.start(3000)
         
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -1011,6 +1011,16 @@ class DashboardWidget(BaseWidget):
         grid.setRowStretch(2, 1)
         
         layout.addLayout(grid)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.weather_cycle_timer.start(3000)
+        self.spot_cycle_timer.start(3000)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.weather_cycle_timer.stop()
+        self.spot_cycle_timer.stop()
         
     def apply_theme_custom(self):
         is_dark = self.is_dark
@@ -1101,6 +1111,8 @@ class DashboardWidget(BaseWidget):
     def _cycle_weather(self):
         if not self._weather_list:
             return
+        if self.card_wea.underMouse():
+            return
         entry    = self._weather_list[self._weather_index]
         category = _WMO_CATEGORY.get(entry.wmo_code, "clear")
         bg_map   = _WMO_BG_DARK if self.is_dark else _WMO_BG_LIGHT
@@ -1133,6 +1145,8 @@ class DashboardWidget(BaseWidget):
         self._cycle_spot()
 
     def _cycle_spot(self):
+        if self.card_spot.underMouse():
+            return
         data = self._spot_today if self.card_spot._date_mode == 'today' else self._spot_tomorrow
         if not data:
             self.card_spot.set_no_data()

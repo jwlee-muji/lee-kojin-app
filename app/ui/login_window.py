@@ -7,6 +7,7 @@
   3. 登録済み → login_success シグナル (email) → メインウィンドウへ
   4. 未登録 → 「登録されていません」画面 → アクセス申請 or 戻る
 """
+import re
 import logging
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
 )
 from PySide6.QtCore import (
-    Qt, QThread, Signal, QPropertyAnimation, QEasingCurve, QTimer,
+    Qt, QThread, Signal, QPropertyAnimation, QEasingCurve, QTimer, QRect,
 )
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter
 from app.core.i18n import tr
@@ -117,6 +118,11 @@ class _AccessRequestDialog(QDialog):
         if not email:
             self.email_edit.setFocus()
             self.status_lbl.setText(tr("⚠  メールアドレスを入力してください。"))
+            self.status_lbl.setStyleSheet("font-size: 12px; color: #ff9800;")
+            return
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+            self.email_edit.setFocus()
+            self.status_lbl.setText(tr("⚠  メールアドレスの形式が正しくありません。"))
             self.status_lbl.setStyleSheet("font-size: 12px; color: #ff9800;")
             return
 
@@ -411,28 +417,30 @@ class LoginWindow(QMainWindow):
     # ── アニメーション ────────────────────────────────────────────────────────
 
     def _animate_out(self, email: str):
-        """ログイン成功後にウィンドウをフェードアウトし login_success を emit する。"""
-        central = self.centralWidget()
-        eff = QGraphicsOpacityEffect(central)
-        central.setGraphicsEffect(eff)
+        """ログイン成功後にウィンドウを沈み込ませながらフェードアウト。"""
+        self._out_op_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._out_op_anim.setStartValue(1.0)
+        self._out_op_anim.setEndValue(0.0)
+        self._out_op_anim.setDuration(300)
+        self._out_op_anim.setEasingCurve(QEasingCurve.InCubic)
 
-        anim = QPropertyAnimation(eff, b"opacity", self)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.setDuration(300)
-        anim.setEasingCurve(QEasingCurve.InQuad)
-        anim.finished.connect(lambda: self.login_success.emit(email))
-        anim.start()
-        self._out_anim = anim   # GC 防止
+        start_rect = self.geometry()
+        end_rect = QRect(start_rect.x(), start_rect.y() + 20, start_rect.width(), start_rect.height())
+        self._out_pos_anim = QPropertyAnimation(self, b"geometry")
+        self._out_pos_anim.setStartValue(start_rect)
+        self._out_pos_anim.setEndValue(end_rect)
+        self._out_pos_anim.setDuration(300)
+        self._out_pos_anim.setEasingCurve(QEasingCurve.InCubic)
+
+        self._out_op_anim.finished.connect(lambda: self.login_success.emit(email))
+        self._out_op_anim.start()
+        self._out_pos_anim.start()
 
     # ── ユーティリティ ────────────────────────────────────────────────────────
 
     def reset(self):
         """ログイン画面をリセットして先頭ページに戻す。"""
-        central = self.centralWidget()
-        eff = central.graphicsEffect()
-        if eff:
-            central.setGraphicsEffect(None)
+        self.setWindowOpacity(1.0)
         self._failed_email = ""
         self.lbl_error.hide()
         self._set_google_btn_text(tr("  Google アカウントでサインイン"))
@@ -440,19 +448,29 @@ class LoginWindow(QMainWindow):
         self.stack.setCurrentIndex(_PAGE_LOGIN)
 
     def show_animated(self):
-        """フェードインしながら表示する。"""
+        """下から浮かび上がりながらフェードインする。"""
+        self.setWindowOpacity(0.0)
         self.show()
-        central = self.centralWidget()
-        eff = QGraphicsOpacityEffect(central)
-        central.setGraphicsEffect(eff)
-        anim = QPropertyAnimation(eff, b"opacity", self)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setDuration(400)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.finished.connect(lambda: central.setGraphicsEffect(None))
-        anim.start()
-        self._in_anim = anim
+        
+        start_rect = self.geometry()
+        start_rect.moveTop(start_rect.top() + 20)
+        end_rect = self.geometry()
+        self.setGeometry(start_rect)
+
+        self._in_op_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._in_op_anim.setStartValue(0.0)
+        self._in_op_anim.setEndValue(1.0)
+        self._in_op_anim.setDuration(400)
+        self._in_op_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._in_pos_anim = QPropertyAnimation(self, b"geometry")
+        self._in_pos_anim.setStartValue(start_rect)
+        self._in_pos_anim.setEndValue(end_rect)
+        self._in_pos_anim.setDuration(500)
+        self._in_pos_anim.setEasingCurve(QEasingCurve.OutExpo)
+
+        self._in_op_anim.start()
+        self._in_pos_anim.start()
 
     def closeEvent(self, event):
         """ログイン画面を閉じたらアプリを終了する。

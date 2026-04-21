@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import (
     Qt, QTimer, Signal, QPropertyAnimation, QVariantAnimation,
-    QEasingCurve, QSize, QByteArray,
+    QEasingCurve, QSize, QByteArray, QRect, QPoint,
 )
 from PySide6.QtGui import QAction, QIcon, QColor, QKeySequence, QShortcut
 from PySide6.QtNetwork import QNetworkInformation
@@ -162,6 +163,7 @@ class MainWindow(QMainWindow):
         self.w_notifications.setWordWrap(True)
         self.w_notifications.itemClicked.connect(self._mark_notification_read)
         self.w_notifications.itemDoubleClicked.connect(self._remove_notification)
+        self._init_notification_db()
 
         # ── 위젯 생성 ──────────────────────────────────────────────────────────
         self.w_dashboard      = DashboardWidget()
@@ -233,8 +235,6 @@ class MainWindow(QMainWindow):
         self._sync_theme()
         self._restore_geometry()
         self._restore_group_states()
-        # show() 後にジオメトリを確定 (最大化解除 + 画面内補正)
-        QTimer.singleShot(0, self._post_show_geometry_fix)
 
         # ── 키보드 단축키 (Ctrl+1~6) ──────────────────────────────────────────
         _KEYS = [Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4, Qt.Key_5, Qt.Key_6]
@@ -260,7 +260,7 @@ class MainWindow(QMainWindow):
         _s = _load()
         self._retention_worker = DataRetentionWorker(_s.get("retention_days", 1460))
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)
-        QTimer.singleShot(0, self._retention_worker.start)
+        QTimer.singleShot(2250, self._retention_worker.start)
         bus.app_quitting.connect(self._safe_stop_retention)
 
     # ── 사이드바 헬퍼 ──────────────────────────────────────────────────────────
@@ -418,12 +418,62 @@ class MainWindow(QMainWindow):
 
     # ── 알림 센터 ──────────────────────────────────────────────────────────────
 
+    def _init_notification_db(self):
+        from app.core.config import APP_DIR
+        self._notif_db: Path = APP_DIR / "notifications.db"
+        try:
+            with sqlite3.connect(self._notif_db) as con:
+                con.execute("""
+                    CREATE TABLE IF NOT EXISTS notifications (
+                        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title     TEXT,
+                        message   TEXT,
+                        timestamp TEXT,
+                        is_read   INTEGER DEFAULT 0
+                    )
+                """)
+            self._load_notifications_from_db()
+        except sqlite3.Error as e:
+            logger.error(f"通知DB初期化失敗: {e}")
+
+    def _load_notifications_from_db(self):
+        try:
+            with sqlite3.connect(self._notif_db) as con:
+                rows = con.execute(
+                    "SELECT id, title, message, timestamp, is_read "
+                    "FROM notifications ORDER BY id DESC"
+                ).fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"通知DB読込失敗: {e}")
+            return
+        for row_id, title, message, timestamp, is_read in rows:
+            item = QListWidgetItem(f"[{timestamp}] {title}\n{message}")
+            f = item.font()
+            f.setBold(not is_read)
+            item.setFont(f)
+            item.setData(Qt.UserRole,     bool(is_read))
+            item.setData(Qt.UserRole + 1, row_id)
+            if is_read:
+                item.setForeground(QColor(UIColors.TEXT_MUTED))
+            self.w_notifications.addItem(item)
+
     def add_notification(self, title: str, message: str):
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with sqlite3.connect(self._notif_db) as con:
+                cur = con.execute(
+                    "INSERT INTO notifications (title, message, timestamp) VALUES (?, ?, ?)",
+                    (title, message, time_str),
+                )
+                row_id = cur.lastrowid
+        except sqlite3.Error as e:
+            logger.error(f"通知DB保存失敗: {e}")
+            row_id = None
         item = QListWidgetItem(f"[{time_str}] {title}\n{message}")
         f = item.font(); f.setBold(True); item.setFont(f)
-        item.setData(Qt.UserRole, False)
+        item.setData(Qt.UserRole,     False)
+        item.setData(Qt.UserRole + 1, row_id)
         self.w_notifications.insertItem(0, item)
         self._update_notification_badge()
 
@@ -433,8 +483,22 @@ class MainWindow(QMainWindow):
             f = item.font(); f.setBold(False); item.setFont(f)
             item.setForeground(QColor(UIColors.TEXT_MUTED))
             self._update_notification_badge()
+            row_id = item.data(Qt.UserRole + 1)
+            if row_id is not None:
+                try:
+                    with sqlite3.connect(self._notif_db) as con:
+                        con.execute("UPDATE notifications SET is_read=1 WHERE id=?", (row_id,))
+                except sqlite3.Error as e:
+                    logger.error(f"通知既読更新失敗: {e}")
 
     def _remove_notification(self, item: QListWidgetItem):
+        row_id = item.data(Qt.UserRole + 1)
+        if row_id is not None:
+            try:
+                with sqlite3.connect(self._notif_db) as con:
+                    con.execute("DELETE FROM notifications WHERE id=?", (row_id,))
+            except sqlite3.Error as e:
+                logger.error(f"通知DB削除失敗: {e}")
         self.w_notifications.takeItem(self.w_notifications.row(item))
         self._update_notification_badge()
 
@@ -609,15 +673,6 @@ class MainWindow(QMainWindow):
                 pass
         self._center_window()
 
-    def _post_show_geometry_fix(self):
-        """show() 後に実行: 最大化を解除し画面内に収める。
-        showNormal() は非同期なので、もう一度タイマーを挟んで補正する。"""
-        if self.isMaximized() or self.isFullScreen():
-            self.showNormal()
-            QTimer.singleShot(80, self._ensure_on_screen)
-        else:
-            self._ensure_on_screen()
-
     def _save_geometry(self):
         from app.core.config import load_settings, save_settings
         s = load_settings()
@@ -683,7 +738,7 @@ class MainWindow(QMainWindow):
             "それともトレイ（バックグラウンド）に最小化しますか？"))
         btn_tray   = msg.addButton(tr("トレイに最小化"), QMessageBox.ActionRole)
         btn_quit   = msg.addButton(tr("完全に終了"),     QMessageBox.DestructiveRole)
-        _btn_cancel = msg.addButton(tr("キャンセル"),    QMessageBox.RejectRole)
+        msg.addButton(tr("キャンセル"),    QMessageBox.RejectRole)
         msg.exec()
         if msg.clickedButton() is btn_quit:
             self._quit_app(); event.accept()
@@ -739,50 +794,47 @@ class MainWindow(QMainWindow):
 
     def show_with_animation(self):
         """ログイン成功後のアセンブルアニメーションつき表示。
-        サイドバーが左からスライドインし、コンテンツがフェードインする。"""
+        ウィンドウ全体が下から浮かび上がりながら、サイドバーがスライド展開し、
+        コンテンツがディレイでフェードインする高級感のある演出。"""
+        self.setWindowOpacity(0.0)
+        
+        # OSフォーカス奪取対策: ウィンドウ状態をアクティブに
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
         self.show()
+        self.raise_()
+        self.activateWindow()
 
+        # UIが確実に描画された状態で最大化を解除し、画面外にはみ出ないよう補正
+        if self.isMaximized() or self.isFullScreen():
+            self.showNormal()
+        self._ensure_on_screen()
+
+        target_pos = self.pos()
+        start_pos = QPoint(target_pos.x(), target_pos.y() + 40)
+        self.move(start_pos)
+
+        self._anim_win_op = QPropertyAnimation(self, b"windowOpacity")
+        self._anim_win_op.setStartValue(0.0)
+        self._anim_win_op.setEndValue(1.0)
+        self._anim_win_op.setDuration(500)
+        self._anim_win_op.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._anim_win_pos = QPropertyAnimation(self, b"pos")
+        self._anim_win_pos.setStartValue(start_pos)
+        self._anim_win_pos.setEndValue(target_pos)
+        self._anim_win_pos.setDuration(800)
+        self._anim_win_pos.setEasingCurve(QEasingCurve.OutCubic)
+
+        # カクつき（Jank）の最大の原因であった、重いスプリッターの毎フレームリサイズ処理を排除
         total_w = self.width()
         target_sidebar_w = self.main_splitter.sizes()[0] if sum(self.main_splitter.sizes()) > 0 else 185
+        self.main_splitter.setSizes([target_sidebar_w, total_w - target_sidebar_w])
 
-        # サイドバーを幅 0 から開始
-        self.main_splitter.setSizes([0, total_w])
-
-        # サイドバー: 幅アニメーション (スライドイン)
-        self._anim_sw = QVariantAnimation(self)
-        self._anim_sw.setStartValue(0)
-        self._anim_sw.setEndValue(target_sidebar_w)
-        self._anim_sw.setDuration(520)
-        self._anim_sw.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim_sw.valueChanged.connect(
-            lambda v: self.main_splitter.setSizes([int(v), total_w - int(v)])
-        )
-
-        # サイドバー: 不透明度アニメーション
-        eff_sb = QGraphicsOpacityEffect(self.sidebar_container)
-        self.sidebar_container.setGraphicsEffect(eff_sb)
-        self._anim_sb_op = QPropertyAnimation(eff_sb, b"opacity", self)
-        self._anim_sb_op.setStartValue(0.0)
-        self._anim_sb_op.setEndValue(1.0)
-        self._anim_sb_op.setDuration(400)
-        self._anim_sb_op.setEasingCurve(QEasingCurve.OutCubic)
-
-        # コンテンツ: 不透明度アニメーション (200ms 遅延)
-        eff_ct = QGraphicsOpacityEffect(self.content_stack)
-        self.content_stack.setGraphicsEffect(eff_ct)
-        eff_ct.setOpacity(0.0)
-        self._anim_ct_op = QPropertyAnimation(eff_ct, b"opacity", self)
-        self._anim_ct_op.setStartValue(0.0)
-        self._anim_ct_op.setEndValue(1.0)
-        self._anim_ct_op.setDuration(440)
-        self._anim_ct_op.setEasingCurve(QEasingCurve.OutCubic)
-
-        def _cleanup():
-            self.sidebar_container.setGraphicsEffect(None)
-            self.content_stack.setGraphicsEffect(None)
-
-        self._anim_ct_op.finished.connect(_cleanup)
-
-        self._anim_sw.start()
-        self._anim_sb_op.start()
-        QTimer.singleShot(220, self._anim_ct_op.start)
+        # ★重要★
+        # UIの初回描画(レイアウト計算など)でメインスレッドがブロックされるため、
+        # 描画が落ち着くまで少し(100ms)待ってからアニメーションを開始する
+        def _start_anims():
+            self._anim_win_op.start()
+            self._anim_win_pos.start()
+            
+        QTimer.singleShot(100, _start_anims)

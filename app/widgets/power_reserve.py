@@ -6,14 +6,15 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidgetItem,
     QPushButton, QMessageBox, QHeaderView, QDateEdit, QFileDialog,
     QApplication, QSystemTrayIcon, QCheckBox, QSizePolicy, QFrame,
+    QSplitter,
 )
-from PySide6.QtCore import QDate, Qt, QRect
+from PySide6.QtCore import QDate, Qt, QRect, QTimer
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import load_settings
 from app.core.i18n import tr
-from app.api.power_reserve_api import FetchPowerReserveWorker
+from app.api.market.power_reserve import FetchPowerReserveWorker
 from app.core.events import bus
 
 logger = logging.getLogger(__name__)
@@ -351,57 +352,88 @@ class PowerReserveWidget(BaseWidget):
         self._last_rows    = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # ── コントロールバー ─────────────────────────────────────────────────
-        top_layout = QHBoxLayout()
-        top_layout.setSpacing(8)
+        # ── コントロールバー (3行に分割して余裕を持たせる) ──
+        # 1行目: タイトルとステータス
+        row1 = QHBoxLayout()
         self.title_label  = QLabel(tr("エリア別 予備率 (5分自動更新)"))
+        self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.status_label = QLabel(tr("待機中"))
+        self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        row1.addWidget(self.title_label)
+        row1.addStretch()
+        row1.addWidget(self.status_label)
+        layout.addLayout(row1)
+
+        layout.addSpacing(10)
+
+        # 2行目: 日付選択・データ取得・CSV保存
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(tr("表示日:")))
+
+        self._btn_prev_day = QPushButton("◀"); self._btn_prev_day.setFixedSize(26, 30)
         self.date_edit    = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setFixedHeight(30)
-        self._btn_prev_day = QPushButton("◀"); self._btn_prev_day.setFixedSize(26, 30)
         self._btn_next_day = QPushButton("▶"); self._btn_next_day.setFixedSize(26, 30)
         self._btn_today    = QPushButton(tr("今日")); self._btn_today.setFixedHeight(30)
+
         self._btn_prev_day.clicked.connect(lambda: self.date_edit.setDate(self.date_edit.date().addDays(-1)))
         self._btn_next_day.clicked.connect(lambda: self.date_edit.setDate(self.date_edit.date().addDays(1)))
         self._btn_today.clicked.connect(lambda: self.date_edit.setDate(QDate.currentDate()))
         self.date_edit.dateChanged.connect(self.fetch_data)
-        self.status_label = QLabel(tr("待機中"))
-        self.status_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+
+        row2.addWidget(self._btn_prev_day)
+        row2.addWidget(self.date_edit)
+        row2.addWidget(self._btn_next_day)
+        row2.addWidget(self._btn_today)
+
         self.refresh_btn  = QPushButton(tr("表示"))
+        self.refresh_btn.setFixedHeight(30)
         self.refresh_btn.clicked.connect(self.fetch_data)
+        row2.addWidget(self.refresh_btn)
+
+        row2.addStretch()
+
         self.export_btn   = QPushButton(tr("Excel(CSV) 保存"))
+        self.export_btn.setFixedHeight(30)
         self.export_btn.clicked.connect(self._export_csv)
+        row2.addWidget(self.export_btn)
+        layout.addLayout(row2)
+
+        layout.addSpacing(5)
+
+        # 3行目: 表示トグル
+        row3 = QHBoxLayout()
 
         self.show_table_cb = QCheckBox(tr("表表示"))
         self.show_table_cb.setChecked(True)
+        self.show_table_cb.setCursor(Qt.PointingHandCursor)
         self.show_table_cb.stateChanged.connect(self._toggle_views)
         self.show_map_cb = QCheckBox(tr("マップ表示"))
         self.show_map_cb.setChecked(True)
+        self.show_map_cb.setCursor(Qt.PointingHandCursor)
         self.show_map_cb.stateChanged.connect(self._toggle_views)
 
-        top_layout.addWidget(self.title_label)
-        top_layout.addWidget(self._btn_prev_day)
-        top_layout.addWidget(self.date_edit)
-        top_layout.addWidget(self._btn_next_day)
-        top_layout.addWidget(self._btn_today)
-        top_layout.addWidget(self.status_label)
-        top_layout.addSpacing(10)
-        top_layout.addWidget(self.show_table_cb)
-        top_layout.addWidget(self.show_map_cb)
-        top_layout.addStretch()
-        top_layout.addWidget(self.export_btn)
-        top_layout.addWidget(self.refresh_btn)
-        layout.addLayout(top_layout)
+        row3.addWidget(self.show_table_cb)
+        row3.addWidget(self.show_map_cb)
+        row3.addStretch()
+        layout.addLayout(row3)
+
+        layout.addSpacing(10)
+
+        # ── スプリッター: テーブル(上) + ヒートマップ(下) ──
+        self.splitter = QSplitter(Qt.Vertical)
+        layout.addWidget(self.splitter, 1)
 
         # ── テーブル ─────────────────────────────────────────────────────────
         self.table = ExcelCopyTableWidget()
         self.table.setAlternatingRowColors(True)
-        layout.addWidget(self.table, 3)
+        self.splitter.addWidget(self.table)
 
         # ── ヒートマップカード ────────────────────────────────────────────────
         self._heatmap_card = QFrame()
@@ -413,10 +445,11 @@ class PowerReserveWidget(BaseWidget):
         self._hm_header = QWidget()
         self._hm_header.setObjectName("hmHeader")
         hm_hdr_layout = QHBoxLayout(self._hm_header)
-        hm_hdr_layout.setContentsMargins(10, 5, 8, 5)
+        hm_hdr_layout.setContentsMargins(16, 10, 16, 10)
         hm_hdr_layout.setSpacing(8)
         self._hm_header_lbl = QLabel(tr("予備率ヒートマップ"))
         self.btn_copy_heatmap = QPushButton(tr("マップ画像をコピー"))
+        self.btn_copy_heatmap.setFixedHeight(30)
         self.btn_copy_heatmap.clicked.connect(self._copy_heatmap)
         hm_hdr_layout.addWidget(self._hm_header_lbl)
         hm_hdr_layout.addStretch()
@@ -429,31 +462,34 @@ class PowerReserveWidget(BaseWidget):
 
         self.heatmap = ReserveHeatmapWidget()
         card_layout.addWidget(self.heatmap, 1)
-        layout.addWidget(self._heatmap_card, 2)
+        
+        self.splitter.addWidget(self._heatmap_card)
+        self.splitter.setSizes([350, 450])
 
         self.worker = None
         self._alerted_low_reserve = set()
         self.setup_timer(self.settings.get("reserve_interval", 5), self.fetch_data)
-        self.fetch_data()
+        QTimer.singleShot(2250, self.fetch_data)
         self._apply_card_theme()
 
     # ── カードテーマ ─────────────────────────────────────────────────────────
     def _apply_card_theme(self):
         is_dark  = self.is_dark
-        c_border = '#3e3e42' if is_dark else '#d0d0d0'
-        c_header = '#252526' if is_dark else '#f0f0f0'
-        c_sep    = '#3e3e42' if is_dark else '#d0d0d0'
-        c_lbl    = '#888888' if is_dark else '#666666'
+        c_border = '#3e3e42' if is_dark else '#cccccc'
+        c_header = '#2d2d30' if is_dark else '#f5f5f5'
+        c_sep    = '#3e3e42' if is_dark else '#cccccc'
+        c_lbl    = '#eeeeee' if is_dark else '#333333'
+        
         self._heatmap_card.setStyleSheet(
-            f"QFrame#heatmapCard {{ border: 1px solid {c_border}; }}"
+            f"QFrame#heatmapCard {{ border: 1px solid {c_border}; border-radius: 8px; background: transparent; }}"
         )
         self._hm_header.setStyleSheet(
-            f"QWidget#hmHeader {{ background-color: {c_header}; }}"
+            f"QWidget#hmHeader {{ background-color: {c_header}; border-top-left-radius: 8px; border-top-right-radius: 8px; border: none; }}"
         )
         self._hm_sep.setStyleSheet(f"color: {c_sep};")
         self._hm_header_lbl.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {c_lbl};"
-            f" letter-spacing: 1px; background: transparent;"
+            f"font-size: 13px; font-weight: bold; color: {c_lbl};"
+            f" background: transparent; border: none;"
         )
 
     # ── ビュー切替・コピー ────────────────────────────────────────────────────

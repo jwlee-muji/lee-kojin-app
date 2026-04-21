@@ -3,6 +3,7 @@
 - 10분 TTL 인메모리 캐시로 동일 요청 반복을 방지
 """
 import time
+import threading
 import requests
 import logging
 from PySide6.QtCore import QThread, Signal
@@ -15,6 +16,7 @@ _WEATHER_CACHE_TTL = 600   # 캐시 유효 시간 (초) — 10분
 
 _weather_cache: list | None = None
 _weather_cache_ts: float    = 0.0
+_weather_cache_lock         = threading.Lock()
 
 
 class FetchWeatherWorker(BaseWorker):
@@ -24,11 +26,12 @@ class FetchWeatherWorker(BaseWorker):
         global _weather_cache, _weather_cache_ts
 
         # ── TTL 캐시 확인 ─────────────────────────────────────────────────
-        now = time.monotonic()
-        if _weather_cache is not None and (now - _weather_cache_ts) < _WEATHER_CACHE_TTL:
-            logger.info("天気予報データをキャッシュから返します。")
-            self.finished.emit(_weather_cache)
-            return
+        with _weather_cache_lock:
+            now = time.monotonic()
+            if _weather_cache is not None and (now - _weather_cache_ts) < _WEATHER_CACHE_TTL:
+                logger.info("天気予報データをキャッシュから返します。")
+                self.finished.emit(_weather_cache)
+                return
 
         with requests.Session() as session:
             session.headers.update({
@@ -56,8 +59,9 @@ class FetchWeatherWorker(BaseWorker):
                     data = [data]
 
                 # ── 캐시 갱신 ─────────────────────────────────────────────
-                _weather_cache    = data
-                _weather_cache_ts = time.monotonic()
+                with _weather_cache_lock:
+                    _weather_cache    = data
+                    _weather_cache_ts = time.monotonic()
 
                 self.finished.emit(data)
             except requests.exceptions.RequestException as e:

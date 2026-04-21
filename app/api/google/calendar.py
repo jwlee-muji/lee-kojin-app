@@ -56,7 +56,7 @@ class FetchEventsWorker(_BaseCalendarWorker):
                     timeMax=self.time_max,
                     singleEvents=True,
                     orderBy="startTime",
-                    maxResults=250,
+                    maxResults=2500,
                 )
 
             if len(self.calendar_ids) == 1:
