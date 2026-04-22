@@ -2,6 +2,7 @@
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [
+    ('app',           'app'),           # app/ ソースをそのまま同梱 (PYZ 解析漏れの fallback)
     ('app/ui/themes', 'app/ui/themes'),
     ('img',           'img'),
 ]
