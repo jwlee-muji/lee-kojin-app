@@ -32,6 +32,15 @@ jobs:
         run: chcp 65001
         shell: cmd
 
+      - name: シークレットファイルを生成
+        shell: pwsh
+        env:
+          OAUTH_CREDS_PY: ${{ secrets.OAUTH_CREDS_PY }}
+          SECRETS_PY: ${{ secrets.SECRETS_PY }}
+        run: |
+          [System.IO.File]::WriteAllText("app/api/google/_oauth_creds.py", $env:OAUTH_CREDS_PY)
+          [System.IO.File]::WriteAllText("app/core/_secrets.py", $env:SECRETS_PY)
+
       - name: PyInstaller でビルド
         shell: cmd
         run: pyinstaller lee.spec --noconfirm
