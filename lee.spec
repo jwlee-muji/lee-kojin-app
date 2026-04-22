@@ -1,15 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [('app/ui/themes', 'app/ui/themes')]
+datas = [
+    ('app/ui/themes', 'app/ui/themes'),
+    ('img',           'img'),
+]
 binaries = []
 
-# app パッケージ全体を明示的に収集 (遅延インポートで静的解析が届かないモジュールを補完)
+# app パッケージ全体を明示的に収集
 hiddenimports = collect_submodules('app')
 
 hiddenimports += [
     'pyqtgraph', 'packaging.version', 'bs4',
-    'sqlite3', 'smtplib',
+    'sqlite3', 'smtplib', 'ssl', '_ssl',
     'email.mime.text', 'email.mime.multipart',
     'google.auth', 'google.auth.transport.requests',
     'google.oauth2.credentials', 'google.oauth2.service_account',
@@ -17,7 +20,6 @@ hiddenimports += [
     'httplib2', 'uritemplate',
     'concurrent.futures', 'concurrent.futures._base', 'concurrent.futures.thread',
     'calendar', 'urllib.request', 'urllib.error',
-    'ssl', '_ssl',
 ]
 tmp_ret = collect_all('yfinance')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -49,10 +51,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
-    name='LEE電力モニター',
+    exclude_binaries=True,
+    name='LEE',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -66,4 +67,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['img\\icon.ico'],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='LEE',
 )

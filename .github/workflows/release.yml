@@ -1,19 +1,18 @@
 name: ビルド & リリース
 
-# v* タグをプッシュしたときだけ実行 (例: git tag v4.2.0 && git push origin v4.2.0)
 on:
   push:
     tags:
       - 'v*'
 
 permissions:
-  contents: write   # リリース作成に必要
+  contents: write
 
 jobs:
   build-and-release:
     runs-on: windows-latest
     env:
-      PYTHONUTF8: "1"   # 日本語ファイル名・パスを正しく処理するため
+      PYTHONUTF8: "1"
 
     steps:
       - name: リポジトリをチェックアウト
@@ -28,6 +27,10 @@ jobs:
       - name: 依存パッケージをインストール
         run: pip install -r requirements.txt pyinstaller
 
+      - name: Inno Setup をインストール
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+
       - name: システムロケールを UTF-8 に設定
         run: chcp 65001
         shell: cmd
@@ -41,22 +44,36 @@ jobs:
           [System.IO.File]::WriteAllText("app/api/google/_oauth_creds.py", $env:OAUTH_CREDS_PY)
           [System.IO.File]::WriteAllText("app/core/_secrets.py", $env:SECRETS_PY)
 
-      - name: PyInstaller でビルド
+      - name: バージョンを取得
+        id: get_version
+        shell: pwsh
+        run: |
+          $ver = python -c "exec(open('version.py').read()); print(__version__)"
+          echo "APP_VERSION=$ver" >> $env:GITHUB_ENV
+          echo "バージョン: $ver"
+
+      - name: PyInstaller でビルド (onedir)
         shell: cmd
         run: pyinstaller lee.spec --noconfirm
 
-      - name: EXE ファイル名を確認
+      - name: ビルド出力を確認
         shell: pwsh
-        run: Get-ChildItem dist\
+        run: Get-ChildItem dist\LEE\ | Select-Object Name, Length
+
+      - name: Inno Setup でインストーラーをビルド
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\installer
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$env:APP_VERSION installer.iss
+          Get-ChildItem dist\installer\
 
       - name: SHA256 ハッシュを生成
         shell: pwsh
         run: |
-          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
-          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
-          "$hash  $($exe.Name)" | Out-File -Encoding utf8 "dist\$($exe.BaseName).sha256"
+          $setup = Get-ChildItem dist\installer\LEE_Setup.exe
+          $hash  = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
+          "$hash  LEE_Setup.exe" | Out-File -Encoding utf8 "dist\installer\LEE_Setup.sha256"
           Write-Output "SHA256: $hash"
-          Write-Output "File: $($exe.Name)"
 
       - name: GitHub リリースを作成 (ドラフト)
         uses: softprops/action-gh-release@v2
@@ -65,5 +82,5 @@ jobs:
           name: ${{ github.ref_name }}
           draft: true
           files: |
-            dist/*.exe
-            dist/*.sha256
+            dist/installer/LEE_Setup.exe
+            dist/installer/LEE_Setup.sha256
