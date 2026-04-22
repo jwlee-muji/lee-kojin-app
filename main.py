@@ -5,10 +5,28 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from app.core.config import LOG_FILE, get_theme_qss
 
-# PyInstaller 静的解析用: クロージャ内の遅延インポートは静的解析が届かないため
-# モジュールレベルで明示インポートし、全ウィジェット依存関係をバンドルに含める
-import app.ui.main_window   # noqa: F401
-import app.ui.login_window  # noqa: F401
+# PyInstaller 静的解析用: エントリーポイントで全依存モジュールを明示インポート
+# (クロージャ内遅延インポートや間接依存は静的解析が届かないため直接列挙)
+import app.ui.main_window        # noqa: F401
+import app.ui.login_window       # noqa: F401
+import app.widgets.bug_report    # noqa: F401
+import app.widgets.ai_chat       # noqa: F401
+import app.widgets.briefing      # noqa: F401
+import app.widgets.dashboard     # noqa: F401
+import app.widgets.dashboard_cards   # noqa: F401
+import app.widgets.dashboard_service # noqa: F401
+import app.widgets.gmail         # noqa: F401
+import app.widgets.google_calendar   # noqa: F401
+import app.widgets.hjks          # noqa: F401
+import app.widgets.imbalance     # noqa: F401
+import app.widgets.jepx_spot     # noqa: F401
+import app.widgets.jkm           # noqa: F401
+import app.widgets.log_viewer    # noqa: F401
+import app.widgets.power_reserve # noqa: F401
+import app.widgets.settings      # noqa: F401
+import app.widgets.text_memo     # noqa: F401
+import app.widgets.weather       # noqa: F401
+import app.api.email_api         # noqa: F401
 
 # --- 통합 로그 시스템 설정 ---
 # RotatingFileHandler: 10MB 초과 시 자동 로테이션, 최대 2개 백업 파일 유지

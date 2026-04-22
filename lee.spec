@@ -17,6 +17,7 @@ hiddenimports += [
     'httplib2', 'uritemplate',
     'concurrent.futures', 'concurrent.futures._base', 'concurrent.futures.thread',
     'calendar', 'urllib.request', 'urllib.error',
+    'ssl', '_ssl',
 ]
 tmp_ret = collect_all('yfinance')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
