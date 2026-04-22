@@ -1,6 +1,6 @@
 name: ビルド & リリース
 
-# v* タグをプッシュしたときだけ実行 (例: git tag v4.1.0 && git push origin v4.1.0)
+# v* タグをプッシュしたときだけ実行 (例: git tag v4.2.0 && git push origin v4.2.0)
 on:
   push:
     tags:
@@ -33,7 +33,21 @@ jobs:
         shell: cmd
 
       - name: PyInstaller でビルド
+        shell: cmd
         run: pyinstaller lee.spec --noconfirm
+
+      - name: EXE ファイル名を確認
+        shell: pwsh
+        run: Get-ChildItem dist\
+
+      - name: SHA256 ハッシュを生成
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
+          "$hash  $($exe.Name)" | Out-File -Encoding utf8 "dist\$($exe.BaseName).sha256"
+          Write-Output "SHA256: $hash"
+          Write-Output "File: $($exe.Name)"
 
       - name: GitHub リリースを作成 (ドラフト)
         uses: softprops/action-gh-release@v2
@@ -41,4 +55,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           draft: true
-          files: dist/LEE電力モニター.exe
+          files: |
+            dist/*.exe
+            dist/*.sha256
