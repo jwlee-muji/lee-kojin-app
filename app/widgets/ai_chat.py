@@ -338,8 +338,9 @@ class _ChatArea(QScrollArea):
         avatar = QLabel("AI")
         avatar.setFixedSize(40, 40)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _avatar_bg = UIColors.get_chat_colors(True)['avatar_bg']
         avatar.setStyleSheet(
-            f"background: {UIColors.get_chat_colors(True)["avatar_bg"]}; color: white;"
+            f"background: {_avatar_bg}; color: white;"
             "border-radius: 20px; font-weight: bold; font-size: 14px;"
         )
 
@@ -482,8 +483,9 @@ class _BubbleWidget(QWidget):
             av = QLabel("AI")
             av.setFixedSize(28, 28)
             av.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _av_bg = UIColors.get_chat_colors(True)['avatar_bg']
             av.setStyleSheet(
-                f"background: {UIColors.get_chat_colors(True)["avatar_bg"]}; color: #fff;"
+                f"background: {_av_bg}; color: #fff;"
                 "border-radius: 14px; font-weight: bold; font-size: 10px;"
             )
             outer.addWidget(av, 0, Qt.AlignmentFlag.AlignTop)
