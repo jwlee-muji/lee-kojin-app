@@ -1,9 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('app/ui/themes', 'app/ui/themes')]
 binaries = []
-hiddenimports = ['pyqtgraph', 'packaging.version', 'bs4', 'sqlite3', 'smtplib', 'email.mime.text', 'email.mime.multipart', 'google.auth', 'google.auth.transport.requests', 'google.oauth2.credentials', 'google.oauth2.service_account', 'google_auth_oauthlib.flow', 'googleapiclient.discovery', 'httplib2', 'uritemplate', 'concurrent.futures', 'concurrent.futures._base', 'concurrent.futures.thread', 'calendar', 'urllib.request', 'urllib.error']
+
+# app パッケージ全体を明示的に収集 (遅延インポートで静的解析が届かないモジュールを補完)
+hiddenimports = collect_submodules('app')
+
+hiddenimports += [
+    'pyqtgraph', 'packaging.version', 'bs4',
+    'sqlite3', 'smtplib',
+    'email.mime.text', 'email.mime.multipart',
+    'google.auth', 'google.auth.transport.requests',
+    'google.oauth2.credentials', 'google.oauth2.service_account',
+    'google_auth_oauthlib.flow', 'googleapiclient.discovery',
+    'httplib2', 'uritemplate',
+    'concurrent.futures', 'concurrent.futures._base', 'concurrent.futures.thread',
+    'calendar', 'urllib.request', 'urllib.error',
+]
 tmp_ret = collect_all('yfinance')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('google_auth_oauthlib')
