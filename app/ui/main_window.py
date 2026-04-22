@@ -254,8 +254,12 @@ class MainWindow(QMainWindow):
 
         # ── 네트워크 모니터링 초기화 ───────────────────────────────────────────
         QApplication.instance().is_online = True
-        QNetworkInformation.loadBackendByFeatures(QNetworkInformation.Feature.Reachability)
-        self.net_info = QNetworkInformation.instance()
+        self.net_info = None
+        try:
+            QNetworkInformation.loadBackendByFeatures(QNetworkInformation.Feature.Reachability)
+            self.net_info = QNetworkInformation.instance()
+        except Exception as e:
+            logger.warning(f"ネットワーク監視バックエンド初期化失敗 (無視して続行): {e}")
         if self.net_info:
             self.net_info.reachabilityChanged.connect(self._on_reachability_changed)
             is_online = (self.net_info.reachability()
@@ -263,12 +267,15 @@ class MainWindow(QMainWindow):
             self._update_network_ui(is_online)
 
         # ── 데이터 보존 백그라운드 작업 ───────────────────────────────────────
-        from app.core.config import load_settings as _load
-        _s = _load()
-        self._retention_worker = DataRetentionWorker(_s.get("retention_days", 1460))
-        self._retention_worker.finished.connect(self._retention_worker.deleteLater)
-        QTimer.singleShot(Timers.STARTUP_DELAY_MS, self._retention_worker.start)
-        bus.app_quitting.connect(self._safe_stop_retention)
+        try:
+            from app.core.config import load_settings as _load
+            _s = _load()
+            self._retention_worker = DataRetentionWorker(_s.get("retention_days", 1460))
+            self._retention_worker.finished.connect(self._retention_worker.deleteLater)
+            QTimer.singleShot(Timers.STARTUP_DELAY_MS, self._retention_worker.start)
+            bus.app_quitting.connect(self._safe_stop_retention)
+        except Exception as e:
+            logger.warning(f"DataRetentionWorker 初期化失敗 (無視して続行): {e}")
 
     # ── 사이드바 헬퍼 ──────────────────────────────────────────────────────────
 

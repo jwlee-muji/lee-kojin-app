@@ -101,12 +101,23 @@ def main():
         except Exception:
             pass
 
-        from app.ui.main_window import MainWindow
-        win = MainWindow()
-        _state["main_window"] = win
-        login_win.hide()
-        win.show_with_animation()
-        logger.info(f"メインウィンドウ表示: {email}")
+        try:
+            from app.ui.main_window import MainWindow
+            win = MainWindow()
+            _state["main_window"] = win
+            login_win.hide()
+            win.show_with_animation()
+            logger.info(f"メインウィンドウ表示: {email}")
+        except Exception as e:
+            logger.critical("メインウィンドウ起動失敗", exc_info=True)
+            from PySide6.QtWidgets import QMessageBox
+            login_win.show()
+            QMessageBox.critical(
+                None,
+                "起動エラー",
+                f"メインウィンドウの起動に失敗しました。\n\n{type(e).__name__}: {e}\n\n"
+                "ログファイルを確認してください。",
+            )
 
     def _show_login():
         _state["main_window"] = None   # 旧ウィンドウを GC
