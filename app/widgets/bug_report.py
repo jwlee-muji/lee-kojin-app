@@ -297,13 +297,15 @@ class BugReportWidget(BaseWidget):
         from app.core.config import __version__
         ver_str = f"v{__version__}"
 
-        category = self.cmb_category.currentText().split("  ", 1)[-1].strip()
-        subject  = f"[LEE {ver_str}] {category}: {summary}"
-        body     = (
+        category       = self.cmb_category.currentText().split("  ", 1)[-1].strip()
+        subject        = f"[LEE {ver_str}] {category}: {summary}"
+        detail_header  = tr('【詳細・再現手順】') + '\n'
+        log_header     = tr('【ログ (直近 {0} 行)】').format(_MAX_LOG_LINES) + '\n'
+        body = (
             f"{tr('【分類】')}{category}\n"
             f"{tr('【概要】')}{summary}\n\n"
-            f"{tr('【詳細・再現手順】\n')}{self.edt_detail.toPlainText() or tr('(未記入)')}\n\n"
-            f"{tr('【ログ (直近 {0} 行)】\n').format(_MAX_LOG_LINES)}{self.edt_log.toPlainText()}"
+            f"{detail_header}{self.edt_detail.toPlainText() or tr('(未記入)')}\n\n"
+            f"{log_header}{self.edt_log.toPlainText()}"
         )
 
         self.btn_send.setEnabled(False)
