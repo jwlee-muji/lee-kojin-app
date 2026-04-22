@@ -6,13 +6,67 @@ from PySide6.QtWidgets import (
     QComboBox
 )
 from PySide6.QtCore import QFileSystemWatcher, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from app.core.config import LOG_FILE
 from app.core.i18n import tr
+from app.core.constants import Timers, Cache
 from app.ui.theme import UIColors
 from app.ui.common import BaseWidget
 
 logger = logging.getLogger(__name__)
+
+
+class _LogHighlighter(QSyntaxHighlighter):
+    """ログ行をパターンマッチで色分けする QSyntaxHighlighter。
+    appendPlainText と組み合わせることで appendHtml より大幅に高速になる。"""
+
+    def __init__(self, document, colors: dict):
+        super().__init__(document)
+        self._rules: list[tuple[re.Pattern, QTextCharFormat]] = []
+        self._build_rules(colors)
+
+    def update_colors(self, colors: dict):
+        """テーマ切替時に色を更新して再ハイライトする。"""
+        self._build_rules(colors)
+        self.rehighlight()
+
+    def _build_rules(self, c: dict):
+        def _fmt(color_str: str, bold: bool = False,
+                 bg: str | None = None) -> QTextCharFormat:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color_str))
+            if bold:
+                fmt.setFontWeight(QFont.Bold)
+            if bg:
+                fmt.setBackground(QColor(bg))
+            return fmt
+
+        # 順序が重要: 後のルールが前のルールを上書きする
+        # モジュール名パターンを先に置き、ログレベルキーワードを後に置くことで
+        # レベルキーワードが必ずモジュール色を上書きする
+        self._rules = [
+            (re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'), _fmt(c['time'])),
+            # モジュール名: app.xxx.yyy または __main__ (括弧なし)
+            (re.compile(r'\b(?:app(?:\.\w+)+|__main__)'), _fmt(c['module'])),
+            # ログレベルは後に置いて優先度を最高にする
+            (re.compile(r'\[INFO\]'),    _fmt(c['info'])),
+            (re.compile(r'\[WARNING\]'), _fmt(c['warning'], bold=True)),
+            (re.compile(r'\[ERROR\]'),   _fmt(c['error'],   bold=True)),
+        ]
+        # 行全体の背景色用フォーマット (ERROR / WARNING)
+        self._error_line_fmt   = _fmt(c['error'],   bold=True, bg=c.get('error_bg'))
+        self._warning_line_fmt = _fmt(c['warning'], bold=True, bg=c.get('warn_bg'))
+
+    def highlightBlock(self, text: str):
+        # ERROR / WARNING 行は行全体に背景色を適用してから前景ルールを重ねる
+        if '[ERROR]' in text:
+            self.setFormat(0, len(text), self._error_line_fmt)
+        elif '[WARNING]' in text:
+            self.setFormat(0, len(text), self._warning_line_fmt)
+
+        for pattern, fmt in self._rules:
+            for m in pattern.finditer(text):
+                self.setFormat(m.start(), m.end() - m.start(), fmt)
 
 
 class LogViewerWidget(BaseWidget):
@@ -29,7 +83,7 @@ class LogViewerWidget(BaseWidget):
         self._log_buffer = []     # 대량 로그 처리용 버퍼
 
         self._process_timer = QTimer(self)
-        self._process_timer.setInterval(50)  # 50ms 간격으로 Chunk 처리
+        self._process_timer.setInterval(Timers.LOG_PROCESS_INTERVAL_MS)
         self._process_timer.timeout.connect(self._process_log_buffer)
 
         self._build_ui()
@@ -85,13 +139,15 @@ class LogViewerWidget(BaseWidget):
         
         self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Consolas", 11))  # 텍스트 크기 키움
+        self.log_text.setFont(QFont("Consolas", 11))
         _lc = UIColors.get_log_colors(self.is_dark)
         self.log_text.setStyleSheet(
             f"background-color: {_lc['bg']}; color: {_lc['text']}; padding: 10px; border: none;"
         )
-        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)  # 줄바꿈 끄기 (가로 스크롤 허용)
-        self.log_text.document().setMaximumBlockCount(1000)   # 메모리 누수 방지 (최대 1000줄 유지)
+        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.log_text.document().setMaximumBlockCount(Cache.LOG_MAX_LINES)
+        # QSyntaxHighlighter を文書に接続 (appendPlainText より高速な色付け)
+        self._highlighter = _LogHighlighter(self.log_text.document(), _lc)
         layout.addWidget(self.log_text)
 
     def apply_theme_custom(self):
@@ -105,7 +161,8 @@ class LogViewerWidget(BaseWidget):
         self.log_text.setStyleSheet(
             f"background-color: {lc['bg']}; color: {lc['text']}; padding: 10px; border: none;"
         )
-        # テーマ変更: ディスク再読み込みなしにキャッシュから再描画
+        # ハイライトカラーを更新してキャッシュから再描画
+        self._highlighter.update_colors(lc)
         self._rerender_from_cache()
 
     def _on_filter_changed(self):
@@ -137,7 +194,7 @@ class LogViewerWidget(BaseWidget):
                 
             with open(self._log_file, 'r', encoding='utf-8', errors='replace') as f:
                 # 처음 읽을 때 파일이 500KB를 넘으면 뒤에서부터 읽음 (OOM/프리징 방지)
-                MAX_READ_BYTES = 500 * 1024
+                MAX_READ_BYTES = Cache.LOG_MAX_READ_BYTES
                 if self._last_pos == 0 and current_size > MAX_READ_BYTES:
                     f.seek(current_size - MAX_READ_BYTES)
                     # 잘린 첫 줄은 버리기 위해 readlines 대신 부분 읽기 후 첫 줄 컷
@@ -156,80 +213,52 @@ class LogViewerWidget(BaseWidget):
             # インメモリキャッシュを更新 (最大1000行に制限)
             self._all_lines.extend(lines)
             if len(self._all_lines) > 1000:
-                self._all_lines = self._all_lines[-1000:]
+                self._all_lines = self._all_lines[-Cache.LOG_MAX_LINES:]
             self._log_buffer.extend(lines)
             
             if not self._process_timer.isActive():
                 self._process_timer.start()
                 
         except (IOError, OSError) as e:
-            err_c = UIColors.get_log_colors(self.is_dark)['error']
-            self.log_text.appendHtml(f"<span style='color: {err_c};'>{tr('ログの読み込みに失敗しました: {0}').format(e)}</span>")
+            self.log_text.appendPlainText(f"[ERROR] {tr('ログの読み込みに失敗しました: {0}').format(e)}")
         except Exception as e:
-            err_c = UIColors.get_log_colors(self.is_dark)['error']
-            self.log_text.appendHtml(f"<span style='color: {err_c};'>{tr('予期せぬエラーが発生しました: {0}').format(e)}</span>")
+            self.log_text.appendPlainText(f"[ERROR] {tr('予期せぬエラーが発生しました: {0}').format(e)}")
             logger.error(f"Log viewer error: {e}", exc_info=True)
             
     def _process_log_buffer(self):
         if not self._log_buffer:
             self._process_timer.stop()
             return
-            
-        chunk = self._log_buffer[:200]  # 한 번에 200줄씩만 처리하여 UI 방어
-        self._log_buffer = self._log_buffer[200:]
-        
+
+        chunk = self._log_buffer[:Cache.LOG_CHUNK_SIZE]
+        self._log_buffer = self._log_buffer[Cache.LOG_CHUNK_SIZE:]
+
         bar = self.log_text.verticalScrollBar()
         at_bottom = bar.value() == bar.maximum()
-        
-        lvl_idx = self.level_combo.currentIndex()
+
+        lvl_idx    = self.level_combo.currentIndex()
         lvl_filter = self.level_combo.currentText()
-        mod_idx = self.module_combo.currentIndex()
-        lc = UIColors.get_log_colors(self.is_dark)
+        mod_idx    = self.module_combo.currentIndex()
 
-        html_parts = []
+        lines_to_add = []
         for line in chunk:
-            safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
             # Level filter (index 0 = all)
-            if lvl_idx != 0 and f"[{lvl_filter}]" not in safe_line:
+            if lvl_idx != 0 and f"[{lvl_filter}]" not in line:
                 continue
-
             # Module filter (index 0 = all) — index-based to avoid translation mismatch
-            if mod_idx == 1 and "__main__" not in safe_line: continue
-            elif mod_idx == 2 and "hjks" not in safe_line: continue
-            elif mod_idx == 3 and "imbalance" not in safe_line: continue
-            elif mod_idx == 4 and "jkm" not in safe_line: continue
-            elif mod_idx == 5 and "weather" not in safe_line: continue
-            elif mod_idx == 6 and "power_reserve" not in safe_line: continue
+            if   mod_idx == 1 and "__main__"      not in line: continue
+            elif mod_idx == 2 and "hjks"           not in line: continue
+            elif mod_idx == 3 and "imbalance"      not in line: continue
+            elif mod_idx == 4 and "jkm"            not in line: continue
+            elif mod_idx == 5 and "weather"        not in line: continue
+            elif mod_idx == 6 and "power_reserve"  not in line: continue
+            lines_to_add.append(line)
 
-            match = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - \[(.*?)\] (.*?)\s*:\s*(.*)", safe_line)
-            if match:
-                time_str, level_str, module_str, msg_str = match.groups()
-                module_short = module_str.replace('app.widgets.', '').replace('app.', '')
-                if level_str == 'ERROR':
-                    level_html = f"<span style='color: {lc['error']}; font-weight: bold;'>[{level_str}]</span>"
-                elif level_str == 'WARNING':
-                    level_html = f"<span style='color: {lc['warning']}; font-weight: bold;'>[{level_str}]</span>"
-                elif level_str == 'INFO':
-                    level_html = f"<span style='color: {lc['info']};'>[{level_str}]</span>"
-                else:
-                    level_html = f"<span>[{level_str}]</span>"
-                html_parts.append(
-                    f"<span style='color: {lc['time']};'>{time_str}</span> - "
-                    f"{level_html} "
-                    f"<span style='color: {lc['module']};'>[{module_short}]</span> "
-                    f"<span style='color: {lc['text']};'>{msg_str}</span>"
-                )
-            else:
-                html_parts.append(f"<span style='color: {lc['text']};'>{safe_line}</span>")
+        if lines_to_add:
+            # appendPlainText + QSyntaxHighlighter は appendHtml より大幅に高速
+            # \n 結合で 1 回の呼び出しに集約してブロック生成コストを最小化する
+            self.log_text.appendPlainText("\n".join(lines_to_add))
 
-        if html_parts:
-            # 全行を <p> で包んで一度に挿入 — appendHtml の N 回呼び出しを 1 回に削減
-            combined = "".join(
-                f"<p style='margin:0; padding:0; white-space:pre;'>{h}</p>"
-                for h in html_parts
-            )
-            self.log_text.appendHtml(combined)
         if at_bottom:
             bar.setValue(bar.maximum())
 

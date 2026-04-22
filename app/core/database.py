@@ -5,7 +5,7 @@ import logging
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
-from app.core.config import DB_IMBALANCE, DB_HJKS, DB_JKM, BACKUP_DIR
+from app.core.config import DB_IMBALANCE, DB_HJKS, DB_JKM, DB_POWER_RESERVE, DB_WEATHER, BACKUP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,10 @@ def run_retention_policy(retention_days: int):
     
     try:
         _backup_and_delete_imbalance(int_yyyymmdd)
-        _backup_and_delete_by_date(DB_HJKS, 'hjks_capacity', 'backup_hjks.db', 'HJKS', str_dash)
-        _backup_and_delete_by_date(DB_JKM,  'jkm_prices',    'backup_jkm.db',  'JKM',  str_dash)
+        _backup_and_delete_by_date(DB_HJKS,          'hjks_capacity',   'backup_hjks.db',          'HJKS',         str_dash)
+        _backup_and_delete_by_date(DB_JKM,           'jkm_prices',      'backup_jkm.db',           'JKM',          str_dash)
+        _backup_and_delete_by_date(DB_POWER_RESERVE, 'power_reserve',   'backup_power_reserve.db', '電力予備率',   str_dash)
+        _backup_and_delete_by_date(DB_WEATHER,       'weather_forecast', 'backup_weather.db',       '天気予報',     str_dash)
     except (sqlite3.Error, OSError) as e:
         logger.error(f"データ寿命管理(バックアップと削除)の実行中にエラーが発生しました: {e}")
 

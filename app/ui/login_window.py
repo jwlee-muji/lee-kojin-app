@@ -12,14 +12,13 @@ import logging
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QStackedWidget, QLineEdit,
-    QFrame, QApplication, QDialog, QTextEdit, QDialogButtonBox,
-    QGraphicsOpacityEffect,
+    QFrame, QApplication, QDialog, QTextEdit,
 )
 from PySide6.QtCore import (
     Qt, QThread, Signal, QPropertyAnimation, QEasingCurve, QTimer, QRect,
 )
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter
 from app.core.i18n import tr
+from app.ui.theme import get_global_qss, ThemePalette, UIColors
 
 logger = logging.getLogger(__name__)
 
@@ -512,42 +511,58 @@ class LoginWindow(QMainWindow):
 
     # ── スタイル ─────────────────────────────────────────────────────────────
 
-    def _apply_style(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #1e1e1e;
-            }
-            QLabel#loginTitle {
+    def _apply_style(self, is_dark: bool = True):
+        bg         = ThemePalette.bg_primary(is_dark)
+        card_bg    = ThemePalette.bg_secondary(is_dark)
+        tc_emph    = UIColors.text_emphasis(is_dark)
+        tc_dim     = UIColors.text_secondary(is_dark)
+        sep_c      = UIColors.BORDER_DARK if is_dark else UIColors.BORDER_LIGHT
+        bc         = "#555555" if is_dark else "#cccccc"
+        primary    = UIColors.action_blue(is_dark)
+        primary_hv = "#1177bb" if is_dark else "#1565c0"
+        sec_bg     = ThemePalette.BG_INPUT_DARK if is_dark else "#dddddd"
+        sec_hv     = "#4a4a4a" if is_dark else "#cccccc"
+        sec_tc     = "#cccccc" if is_dark else UIColors.text_primary(is_dark)
+        google_dis = "#555555" if is_dark else "#cccccc"
+        google_dtc = "#999999" if is_dark else "#888888"
+        or_c       = "#666666" if is_dark else "#aaaaaa"
+
+        mode = "dark" if is_dark else "light"
+        self.setStyleSheet(get_global_qss(mode) + f"""
+            QMainWindow, QWidget {{
+                background-color: {bg};
+            }}
+            QLabel#loginTitle {{
                 font-size: 26px;
                 font-weight: bold;
-                color: #f0f0f0;
-            }
-            QLabel#loginSubtitle {
+                color: {tc_emph};
+            }}
+            QLabel#loginSubtitle {{
                 font-size: 13px;
-                color: #999999;
-            }
-            QLabel#loginDesc {
+                color: {tc_dim};
+            }}
+            QLabel#loginDesc {{
                 font-size: 12px;
-                color: #888888;
+                color: {UIColors.TEXT_MUTED};
                 line-height: 1.6;
-            }
-            QLabel#loginOr {
+            }}
+            QLabel#loginOr {{
                 font-size: 12px;
-                color: #666666;
+                color: {or_c};
                 min-width: 40px;
-            }
-            QLabel#loginError {
+            }}
+            QLabel#loginError {{
                 font-size: 12px;
-                color: #ff5252;
+                color: {UIColors.OFFLINE_COLOR};
                 padding: 6px 12px;
                 background: rgba(255,82,82,0.1);
                 border-radius: 4px;
-            }
-            QFrame#loginSep {
-                color: #333333;
+            }}
+            QFrame#loginSep {{
+                color: {sep_c};
                 max-height: 1px;
-            }
-            QPushButton#googleBtn {
+            }}
+            QPushButton#googleBtn {{
                 background-color: #4285F4;
                 color: #ffffff;
                 border: none;
@@ -555,66 +570,38 @@ class LoginWindow(QMainWindow):
                 font-size: 14px;
                 font-weight: bold;
                 padding: 0 16px;
-            }
-            QPushButton#googleBtn:hover {
-                background-color: #357ae8;
-            }
-            QPushButton#googleBtn:pressed {
-                background-color: #2a6dd9;
-            }
-            QPushButton#googleBtn:disabled {
-                background-color: #555555;
-                color: #999999;
-            }
-            QPushButton#requestLink {
+            }}
+            QPushButton#googleBtn:hover {{ background-color: #357ae8; }}
+            QPushButton#googleBtn:pressed {{ background-color: #2a6dd9; }}
+            QPushButton#googleBtn:disabled {{
+                background-color: {google_dis};
+                color: {google_dtc};
+            }}
+            QPushButton#requestLink {{
                 background: transparent;
                 border: none;
                 color: #4285F4;
                 font-size: 13px;
                 text-decoration: underline;
-            }
-            QPushButton#requestLink:hover {
-                color: #76a9f5;
-            }
-            QPushButton#primaryActionBtn {
-                background-color: #0e639c;
+            }}
+            QPushButton#requestLink:hover {{ color: #76a9f5; }}
+            QPushButton#primaryActionBtn {{
+                background-color: {primary};
                 color: #ffffff;
                 border: none;
                 border-radius: 4px;
                 font-size: 13px;
                 padding: 6px 20px;
-            }
-            QPushButton#primaryActionBtn:hover {
-                background-color: #1177bb;
-            }
-            QPushButton#secondaryActionBtn {
-                background-color: #3c3c3c;
-                color: #cccccc;
-                border: 1px solid #555;
+            }}
+            QPushButton#primaryActionBtn:hover {{ background-color: {primary_hv}; }}
+            QPushButton#secondaryActionBtn {{
+                background-color: {sec_bg};
+                color: {sec_tc};
+                border: 1px solid {bc};
                 border-radius: 4px;
                 font-size: 13px;
                 padding: 6px 20px;
-            }
-            QPushButton#secondaryActionBtn:hover {
-                background-color: #4a4a4a;
-            }
-            QLineEdit {
-                background: #2d2d30;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 13px;
-            }
-            QTextEdit {
-                background: #2d2d30;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 13px;
-            }
-            QDialog {
-                background: #252526;
-            }
+            }}
+            QPushButton#secondaryActionBtn:hover {{ background-color: {sec_hv}; }}
+            QDialog {{ background: {card_bg}; }}
         """)

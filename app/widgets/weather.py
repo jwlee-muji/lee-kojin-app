@@ -1,18 +1,32 @@
 import logging
-from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QSplitter, QTableWidgetItem, QHeaderView, QMessageBox, QFrame, QPushButton,
-    QApplication,
 )
-from PySide6.QtCore import QThread, Signal, Qt, QTimer, QPropertyAnimation, Property, QEasingCurve
-from PySide6.QtGui import QFont, QColor, QBrush, QPixmap
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, Property, QEasingCurve
+from PySide6.QtGui import QColor, QBrush, QPixmap
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
-from app.core.config import WEATHER_REGIONS, BASE_DIR, load_settings
+from app.core.config import WEATHER_REGIONS, BASE_DIR
 from app.core.i18n import tr
-from app.api.market.weather import FetchWeatherWorker
+from app.api.market.weather import FetchWeatherWorker, FetchWeatherHistoryWorker
 from app.core.events import bus, WeatherSummaryEntry
+
+_CREATE_WEATHER = """
+    CREATE TABLE IF NOT EXISTS weather_forecast (
+        fetched_date TEXT NOT NULL,
+        region       TEXT NOT NULL,
+        date         TEXT NOT NULL,
+        weather_code INTEGER,
+        temp_max     REAL,
+        temp_min     REAL,
+        precip_prob  INTEGER,
+        precip_sum   REAL,
+        cloud_cover  INTEGER,
+        wind_speed   REAL,
+        PRIMARY KEY (fetched_date, region, date)
+    )
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -208,12 +222,14 @@ class WeatherWidget(BaseWidget):
         super().__init__()
         self.weather_data = []
         self.worker = None
+        self._history_worker = None
         self._build_ui()
         
         # 실행 시 날씨 갱신 (이후 1시간마다 자동 갱신)
         QTimer.singleShot(2250, self.fetch_weather)
         self.setup_timer(self.settings.get("weather_interval", 60), self.fetch_weather)
-        
+        QTimer.singleShot(8000, self._auto_fetch_history)
+
     def apply_settings_custom(self):
         self.update_timer_interval(self.settings.get("weather_interval", 60))
 
@@ -235,6 +251,10 @@ class WeatherWidget(BaseWidget):
         self.refresh_btn = QPushButton(tr("更新 (再取得)"))
         self.refresh_btn.clicked.connect(self.fetch_weather)
         top.addWidget(self.refresh_btn)
+
+        self.history_btn = QPushButton(tr("過去データ取得 (2022-03〜)"))
+        self.history_btn.clicked.connect(self.fetch_history)
+        top.addWidget(self.history_btn)
         
         main_layout.addLayout(top)
         
@@ -350,6 +370,114 @@ class WeatherWidget(BaseWidget):
         
         if weather_summary:
             bus.weather_updated.emit(weather_summary)
+
+        self._save_to_db(data_list)
+
+    def _save_to_db(self, data_list: list):
+        from datetime import date as _date
+        fetched_date = _date.today().strftime("%Y-%m-%d")
+        try:
+            from app.core.config import DB_WEATHER
+            from app.core.database import get_db_connection
+            records = []
+            for i, region_info in enumerate(WEATHER_REGIONS):
+                if i >= len(data_list):
+                    break
+                daily = data_list[i].get("daily", {})
+                if not daily:
+                    continue
+                region_name = region_info["name"]
+                dates   = daily.get("time", [])
+                w_codes = daily.get("weather_code", [])
+                t_maxs  = daily.get("temperature_2m_max", [])
+                t_mins  = daily.get("temperature_2m_min", [])
+                pops    = daily.get("precipitation_probability_max", [])
+                p_sums  = daily.get("precipitation_sum", [])
+                clouds  = daily.get("cloud_cover_mean", [])
+                winds   = daily.get("wind_speed_10m_max", [])
+                for j, d in enumerate(dates):
+                    records.append((
+                        fetched_date, region_name, d,
+                        w_codes[j] if j < len(w_codes) else None,
+                        t_maxs[j]  if j < len(t_maxs)  else None,
+                        t_mins[j]  if j < len(t_mins)   else None,
+                        int(pops[j])    if j < len(pops)    and pops[j]   is not None else None,
+                        p_sums[j]  if j < len(p_sums)   else None,
+                        int(clouds[j])  if j < len(clouds)  and clouds[j] is not None else None,
+                        winds[j]   if j < len(winds)    else None,
+                    ))
+            with get_db_connection(DB_WEATHER) as conn:
+                conn.execute(_CREATE_WEATHER)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_wf_date_region "
+                    "ON weather_forecast(date, region)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_wf_fetched "
+                    "ON weather_forecast(fetched_date)"
+                )
+                conn.executemany(
+                    "INSERT OR REPLACE INTO weather_forecast "
+                    "(fetched_date, region, date, weather_code, temp_max, temp_min, "
+                    "precip_prob, precip_sum, cloud_cover, wind_speed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    records,
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"天気DB保存エラー: {e}")
+
+    def _auto_fetch_history(self):
+        try:
+            from app.core.config import DB_WEATHER
+            from app.core.database import get_db_connection
+            if not DB_WEATHER.exists():
+                self.fetch_history()
+                return
+            with get_db_connection(DB_WEATHER) as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM weather_forecast WHERE fetched_date = date"
+                ).fetchone()[0]
+            if count < 100:
+                self.fetch_history()
+        except Exception as e:
+            logger.debug(f"天気履歴自動取得チェックエラー: {e}")
+
+    def fetch_history(self):
+        if not self.check_online_status():
+            return
+        try:
+            if self._history_worker and self._history_worker.isRunning():
+                return
+        except RuntimeError:
+            self._history_worker = None
+
+        self.history_btn.setEnabled(False)
+        self.status_label.setText(tr("過去データ確認中..."))
+        self.status_label.setStyleSheet("color: #64b5f6;")
+
+        self._history_worker = FetchWeatherHistoryWorker()
+        self._history_worker.finished.connect(self._on_history_success)
+        self._history_worker.error.connect(self._on_history_error)
+        self._history_worker.progress.connect(self._on_history_progress)
+        self._history_worker.finished.connect(self._history_worker.deleteLater)
+        self._history_worker.start()
+        self.track_worker(self._history_worker)
+
+    def _on_history_progress(self, msg: str):
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet("color: #64b5f6;")
+
+    def _on_history_success(self, msg: str):
+        self.history_btn.setEnabled(True)
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet("color: #4caf50;")
+
+    def _on_history_error(self, err_msg: str):
+        self.history_btn.setEnabled(True)
+        self.status_label.setText(tr("過去データ取得失敗"))
+        self.status_label.setStyleSheet("color: #ff5252;")
+        QMessageBox.warning(self, tr("エラー"), err_msg)
 
     def _on_fetch_error(self, err_msg):
         self.refresh_btn.setEnabled(True)

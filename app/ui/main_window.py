@@ -23,6 +23,7 @@ from app.widgets.settings import SettingsWidget
 from app.widgets.dashboard import DashboardWidget
 from app.widgets.bug_report import BugReportWidget
 from app.widgets.ai_chat import AiChatWidget
+from app.widgets.briefing import BriefingWidget
 from app.widgets.text_memo import TextMemoWidget
 from app.widgets.google_calendar import GoogleCalendarWidget
 from app.widgets.gmail import GmailWidget
@@ -30,6 +31,7 @@ from app.widgets.jepx_spot import JepxSpotWidget
 from app.ui.common import FadeStackedWidget, get_tinted_icon, clear_tint_cache
 from app.ui.theme import UIColors
 from app.core.events import bus
+from app.core.constants import Timers, Animations, Layout, Notifications as NC
 from app.core.i18n import tr
 from app.api.database_worker import DataRetentionWorker
 
@@ -50,6 +52,8 @@ class MainWindow(QMainWindow):
         self._content_to_row:  dict[int, int] = {}
         # sidebar row → icon_name (테마 동기화용)
         self._row_icons:       dict[int, str]  = {}
+        # content index → factory callable (未生成ウィジェットの遅延生成用)
+        self._widget_factories: dict[int, callable] = {}
         # 유틸리티 버튼 (하단 스트립) → content index
         self._util_btns:       list[tuple[QPushButton, int]] = []
         # 현재 활성 유틸리티 버튼
@@ -64,11 +68,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"LEE 個人アプリ  v{__version__}")
 
         screen = QApplication.primaryScreen().availableGeometry()
-        w = max(820, min(int(screen.width()  * 0.78), screen.width()))
-        h = max(560, min(int(screen.height() * 0.82), screen.height()))
+        w = max(Layout.WINDOW_MIN_WIDTH,  min(int(screen.width()  * Layout.WINDOW_WIDTH_RATIO),  screen.width()))
+        h = max(Layout.WINDOW_MIN_HEIGHT, min(int(screen.height() * Layout.WINDOW_HEIGHT_RATIO), screen.height()))
         self.resize(w, h)
         # チャイルドウィジェットの最小サイズヒントを上書きし、自由なリサイズを許容する
-        self.setMinimumSize(680, 420)
+        self.setMinimumSize(Layout.WINDOW_ABSOLUTE_MIN_W, Layout.WINDOW_ABSOLUTE_MIN_H)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -120,7 +124,7 @@ class MainWindow(QMainWindow):
         self.user_lbl.setAlignment(Qt.AlignCenter)
         self.user_lbl.setWordWrap(True)
         self.user_lbl.setStyleSheet(
-            "color: #888; font-size: 10px; padding: 2px 4px;"
+            f"color: {UIColors.TEXT_MUTED}; font-size: 10px; padding: 2px 4px;"
         )
         sidebar_layout.addWidget(self.user_lbl)
 
@@ -128,23 +132,23 @@ class MainWindow(QMainWindow):
         self.logout_btn.setObjectName("logoutBtn")
         self.logout_btn.setFixedHeight(34)
         self.logout_btn.setStyleSheet(
-            "QPushButton#logoutBtn {"
-            "  margin: 2px 10px 8px 10px;"
-            "  padding: 4px 8px;"
-            "  color: #ff5252;"
-            "  background: transparent;"
-            "  border: 1px solid #ff5252;"
-            "  border-radius: 4px;"
-            "  font-size: 12px;"
-            "}"
-            "QPushButton#logoutBtn:hover {"
-            "  background: rgba(255,82,82,0.12);"
-            "}"
+            f"QPushButton#logoutBtn {{"
+            f"  margin: 2px 10px 8px 10px;"
+            f"  padding: 4px 8px;"
+            f"  color: {UIColors.LOGOUT_COLOR};"
+            f"  background: transparent;"
+            f"  border: 1px solid {UIColors.LOGOUT_COLOR};"
+            f"  border-radius: 4px;"
+            f"  font-size: 12px;"
+            f"}}"
+            f"QPushButton#logoutBtn:hover {{"
+            f"  background: {UIColors.LOGOUT_HOVER_BG};"
+            f"}}"
         )
         self.logout_btn.clicked.connect(self._do_logout)
         sidebar_layout.addWidget(self.logout_btn)
 
-        sidebar_w = max(160, min(int(screen.width() * 0.12), 210))
+        sidebar_w = max(Layout.SIDEBAR_MIN_WIDTH, min(int(screen.width() * Layout.SIDEBAR_WIDTH_RATIO), Layout.SIDEBAR_MAX_WIDTH))
         sidebar_container.setMinimumWidth(sidebar_w)
         self.sidebar_container = sidebar_container   # アニメーション用に保持
         self.main_splitter.addWidget(sidebar_container)
@@ -165,55 +169,45 @@ class MainWindow(QMainWindow):
         self.w_notifications.itemDoubleClicked.connect(self._remove_notification)
         self._init_notification_db()
 
-        # ── 위젯 생성 ──────────────────────────────────────────────────────────
-        self.w_dashboard      = DashboardWidget()
-        self.w_reserve        = PowerReserveWidget()
-        self.w_imbalance      = ImbalanceWidget()
-        self.w_jkm            = JkmWidget()
-        self.w_weather        = WeatherWidget()
-        self.w_hjks           = HjksWidget()
-        self.w_log            = LogViewerWidget()
-        self.w_settings       = SettingsWidget()
-        self.w_bug_report     = BugReportWidget()
-        self.w_ai_chat        = AiChatWidget()
-        self.w_text_memo      = TextMemoWidget()
-        self.w_google_calendar = GoogleCalendarWidget()
-        self.w_gmail          = GmailWidget()
-        self.w_jepx_spot      = JepxSpotWidget()
-
         # ── Event Bus 구독 ─────────────────────────────────────────────────────
         bus.settings_saved.connect(self._apply_settings_all)
         bus.page_requested.connect(self._navigate_to_content)
         bus.gmail_new_mail.connect(self._on_gmail_new_mail)
+        bus.toast_requested.connect(self._show_toast)
+
+        self._toast_label: QLabel | None = None
+        self._toast_anim:  QPropertyAnimation | None = None
+        self._toast_effect: QGraphicsOpacityEffect | None = None
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._dismiss_toast)
 
         # ── 사이드바 페이지 등록 (그룹 헤더 포함) ──────────────────────────────
+        # ウィジェットクラスをファクトリとして渡すことで初回タブ選択時に生成される
         #  그룹 1: 電力データ
         self._add_group_header(tr("⚡  電力データ"))
-        self._add_page(self.w_dashboard,       tr("ダッシュボード"),    "board")
-        self._add_page(self.w_jepx_spot,       tr("スポット市場"),       "spot")
-        self._add_page(self.w_reserve,         tr("電力予備率"),        "power")
-        self._add_page(self.w_imbalance,       tr("インバランス"),      "won")
-        self._add_page(self.w_jkm,             tr("JKM LNG 価格"),     "fire")
-        self._add_page(self.w_weather,         tr("全国天気"),          "weather")
-        self._add_page(self.w_hjks,            tr("発電稼働状況"),      "plant")
+        self._add_page(DashboardWidget,        tr("ダッシュボード"),    "board")
+        self._add_page(JepxSpotWidget,         tr("スポット市場"),       "spot")
+        self._add_page(PowerReserveWidget,     tr("電力予備率"),        "power")
+        self._add_page(ImbalanceWidget,        tr("インバランス"),      "won")
+        self._add_page(JkmWidget,              tr("JKM LNG 価格"),     "fire")
+        self._add_page(WeatherWidget,          tr("全国天気"),          "weather")
+        self._add_page(HjksWidget,             tr("発電稼働状況"),      "plant")
         #  그룹 2: Google
         self._add_group_header(tr("🔵  Google"))
-        self._add_page(self.w_google_calendar, tr("Google カレンダー"), "calendar")
-        self._add_page(self.w_gmail,           tr("Gmail"),             "gmail")
+        self._add_page(GoogleCalendarWidget,   tr("Google カレンダー"), "calendar")
+        self._add_page(GmailWidget,            tr("Gmail"),             "gmail")
         #  그룹 3: ツール
         self._add_group_header(tr("🛠  ツール"))
         self._add_page(self.w_notifications,   tr("通知センター ({0})").format(0), "notice")
-        self._add_page(self.w_ai_chat,         tr("AI チャット"),       "chat")
-        self._add_page(self.w_text_memo,       tr("テキストメモ"),      "memo")
+        self._add_page(AiChatWidget,           tr("AI チャット"),       "chat")
+        self._add_page(BriefingWidget,         tr("AI ブリーフィング"), "brief")
+        self._add_page(TextMemoWidget,         tr("テキストメモ"),      "memo")
 
         # ── 유틸리티 하단 스트립 버튼 (설정 / 로그 / 버그) ─────────────────────
-        #  content_stack에 먼저 추가
-        self.content_stack.addWidget(self.w_log)
-        self.content_stack.addWidget(self.w_bug_report)
-        self.content_stack.addWidget(self.w_settings)
-        log_idx      = self.content_stack.indexOf(self.w_log)
-        bug_idx      = self.content_stack.indexOf(self.w_bug_report)
-        settings_idx = self.content_stack.indexOf(self.w_settings)
+        log_idx      = self._add_util_page(LogViewerWidget)
+        bug_idx      = self._add_util_page(BugReportWidget)
+        settings_idx = self._add_util_page(SettingsWidget)
 
         for icon_name, label, idx in [
             ("log",     tr("ログ"),      log_idx),
@@ -235,6 +229,19 @@ class MainWindow(QMainWindow):
         self._sync_theme()
         self._restore_geometry()
         self._restore_group_states()
+
+        # ── 初期ページ: 最初の表示可能サイドバー行を選択してダッシュボードを生成 ──
+        # setCurrentRow → currentRowChanged → _on_sidebar_changed → _ensure_widget_created の順で連鎖する
+        _first_row = next(
+            (r for r in sorted(self._row_to_content.keys())
+             if not self.sidebar.isRowHidden(r)),
+            None,
+        )
+        if _first_row is not None:
+            self.sidebar.setCurrentRow(_first_row)
+
+        # ── 기동 후 백그라운드 프리페치: 미방문 위젯을 순차 생성해 데이터 취득 시작 ──
+        QTimer.singleShot(Timers.PREFETCH_DELAY_MS, self._prefetch_all_widgets)
 
         # ── 키보드 단축키 (Ctrl+1~6) ──────────────────────────────────────────
         _KEYS = [Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4, Qt.Key_5, Qt.Key_6]
@@ -260,13 +267,13 @@ class MainWindow(QMainWindow):
         _s = _load()
         self._retention_worker = DataRetentionWorker(_s.get("retention_days", 1460))
         self._retention_worker.finished.connect(self._retention_worker.deleteLater)
-        QTimer.singleShot(2250, self._retention_worker.start)
+        QTimer.singleShot(Timers.STARTUP_DELAY_MS, self._retention_worker.start)
         bus.app_quitting.connect(self._safe_stop_retention)
 
     # ── 사이드바 헬퍼 ──────────────────────────────────────────────────────────
 
     def _refresh_header_colors(self, is_dark: bool):
-        color = QColor("#e0e0e0" if is_dark else "#1a1a1a")
+        color = QColor(UIColors.get_sidebar_header_color(is_dark))
         for g in self._groups:
             item = self.sidebar.item(g["header_row"])
             if item:
@@ -278,7 +285,7 @@ class MainWindow(QMainWindow):
         item = QListWidgetItem(f"  ▼ {label}")
         item.setFlags(Qt.ItemIsEnabled)   # 클릭 가능, 선택 불가
         f = item.font(); f.setBold(True); f.setPointSize(11); item.setFont(f)
-        item.setForeground(QColor("#e0e0e0" if self.is_dark else "#1a1a1a"))
+        item.setForeground(QColor(UIColors.get_sidebar_header_color(self.is_dark)))
         self.sidebar.addItem(item)
         self._groups.append({
             "header_row": header_row,
@@ -287,10 +294,21 @@ class MainWindow(QMainWindow):
             "label":      label,
         })
 
-    def _add_page(self, widget: QWidget, label: str, icon_name: str = ""):
-        """위젯을 content_stack에, 라벨을 sidebar에 함께 등록."""
+    def _add_page(self, widget_or_factory, label: str, icon_name: str = ""):
+        """ウィジェット (またはファクトリ) を content_stack とサイドバーに登録する。
+        widget_or_factory が QWidget インスタンスの場合は即時追加。
+        クラス (callable) の場合はプレースホルダーを置いて遅延生成する。"""
         content_idx = self.content_stack.count()
-        self.content_stack.addWidget(widget)
+
+        if isinstance(widget_or_factory, QWidget):
+            # 直接インスタンス (w_notifications 等)
+            self.content_stack.addWidget(widget_or_factory)
+            widget_ref = widget_or_factory
+        else:
+            # ファクトリクラス → プレースホルダーで遅延生成
+            self.content_stack.addWidget(QWidget())
+            self._widget_factories[content_idx] = widget_or_factory
+            widget_ref = None
 
         sidebar_row = self.sidebar.count()
         item = QListWidgetItem(f"  {label}")
@@ -303,12 +321,52 @@ class MainWindow(QMainWindow):
         if icon_name:
             self._row_icons[sidebar_row] = icon_name
 
-        if widget is self.w_notifications:
+        if widget_ref is self.w_notifications:
             self._notifications_tab_index = sidebar_row
 
         # 마지막 그룹에 아이템 row 등록
         if self._groups:
             self._groups[-1]["item_rows"].append(sidebar_row)
+
+    def _add_util_page(self, factory: callable) -> int:
+        """ユーティリティウィジェット (ログ・バグ・設定) を遅延生成でスタックに追加し、
+        そのコンテンツインデックスを返す。"""
+        content_idx = self.content_stack.count()
+        self.content_stack.addWidget(QWidget())   # プレースホルダー
+        self._widget_factories[content_idx] = factory
+        return content_idx
+
+    def _ensure_widget_created(self, content_idx: int):
+        """指定インデックスのウィジェットが未生成ならファクトリで生成し
+        プレースホルダーと交換する。シグナルを一時ブロックして余計なアニメーションを抑制する。"""
+        if content_idx not in self._widget_factories:
+            return
+        factory = self._widget_factories.pop(content_idx)
+        widget = factory()
+        widget.set_theme(self.is_dark)
+        # スワップ中は currentChanged を発火させない
+        self.content_stack.blockSignals(True)
+        placeholder = self.content_stack.widget(content_idx)
+        self.content_stack.insertWidget(content_idx, widget)
+        self.content_stack.removeWidget(placeholder)
+        self.content_stack.blockSignals(False)
+
+    def _prefetch_all_widgets(self):
+        """起動後に未生成のウィジェットを順次生成してデータ取得を開始させる。
+        1 ウィジェットを生成するごとに PREFETCH_INTERVAL_MS 待機し UI スレッドを圧迫しない。"""
+        pending = sorted(self._widget_factories.keys())
+
+        def _step(remaining: list):
+            if not remaining:
+                return
+            idx = remaining[0]
+            if idx in self._widget_factories:
+                self._ensure_widget_created(idx)
+            if len(remaining) > 1:
+                QTimer.singleShot(Timers.PREFETCH_INTERVAL_MS, lambda r=remaining[1:]: _step(r))
+
+        if pending:
+            _step(pending)
 
     def _on_sidebar_item_clicked(self, item: QListWidgetItem):
         """그룹 헤더 클릭 → 접기/펼치기 토글."""
@@ -370,6 +428,7 @@ class MainWindow(QMainWindow):
         if row < 0 or row not in self._row_to_content:
             return
         content_idx = self._row_to_content[row]
+        self._ensure_widget_created(content_idx)
         self.content_stack.setCurrentIndex(content_idx)
         # 유틸 버튼 선택 해제
         self._set_util_active(None)
@@ -380,6 +439,7 @@ class MainWindow(QMainWindow):
         self.sidebar.clearSelection()
         self.sidebar.setCurrentRow(-1)
         self.sidebar.blockSignals(False)
+        self._ensure_widget_created(content_idx)
         self.content_stack.setCurrentIndex(content_idx)
         self._set_util_active(btn)
 
@@ -391,6 +451,7 @@ class MainWindow(QMainWindow):
 
     def _navigate_to_content(self, content_idx: int):
         """content_stack 인덱스로 직접 네비게이션 (이벤트 버스 page_requested 수신)."""
+        self._ensure_widget_created(content_idx)
         if content_idx in self._content_to_row:
             row = self._content_to_row[content_idx]
             # 접힌 그룹에 있으면 자동 펼침
@@ -432,6 +493,11 @@ class MainWindow(QMainWindow):
                         is_read   INTEGER DEFAULT 0
                     )
                 """)
+                # 保存期間 (NC.DB_RETENTION_DAYS 日) を超えた通知を自動削除
+                con.execute(
+                    f"DELETE FROM notifications "
+                    f"WHERE date(timestamp) < date('now', '-{NC.DB_RETENTION_DAYS} days')"
+                )
             self._load_notifications_from_db()
         except sqlite3.Error as e:
             logger.error(f"通知DB初期化失敗: {e}")
@@ -525,6 +591,86 @@ class MainWindow(QMainWindow):
                 "Gmail", title, QSystemTrayIcon.Information, 4000,
             )
 
+    # ── トースト通知 ──────────────────────────────────────────────────────────
+
+    _TOAST_COLORS = {
+        "info":    ("#1565c0", "#fff"),
+        "success": ("#2e7d32", "#fff"),
+        "warning": ("#e65100", "#fff"),
+        "error":   ("#b71c1c", "#fff"),
+    }
+
+    def _show_toast(self, message: str, level: str = "info"):
+        """フローティングトースト通知をウィンドウ下部中央に表示する。"""
+        self._toast_timer.stop()
+        if self._toast_label is not None:
+            try:
+                self._toast_label.deleteLater()
+            except RuntimeError:
+                pass
+            self._toast_label = None
+
+        bg, fg = self._TOAST_COLORS.get(level, self._TOAST_COLORS["info"])
+
+        lbl = QLabel(message, self)
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            f"background: {bg}; color: {fg};"
+            "border-radius: 8px; padding: 10px 20px; font-size: 13px;"
+        )
+        lbl.adjustSize()
+
+        # 最大幅: ウィンドウ幅の 60%
+        max_w = max(200, int(self.width() * 0.6))
+        if lbl.width() > max_w:
+            lbl.setFixedWidth(max_w)
+            lbl.adjustSize()
+
+        x = (self.width() - lbl.width()) // 2
+        y = self.height() - lbl.height() - 40
+        lbl.setGeometry(QRect(x, y, lbl.width(), lbl.height()))
+        lbl.raise_()
+        lbl.show()
+        self._toast_label = lbl
+
+        effect = QGraphicsOpacityEffect(lbl)
+        lbl.setGraphicsEffect(effect)
+        self._toast_effect = effect
+
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(Animations.THEME_FADE_MS)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutQuad)
+        anim.start()
+        self._toast_anim = anim
+
+        self._toast_timer.start(Timers.TOAST_VISIBLE_MS)
+
+    def _dismiss_toast(self):
+        if self._toast_label is None:
+            return
+        lbl = self._toast_label
+
+        anim = QPropertyAnimation(self._toast_effect, b"opacity", self)
+        anim.setDuration(Animations.THEME_FADE_MS)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.InQuad)
+
+        def _cleanup():
+            try:
+                lbl.deleteLater()
+            except RuntimeError:
+                pass
+            if self._toast_label is lbl:
+                self._toast_label = None
+
+        anim.finished.connect(_cleanup)
+        anim.start()
+        self._toast_anim = anim
+
     # ── 테마 ───────────────────────────────────────────────────────────────────
 
     def _toggle_theme(self):
@@ -561,7 +707,7 @@ class MainWindow(QMainWindow):
         self._theme_effect = QGraphicsOpacityEffect(self._theme_overlay)
         self._theme_overlay.setGraphicsEffect(self._theme_effect)
         self._theme_anim = QPropertyAnimation(self._theme_effect, b"opacity", self)
-        self._theme_anim.setDuration(300)
+        self._theme_anim.setDuration(Animations.THEME_FADE_MS)
         self._theme_anim.setStartValue(1.0); self._theme_anim.setEndValue(0.0)
         self._theme_anim.setEasingCurve(QEasingCurve.OutQuad)
         self._theme_anim.finished.connect(self._theme_overlay.deleteLater)
@@ -576,13 +722,7 @@ class MainWindow(QMainWindow):
             if hasattr(w, "set_theme"):
                 w.set_theme(d)
         # 알림 센터 (BaseWidget 아닌 QListWidget)
-        self.w_notifications.setStyleSheet(
-            "QListWidget { background: #1e1e1e; color: #e0e0e0; }"
-            "QListWidget::item { border-bottom: 1px solid #333; padding: 15px; font-size: 13px; }"
-            if d else
-            "QListWidget { background: #ffffff; color: #212121; }"
-            "QListWidget::item { border-bottom: 1px solid #e0e0e0; padding: 15px; font-size: 13px; }"
-        )
+        self.w_notifications.setStyleSheet(UIColors.get_notification_list_style(d))
         # 사이드바 아이콘 갱신
         for row, icon_name in self._row_icons.items():
             if row >= 0 and row < self.sidebar.count():
@@ -600,29 +740,25 @@ class MainWindow(QMainWindow):
         self._refresh_header_colors(d)
 
     def _apply_util_strip_style(self, is_dark: bool):
-        d = is_dark
-        bg  = "#252526" if d else "#f0f0f0"
-        bd  = "#3e3e42" if d else "#e0e0e0"
-        txt = "#cccccc" if d else "#555555"
-        act = "#0e639c" if d else "#1a73e8"
+        c = UIColors.get_util_strip_colors(is_dark)
         self.findChild(QFrame, "utilStrip").setStyleSheet(f"""
             QFrame#utilStrip {{
-                background: {bg};
-                border-top: 1px solid {bd};
+                background: {c['bg']};
+                border-top: 1px solid {c['border']};
             }}
             QPushButton#utilBtn {{
                 background: transparent;
                 border: none;
                 border-radius: 4px;
-                color: {txt};
+                color: {c['text']};
                 font-size: 11px;
                 padding: 2px 4px;
             }}
             QPushButton#utilBtn:hover {{
-                background: {"rgba(255,255,255,0.08)" if d else "rgba(0,0,0,0.07)"};
+                background: {c['hover_bg']};
             }}
             QPushButton#utilBtn:checked {{
-                background: {act};
+                background: {c['active']};
                 color: #ffffff;
             }}
         """)
@@ -690,8 +826,8 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen().availableGeometry()
         g = self.geometry()
         if g.width() > screen.width() or g.height() > screen.height():
-            cw = max(820, min(int(screen.width()  * 0.78), screen.width()))
-            ch = max(560, min(int(screen.height() * 0.82), screen.height()))
+            cw = max(Layout.WINDOW_MIN_WIDTH,  min(int(screen.width()  * Layout.WINDOW_WIDTH_RATIO),  screen.width()))
+            ch = max(Layout.WINDOW_MIN_HEIGHT, min(int(screen.height() * Layout.WINDOW_HEIGHT_RATIO), screen.height()))
         else:
             cw, ch = g.width(), g.height()
         cx = max(screen.x(), min(g.x(), screen.x() + screen.width()  - cw))
@@ -816,13 +952,13 @@ class MainWindow(QMainWindow):
         self._anim_win_op = QPropertyAnimation(self, b"windowOpacity")
         self._anim_win_op.setStartValue(0.0)
         self._anim_win_op.setEndValue(1.0)
-        self._anim_win_op.setDuration(500)
+        self._anim_win_op.setDuration(Animations.WINDOW_SHOW_MS)
         self._anim_win_op.setEasingCurve(QEasingCurve.OutCubic)
 
         self._anim_win_pos = QPropertyAnimation(self, b"pos")
         self._anim_win_pos.setStartValue(start_pos)
         self._anim_win_pos.setEndValue(target_pos)
-        self._anim_win_pos.setDuration(800)
+        self._anim_win_pos.setDuration(Animations.WINDOW_SLIDE_MS)
         self._anim_win_pos.setEasingCurve(QEasingCurve.OutCubic)
 
         # カクつき（Jank）の最大の原因であった、重いスプリッターの毎フレームリサイズ処理を排除
@@ -837,4 +973,4 @@ class MainWindow(QMainWindow):
             self._anim_win_op.start()
             self._anim_win_pos.start()
             
-        QTimer.singleShot(100, _start_anims)
+        QTimer.singleShot(Animations.STARTUP_ANIM_DELAY_MS, _start_anims)

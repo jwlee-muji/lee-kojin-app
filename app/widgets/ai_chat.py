@@ -209,6 +209,7 @@ class AiChatWidget(BaseWidget):
         self.btn_send.setEnabled(False)
 
         from app.core.config import load_settings
+        from app.core.app_context import get_current_context
         s = load_settings()
         model       = s.get("gemini_model", GEMINI_DEFAULT_MODEL).strip()
         temperature = float(s.get("ai_temperature", 0.7))
@@ -218,6 +219,7 @@ class AiChatWidget(BaseWidget):
         self._worker = AiChatWorker(
             list(self._messages), gemini_keys, groq_key, model,
             temperature=temperature, max_tokens=max_tokens,
+            context=get_current_context(),
         )
         self._worker.response_received.connect(self._on_response)
         self._worker.error.connect(self._on_error)
@@ -470,6 +472,7 @@ class _BubbleWidget(QWidget):
         super().__init__()
         self._is_user   = role == "user"
         self._is_dark   = is_dark
+        self._raw_text  = text  # テーマ切替時の再フォーマット用
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -489,7 +492,7 @@ class _BubbleWidget(QWidget):
         col.setSpacing(3)
         col.setContentsMargins(0, 0, 0, 0)
 
-        self._lbl = QLabel(_format_message(text))
+        self._lbl = QLabel(_format_message(text, is_dark))
         self._lbl.setTextFormat(Qt.TextFormat.RichText)
         self._lbl.setWordWrap(True)
         self._lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -536,6 +539,7 @@ class _BubbleWidget(QWidget):
         """テーマ変更時に既存バブルの色を動的に更新します。"""
         self._is_dark = is_dark
         self._apply_bubble_style(is_dark)
+        self._lbl.setText(_format_message(self._raw_text, is_dark))
 
 
 # ── 「考え中」アニメーション ──────────────────────────────────────────────
@@ -576,16 +580,23 @@ class _ThinkingWidget(QWidget):
 
 # ── テキストフォーマッター ────────────────────────────────────────────────
 
-def _format_message(text: str) -> str:
+def _format_message(text: str, is_dark: bool = True) -> str:
     """
     マークダウン風テキストを QLabel RichText 用 HTML に変換。
     コードブロック・インラインコード・太字・改行 を処理。
     """
+    if is_dark:
+        block_bg, block_fg = "#1a1a1a", "#c8d3da"
+        inline_bg, inline_fg = "#2a2a2a", "#c8d3da"
+    else:
+        block_bg, block_fg = "#f0f0f0", "#1a1a1a"
+        inline_bg, inline_fg = "#e8e8e8", "#1a1a1a"
+
     def replace_codeblock(m: re.Match) -> str:
         code = html.escape(m.group(2).strip())
         return (
-            '<div style="background:#1a1a1a; color:#c8d3da; border-radius:6px;'
-            ' padding:8px 10px; margin:4px 0; font-family:Consolas,monospace;'
+            f'<div style="background:{block_bg}; color:{block_fg}; border-radius:6px;'
+            f' padding:8px 10px; margin:4px 0; font-family:Consolas,monospace;'
             f' font-size:12px; white-space:pre-wrap;">{code}</div>'
         )
 
@@ -600,7 +611,7 @@ def _format_message(text: str) -> str:
             p = html.escape(p)
             p = re.sub(
                 r"`([^`]+)`",
-                r'<code style="background:#2a2a2a; padding:1px 5px;'
+                f'<code style="background:{inline_bg}; color:{inline_fg}; padding:1px 5px;'
                 r' border-radius:3px; font-family:Consolas,monospace; font-size:12px;">\1</code>',
                 p,
             )

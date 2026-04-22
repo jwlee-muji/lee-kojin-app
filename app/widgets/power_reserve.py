@@ -14,8 +14,27 @@ from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import load_settings
 from app.core.i18n import tr
-from app.api.market.power_reserve import FetchPowerReserveWorker
+from app.api.market.power_reserve import FetchPowerReserveWorker, FetchPowerReserveHistoryWorker
 from app.core.events import bus
+
+# OCCTO エリア名 → DB カラム名マッピング
+_AREA_COL = {
+    "北海道": "hokkaido", "東北": "tohoku",   "東京": "tokyo",
+    "中部":   "chubu",    "北陸": "hokuriku", "関西": "kansai",
+    "中国":   "chugoku",  "四国": "shikoku",  "九州": "kyushu",  "沖縄": "okinawa",
+}
+_ALL_AREA_COLS = list(_AREA_COL.values())
+
+_CREATE_POWER_RESERVE = """
+    CREATE TABLE IF NOT EXISTS power_reserve (
+        date     TEXT NOT NULL,
+        time     TEXT NOT NULL,
+        hokkaido REAL, tohoku REAL, tokyo   REAL,
+        chubu    REAL, hokuriku REAL, kansai REAL,
+        chugoku  REAL, shikoku  REAL, kyushu REAL, okinawa REAL,
+        PRIMARY KEY (date, time)
+    )
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +418,11 @@ class PowerReserveWidget(BaseWidget):
 
         row2.addStretch()
 
+        self.history_btn = QPushButton(tr("過去データ取得"))
+        self.history_btn.setFixedHeight(30)
+        self.history_btn.clicked.connect(self.fetch_history)
+        row2.addWidget(self.history_btn)
+
         self.export_btn   = QPushButton(tr("Excel(CSV) 保存"))
         self.export_btn.setFixedHeight(30)
         self.export_btn.clicked.connect(self._export_csv)
@@ -467,9 +491,11 @@ class PowerReserveWidget(BaseWidget):
         self.splitter.setSizes([350, 450])
 
         self.worker = None
+        self._history_worker = None
         self._alerted_low_reserve = set()
         self.setup_timer(self.settings.get("reserve_interval", 5), self.fetch_data)
         QTimer.singleShot(2250, self.fetch_data)
+        QTimer.singleShot(13000, self._auto_fetch_history)
         self._apply_card_theme()
 
     # ── カードテーマ ─────────────────────────────────────────────────────────
@@ -630,6 +656,9 @@ class PowerReserveWidget(BaseWidget):
         if min_val != 999.0:
             bus.occto_updated.emit(min_time, tr(min_area), min_val)
 
+        date_str = self.date_edit.date().toString("yyyy-MM-dd")
+        self._save_to_db(date_str, headers, rows)
+
         self.status_label.setText(tr("更新完了"))
         self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
         self.table.setUpdatesEnabled(True)
@@ -667,6 +696,99 @@ class PowerReserveWidget(BaseWidget):
                 )
             else:
                 QMessageBox.warning(self, title, html_msg)
+
+    # ── DB 保存 ───────────────────────────────────────────────────────────────
+
+    def _save_to_db(self, date_str: str, headers: list[str], rows: list[list[str]]):
+        try:
+            from app.core.config import DB_POWER_RESERVE
+            from app.core.database import get_db_connection
+            col_indices: dict[str, int] = {}
+            for i, h in enumerate(headers[1:], 1):
+                col = _AREA_COL.get(h)
+                if col:
+                    col_indices[col] = i
+            records = []
+            for row in rows:
+                if not row:
+                    continue
+                rec = [date_str, row[0]]
+                for col in _ALL_AREA_COLS:
+                    idx = col_indices.get(col)
+                    val = None
+                    if idx is not None and idx < len(row):
+                        try:
+                            val = float(row[idx].replace('%', '').strip())
+                        except (ValueError, AttributeError):
+                            pass
+                    rec.append(val)
+                records.append(rec)
+            cols_sql = "date, time, " + ", ".join(_ALL_AREA_COLS)
+            ph = ", ".join(["?"] * (2 + len(_ALL_AREA_COLS)))
+            with get_db_connection(DB_POWER_RESERVE) as conn:
+                conn.execute(_CREATE_POWER_RESERVE)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pr_date "
+                    "ON power_reserve(date)"
+                )
+                conn.executemany(
+                    f"INSERT OR REPLACE INTO power_reserve ({cols_sql}) VALUES ({ph})",
+                    records,
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"予備率DB保存エラー: {e}")
+
+    # ── 履歴一括取得 ──────────────────────────────────────────────────────────
+    def _auto_fetch_history(self):
+        try:
+            from app.core.config import DB_POWER_RESERVE
+            from app.core.database import get_db_connection
+            if not DB_POWER_RESERVE.exists():
+                self.fetch_history()
+                return
+            with get_db_connection(DB_POWER_RESERVE) as conn:
+                count = conn.execute(
+                    "SELECT COUNT(DISTINCT date) FROM power_reserve"
+                ).fetchone()[0]
+            if count < 100:
+                self.fetch_history()
+        except Exception as e:
+            logger.debug(f"予備率履歴自動取得チェックエラー: {e}")
+
+    def fetch_history(self):
+        if not self.check_online_status():
+            return
+        try:
+            if self._history_worker and self._history_worker.isRunning():
+                return
+        except RuntimeError:
+            self._history_worker = None
+        self.history_btn.setEnabled(False)
+        self.status_label.setText(tr("履歴取得中..."))
+        self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
+        self._history_worker = FetchPowerReserveHistoryWorker()
+        self._history_worker.progress.connect(self._on_history_progress)
+        self._history_worker.finished.connect(self._on_history_success)
+        self._history_worker.error.connect(self._on_history_error)
+        self._history_worker.finished.connect(self._history_worker.deleteLater)
+        self._history_worker.start()
+        self.track_worker(self._history_worker)
+
+    def _on_history_progress(self, msg: str):
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet("color: #64b5f6; font-weight: bold;")
+
+    def _on_history_success(self, msg: str):
+        self.history_btn.setEnabled(True)
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+
+    def _on_history_error(self, err: str):
+        self.history_btn.setEnabled(True)
+        self.status_label.setText(tr("履歴取得失敗"))
+        self.status_label.setStyleSheet("color: #ff5252; font-weight: bold;")
+        QMessageBox.warning(self, tr("エラー"), err)
 
     # ── CSV エクスポート ──────────────────────────────────────────────────────
     def _export_csv(self):

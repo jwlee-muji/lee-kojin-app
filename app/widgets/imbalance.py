@@ -2,19 +2,19 @@ import logging
 import math
 import sqlite3
 import pyqtgraph as pg
-from datetime import datetime, timedelta
+from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QTableWidgetItem, QMessageBox, QHeaderView,
     QSplitter, QComboBox, QCheckBox, QApplication, QGraphicsDropShadowEffect,
     QScrollArea, QFrame,
 )
-from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import QThread, Signal, QDate, Qt, QTimer
 from PySide6.QtGui import QFont, QBrush, QColor, QLinearGradient
 from app.ui.common import ExcelCopyTableWidget, BaseWidget
 from app.ui.theme import UIColors
 from app.core.config import (
-    DB_IMBALANCE, IMBALANCE_COLORS, load_settings,
+    DB_IMBALANCE, IMBALANCE_COLORS,
     DATE_COL_IDX, TIME_COL_IDX, YOJO_START_COL_IDX, YOJO_END_COL_IDX, FUSOKU_START_COL_IDX,
 )
 from app.core.database import get_db_connection, validate_column_name
@@ -162,7 +162,7 @@ class ImbalanceWidget(BaseWidget):
         self.title_label = QLabel(tr("インバランス単価"))
         self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
 
-        self.update_btn = QPushButton(tr("今月分 DB更新"))
+        self.update_btn = QPushButton(tr("更新"))
         self.update_btn.clicked.connect(self.update_database)
 
         self.date_edit = QDateEdit()
@@ -416,9 +416,14 @@ class ImbalanceWidget(BaseWidget):
         self.worker = UpdateImbalanceWorker()
         self.worker.finished.connect(self._on_update_success)
         self.worker.error.connect(self._on_update_error)
+        self.worker.progress.connect(self._on_update_progress)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
         self.track_worker(self.worker)
+
+    def _on_update_progress(self, msg: str):
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet("color: #64b5f6;")
 
     def _on_update_success(self, msg):
         self.update_btn.setEnabled(True)

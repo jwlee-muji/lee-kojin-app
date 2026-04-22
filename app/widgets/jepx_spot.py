@@ -751,8 +751,11 @@ class JepxSpotWidget(BaseWidget):
 
         # キャッシュミス: バックグラウンドスレッドでクエリを実行
         if self._query_worker and self._query_worker.isRunning():
-            self._query_worker.result.disconnect()
-            self._query_worker.error.disconnect()
+            try:
+                self._query_worker.result.disconnect()
+                self._query_worker.error.disconnect()
+            except RuntimeError:
+                pass
         self._query_worker = _JepxQueryWorker(key, self._mode, self._build_query_params(), areas)
         self._query_worker.result.connect(self._on_query_done)
         self._query_worker.error.connect(self._on_query_error)

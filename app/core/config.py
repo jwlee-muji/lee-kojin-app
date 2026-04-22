@@ -120,10 +120,12 @@ SERVICE_ACCOUNT_FILE = APP_DIR / 'service_account.json'
 USER_EMAIL_FILE      = APP_DIR / 'current_user.json'
 
 # ── データベースファイルパス ──────────────────────────────────────────────────
-DB_IMBALANCE  = APP_DIR / 'imbalance_data.db'
-DB_HJKS       = APP_DIR / 'hjks_data.db'
-DB_JKM        = APP_DIR / 'jkm_data.db'
-DB_JEPX_SPOT  = APP_DIR / 'jepx_spot.db'
+DB_IMBALANCE      = APP_DIR / 'imbalance_data.db'
+DB_HJKS           = APP_DIR / 'hjks_data.db'
+DB_JKM            = APP_DIR / 'jkm_data.db'
+DB_JEPX_SPOT      = APP_DIR / 'jepx_spot.db'
+DB_POWER_RESERVE  = APP_DIR / 'power_reserve.db'
+DB_WEATHER        = APP_DIR / 'weather.db'
 
 BACKUP_DIR   = APP_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -316,8 +318,23 @@ def save_settings(settings: dict) -> None:
         val = to_save[key]
         if key == "user_gemini_keys":
             # 暗号化失敗したキー (空文字) はリストから除外して平文保存を防ぐ
-            to_save[key] = [enc for k in val if isinstance(k, str) and k
-                            for enc in [encrypt_secret(k)] if enc]
+            encrypted_list = [enc for k in val if isinstance(k, str) and k
+                              for enc in [encrypt_secret(k)] if enc]
+            dropped = len([k for k in val if isinstance(k, str) and k]) - len(encrypted_list)
+            if dropped > 0:
+                _cfg_logger.warning(
+                    f"Gemini APIキーの暗号化失敗: {dropped}件が保存されませんでした。"
+                    " 設定画面から再入力してください。"
+                )
+                try:
+                    from app.core.events import bus
+                    bus.toast_requested.emit(
+                        f"⚠ APIキー {dropped}件の保存に失敗しました。設定で再入力してください。",
+                        "error",
+                    )
+                except Exception:
+                    pass
+            to_save[key] = encrypted_list
         elif isinstance(val, str):
             enc = encrypt_secret(val)
             if enc:

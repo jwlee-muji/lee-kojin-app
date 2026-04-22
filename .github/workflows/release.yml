@@ -1,0 +1,44 @@
+name: ビルド & リリース
+
+# v* タグをプッシュしたときだけ実行 (例: git tag v4.1.0 && git push origin v4.1.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # リリース作成に必要
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"   # 日本語ファイル名・パスを正しく処理するため
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 依存パッケージをインストール
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: システムロケールを UTF-8 に設定
+        run: chcp 65001
+        shell: cmd
+
+      - name: PyInstaller でビルド
+        run: pyinstaller lee.spec --noconfirm
+
+      - name: GitHub リリースを作成 (ドラフト)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          files: dist/LEE電力モニター.exe

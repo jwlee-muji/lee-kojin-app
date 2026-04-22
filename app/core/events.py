@@ -37,5 +37,9 @@ class GlobalEventBus(QObject):
     user_authenticated  = Signal(str)        # ログイン成功 (email)
     user_logged_out     = Signal()           # ログアウト
 
+    # ── UI 通知 ───────────────────────────────────────────────────────────────
+    # toast_requested: (message: str, level: str)  level = "info"|"success"|"warning"|"error"
+    toast_requested     = Signal(str, str)
+
 
 bus = GlobalEventBus()

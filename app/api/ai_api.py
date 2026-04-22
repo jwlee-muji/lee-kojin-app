@@ -123,11 +123,13 @@ class AiChatWorker(BaseWorker):
         model: str = GEMINI_DEFAULT_MODEL,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        context: str = "",
     ):
         super().__init__()
         self.messages     = messages
         self.gemini_keys  = gemini_keys
         self.groq_key     = groq_key
+        self.context      = context
         self.model        = model or GEMINI_DEFAULT_MODEL
         self.temperature  = max(0.1, min(2.0, float(temperature)))
         self.max_tokens   = max(128, min(8192, int(max_tokens)))
@@ -214,8 +216,9 @@ class AiChatWorker(BaseWorker):
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
+        system = SYSTEM_PROMPT + ("\n\n" + self.context if self.context else "")
         payload = {
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "system_instruction": {"parts": [{"text": system}]},
             "contents": contents,
             "generationConfig": {"temperature": self.temperature, "maxOutputTokens": self.max_tokens},
         }
@@ -244,7 +247,8 @@ class AiChatWorker(BaseWorker):
             raise RuntimeError(f"Unexpected Gemini response: {result}")
 
     def _call_groq(self, api_key: str) -> str:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        system = SYSTEM_PROMPT + ("\n\n" + self.context if self.context else "")
+        messages = [{"role": "system", "content": system}]
         for msg in self.messages:
             role = "user" if msg["role"] == "user" else "assistant"
             messages.append({"role": role, "content": msg["content"]})

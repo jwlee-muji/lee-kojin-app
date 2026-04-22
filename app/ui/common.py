@@ -155,9 +155,10 @@ class BasePlotWidget(pg.PlotWidget):
         self.apply_theme_custom()
 
     def apply_theme_custom(self):
-        self.setBackground('#1e1e1e' if self.is_dark else '#ffffff')
-        ax_pen   = pg.mkPen(color='#555555' if self.is_dark else '#dddddd', width=1)
-        text_col = UIColors.TEXT_SECONDARY_DARK if self.is_dark else UIColors.TEXT_SECONDARY_LIGHT
+        gc = UIColors.get_graph_colors(self.is_dark)
+        self.setBackground(gc['bg'])
+        ax_pen   = pg.mkPen(color=gc['axis'], width=1)
+        text_col = gc['text']
         text_pen = pg.mkPen(text_col)
         for ax_name in ('left', 'bottom'):
             ax = self.getAxis(ax_name)

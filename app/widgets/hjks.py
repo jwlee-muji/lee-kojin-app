@@ -310,7 +310,7 @@ class HjksWidget(BaseWidget):
                 r_data = day_dict.get(r, {})
                 r_total = sum(d["op"] for d in r_data.values())
                 if r_total > 0:
-                    agg_regions[r]["op"] = sum(d["op"] for d in r_data.values())
+                    agg_regions[r]["op"] = r_total
                     agg_regions[r]["st"] = sum(d["st"] for d in r_data.values())
                     total_op += agg_regions[r]["op"]
                     total_st += agg_regions[r]["st"]
