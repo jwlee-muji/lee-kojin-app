@@ -59,4 +59,4 @@ Name: "{group}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} を起動する"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--cleanup ""{src}"""; Description: "{#MyAppName} を起動する"; Flags: nowait postinstall

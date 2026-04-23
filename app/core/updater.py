@@ -14,6 +14,9 @@ import tempfile
 import subprocess
 import requests
 import logging
+import shutil
+import time
+from threading import Thread
 from pathlib import Path
 from typing import Optional
 from packaging.version import Version
@@ -118,21 +121,27 @@ def download_update(url: str, progress_callback=None, sha256_url: str = "") -> P
 # ── 업데이트 적용 ─────────────────────────────────────────────────────────
 def apply_update(installer_path: Path):
     """インストーラーをサイレント実行。Inno Setup が既存アプリを閉じてファイルを更新する。"""
+    log_file = installer_path.with_name("install_log.txt")
     subprocess.Popen(
-        [str(installer_path), '/VERYSILENT', '/SUPPRESSMSGBOXES'],
+        [str(installer_path), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/FORCECLOSEAPPLICATIONS', f'/LOG={log_file}'],
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
+def cleanup_update_file(src_dir: str):
+    """アップデート完了後、インストーラーが配置されていた一時フォルダを遅延削除する。"""
+    def _cleanup():
+        time.sleep(3)  # インストーラーが完全に終了し、ファイルのロックが解除されるのを待つ
+        target = Path(src_dir)
+        # 安全のため、本当にアプリが作成した一時フォルダか名前でチェック
+        if target.exists() and "lee_update_" in target.name:
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+                logger.info(f"アップデート一時フォルダを削除しました: {target}")
+            except Exception as e:
+                logger.warning(f"アップデート一時フォルダの削除に失敗しました: {e}")
 
-# ── 旧形式の互換スタブ (main.py の引数処理との後方互換) ──────────────────
-def handle_finish_update(*_):
-    pass
+    Thread(target=_cleanup, daemon=True).start()
 
-def cleanup_update_file(*_):
-    pass
-
-def handle_downloads_launch():
-    pass
 
 
 # ── Qt 依存クラス (アップデート UI) ──────────────────────────────────────
@@ -243,7 +252,7 @@ class UpdateManager(QObject):
         for widget in QApplication.topLevelWidgets():
             if hasattr(widget, '_is_quitting'):
                 widget._is_quitting = True
-        QApplication.quit()
+        sys.exit(0)
 
     def _on_download_error(self, err: str):
         if self._progress_dialog:
