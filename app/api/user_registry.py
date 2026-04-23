@@ -17,13 +17,13 @@ def is_user_registered(email: str) -> bool:
     - Sheets 接続失敗時は RegistryCheckError を送出します。
       (呼び出し元で未登録と区別して処理してください)
     """
-    from app.core.config import ADMIN_EMAIL, load_settings
+    from app.core.config import ADMIN_EMAIL, SHEETS_REGISTRY_ID
 
     email = email.lower().strip()
     if email == ADMIN_EMAIL.lower():
         return True
 
-    sheet_id = load_settings().get("sheets_registry_id", "").strip()
+    sheet_id = SHEETS_REGISTRY_ID.strip()
     if not sheet_id:
         logger.warning("sheets_registry_id が未設定です。管理者のみアクセス可能。")
         raise RegistryCheckError("sheets_registry_id が設定されていません。")

@@ -408,20 +408,14 @@ class SettingsWidget(BaseWidget):
         sheets_row = QHBoxLayout()
         sheets_row.setSpacing(8)
         self.edt_sheets_id = QLineEdit()
-        self.edt_sheets_id.setPlaceholderText(tr("Spreadsheet ID または URL をそのまま貼り付け可"))
+        self.edt_sheets_id.setPlaceholderText(tr(".env で管理されています"))
         self.edt_sheets_id.setFixedHeight(32)
-
-        btn_sheets_save = QPushButton("  " + tr("保存") + "  ")
-        btn_sheets_save.setObjectName("secondaryActionBtn")
-        btn_sheets_save.setFixedHeight(32)
-        btn_sheets_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_sheets_save.clicked.connect(self._save_sheets_id)
+        self.edt_sheets_id.setDisabled(True)
 
         sheets_row.addWidget(self.edt_sheets_id, 1)
-        sheets_row.addWidget(btn_sheets_save)
 
         note_sheets = self._note(
-            tr("※ URL ごとペーストすると ID を自動抽出します。シートにはサービスアカウントの編集権限が必要です。"),
+            tr("※ Sheets ID は環境変数 (.env) で一元管理されているため、ここでは読み取り専用です。"),
             word_wrap=True
         )
 
@@ -506,22 +500,11 @@ class SettingsWidget(BaseWidget):
         root.addWidget(lbl_add)
         root.addLayout(add_row)
 
-        self.edt_sheets_id.setText(load_settings().get("sheets_registry_id", ""))
+        from app.core.config import SHEETS_REGISTRY_ID
+        self.edt_sheets_id.setText(SHEETS_REGISTRY_ID)
         return grp
 
     # ── 管理者アクション ────────────────────────────────────────────────────
-
-    def _save_sheets_id(self):
-        import re
-        raw = self.edt_sheets_id.text().strip()
-        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", raw)
-        sheet_id = m.group(1) if m else raw
-        if sheet_id != raw:
-            self.edt_sheets_id.setText(sheet_id)
-        s = load_settings()
-        s["sheets_registry_id"] = sheet_id
-        save_settings(s)
-        self._show_toast("✅  Sheets ID " + tr("を保存しました"))
 
     def _refresh_user_list(self):
         self.lbl_users_status.setText(tr("取得中..."))

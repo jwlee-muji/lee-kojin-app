@@ -43,9 +43,9 @@ def _normalize_sheet_id(value: str) -> str:
 
 
 def _get_sheet_id() -> str:
-    from app.core.config import load_settings
-    raw = load_settings().get("sheets_registry_id", "").strip()
-    return _normalize_sheet_id(raw)
+    from app.core.config import SHEETS_REGISTRY_ID
+    raw = SHEETS_REGISTRY_ID.strip()
+    return _normalize_sheet_id(raw) if raw != "ここにデフォルトのシートIDを記述" else ""
 
 
 def get_registered_users() -> list[str]:

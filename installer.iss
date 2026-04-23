@@ -52,6 +52,7 @@ Name: "desktopicon"; Description: "デスクトップにショートカットを
 
 [Files]
 Source: "dist\LEE\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: ".env"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"

@@ -41,11 +41,15 @@ jobs:
           OAUTH_CREDS_PY: ${{ secrets.OAUTH_CREDS_PY }}
           SECRETS_PY: ${{ secrets.SECRETS_PY }}
           SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+          SHEETS_REGISTRY_ID: ${{ secrets.SHEETS_REGISTRY_ID }}
         run: |
           [System.IO.File]::WriteAllText("app/api/google/_oauth_creds.py", $env:OAUTH_CREDS_PY)
           [System.IO.File]::WriteAllText("app/core/_secrets.py", $env:SECRETS_PY)
           if ($env:SERVICE_ACCOUNT_JSON) {
             [System.IO.File]::WriteAllText("service_account.json", $env:SERVICE_ACCOUNT_JSON)
+          }
+          if ($env:SHEETS_REGISTRY_ID) {
+            [System.IO.File]::WriteAllText(".env", "SHEETS_REGISTRY_ID=$env:SHEETS_REGISTRY_ID")
           }
 
       - name: バージョンを取得

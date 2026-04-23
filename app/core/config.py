@@ -5,6 +5,7 @@ import ctypes
 import base64
 import logging
 import threading
+from dotenv import load_dotenv
 from pathlib import Path
 
 _cfg_logger = logging.getLogger(__name__)
@@ -109,6 +110,16 @@ APP_DIR  = Path(os.environ.get('APPDATA', Path.home())) / APP_NAME
 # PyInstaller frozen 환경과 개발 환경 모두에서 프로젝트 루트를 안전하게 반환
 BASE_DIR: Path = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.parent.parent
 APP_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── 環境変数 (.env) ロード ──────────────────────────────────────────────────
+if getattr(sys, 'frozen', False):
+    # PyInstaller 環境: 実行ファイル (.exe) と同じフォルダの .env を読み込む
+    load_dotenv(Path(sys.executable).parent / '.env')
+else:
+    load_dotenv(BASE_DIR / '.env')
+
+# チーム共通の Google Sheets ID (settings.json の DPAPI 暗号化から分離)
+SHEETS_REGISTRY_ID = os.environ.get("SHEETS_REGISTRY_ID", "ここにデフォルトのシートIDを記述")
 
 from version import __version__  # noqa: E402 — アプリバージョンをここで一元管理
 
@@ -222,8 +233,6 @@ DEFAULT_SETTINGS = {
     "gmail_poll_interval": 5,
     "gmail_alarm_labels": ["INBOX"],
     "gmail_max_results": 50,
-    # ユーザー登録 Google Sheets ID
-    "sheets_registry_id": "",
 }
 
 def _validate_settings(settings: dict) -> dict:
