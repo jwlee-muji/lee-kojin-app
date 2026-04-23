@@ -37,7 +37,7 @@ class _LoginWorker(QThread):
     def run(self):
         try:
             from app.api.google.auth import run_oauth_flow, get_current_user_email, revoke_credentials
-            from app.api.user_registry import is_user_registered
+            from app.api.user_registry import is_user_registered, RegistryCheckError
 
             ok = run_oauth_flow()
             if not ok:
@@ -50,7 +50,16 @@ class _LoginWorker(QThread):
                 self.failed.emit(tr("メールアドレスを取得できませんでした。"))
                 return
 
-            if is_user_registered(email):
+            try:
+                registered = is_user_registered(email)
+            except RegistryCheckError as e:
+                revoke_credentials()
+                self.failed.emit(
+                    tr("ユーザー確認中にエラーが発生しました。\n管理者に連絡してください。\n\n") + str(e)
+                )
+                return
+
+            if registered:
                 self.success.emit(email)
             else:
                 revoke_credentials()

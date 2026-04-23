@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [
@@ -6,6 +7,10 @@ datas = [
     ('app/ui/themes', 'app/ui/themes'),
     ('img',           'img'),
 ]
+# service_account.json が存在する場合のみ _internal/ に同梱
+# (CI では GitHub Secret から生成、開発環境では gitignore 対象のためスキップ)
+if os.path.exists('service_account.json'):
+    datas.append(('service_account.json', '.'))
 binaries = []
 
 # app パッケージ全体を明示的に収集

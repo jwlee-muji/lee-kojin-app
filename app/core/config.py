@@ -116,7 +116,12 @@ LOG_FILE             = APP_DIR / 'app.log'
 INSTALL_FILE         = APP_DIR / 'install_path.txt'
 SETTINGS_FILE        = APP_DIR / 'settings.json'
 GOOGLE_TOKEN_FILE    = APP_DIR / 'google_token.json'
-SERVICE_ACCOUNT_FILE = APP_DIR / 'service_account.json'
+# frozen 環境では _internal/service_account.json (インストーラー同梱)、開発時は APPDATA 配下
+SERVICE_ACCOUNT_FILE = (
+    BASE_DIR / 'service_account.json'
+    if getattr(sys, 'frozen', False)
+    else APP_DIR / 'service_account.json'
+)
 USER_EMAIL_FILE      = APP_DIR / 'current_user.json'
 
 # ── データベースファイルパス ──────────────────────────────────────────────────
