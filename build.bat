@@ -21,7 +21,7 @@ del /f /q "LEE電力モニター.spec" 2>nul
 
 REM [3] 依存関係を最新化
 echo [3/5] ビルドツールを更新中...
-pip install pyinstaller pyinstaller-hooks-contrib -q
+pip install pyinstaller pyinstaller-hooks-contrib python-dotenv -q
 
 REM [4] QRC リソースをコンパイル
 echo [3.5/5] リソース(QRC)をコンパイル中...

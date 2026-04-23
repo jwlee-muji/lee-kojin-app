@@ -25,7 +25,7 @@ jobs:
           cache: 'pip'
 
       - name: 依存パッケージをインストール
-        run: pip install -r requirements.txt pyinstaller
+        run: pip install -r requirements.txt pyinstaller python-dotenv
 
       - name: Inno Setup をインストール
         run: choco install innosetup --no-progress -y
