@@ -171,11 +171,17 @@ class _CardOverlay(QFrame):
         self._btn_close.setCursor(Qt.PointingHandCursor)
         self._btn_close.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._btn_close.clicked.connect(lambda: self.hide_requested.emit(self._key))
+        # P1-19 — 스크린리더 라벨
+        self._btn_close.setAccessibleName(tr("カードを非表示"))
+        self._btn_close.setAccessibleDescription(
+            tr("ダッシュボードからこのカードを非表示にします")
+        )
 
         # 드래그 힌트 (좌상단)
         self._hint_lbl = QLabel("⋮⋮  " + tr("ドラッグ移動"), self)
         self._hint_lbl.setObjectName("dashOverHint")
         self._hint_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._hint_lbl.setAccessibleName(tr("ドラッグ移動可能"))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -453,6 +459,12 @@ class DashboardWidget(BaseWidget):
 
     def __init__(self):
         super().__init__()
+        # P1-19 — 스크린리더 라벨 (위젯 단위)
+        self.setAccessibleName(tr("ダッシュボード"))
+        self.setAccessibleDescription(
+            tr("電力市場・天気・通知などの主要情報を一画面に集約したダッシュボード。"
+               "Tab キーでカードを巡回、Enter で詳細ページに移動。")
+        )
         self._weather_list: list = []
         self._is_admin = _is_admin()
         self._edit_mode = False
@@ -887,15 +899,28 @@ class DashboardWidget(BaseWidget):
 
         self._btn_refresh_all = LeeButton("↻  " + tr("全て更新"), variant="secondary", size="md")
         self._btn_refresh_all.clicked.connect(self._refresh_all_visible)
+        # P1-19 — 스크린리더 라벨 (아이콘 ↻ 만으로 의미 불명확)
+        self._btn_refresh_all.setAccessibleName(tr("全カードを更新"))
+        self._btn_refresh_all.setAccessibleDescription(
+            tr("表示中のすべてのダッシュボードカードのデータを再取得します")
+        )
         h.addWidget(self._btn_refresh_all, 0, Qt.AlignBottom)
 
         self._btn_add_widget = LeeButton("＋  " + tr("ウィジェット追加"),
                                           variant="secondary", size="md")
         self._btn_add_widget.clicked.connect(self._show_add_widget_menu)
+        self._btn_add_widget.setAccessibleName(tr("ウィジェット追加"))
+        self._btn_add_widget.setAccessibleDescription(
+            tr("非表示のカードをダッシュボードに追加します")
+        )
         h.addWidget(self._btn_add_widget, 0, Qt.AlignBottom)
 
         self._btn_edit = LeeButton(tr("レイアウト編集"), variant="primary", size="md")
         self._btn_edit.clicked.connect(self._toggle_edit_mode)
+        self._btn_edit.setAccessibleName(tr("レイアウト編集モード"))
+        self._btn_edit.setAccessibleDescription(
+            tr("カードのドラッグ移動・サイズ変更・非表示が可能なモードに切り替えます")
+        )
         h.addWidget(self._btn_edit, 0, Qt.AlignBottom)
 
         self._edit_pill = LeePill(tr("編集中"), variant="warning")

@@ -796,6 +796,11 @@ class SpotDashCard(QFrame):
             f"font-size: {Typography.DISPLAY}; font-weight: bold;"
             f" background: transparent; color: {vc};"
         )
+        # P1-19 — 스크린리더용 데이터 요약 (Tab 포커스 시 read out)
+        self.setAccessibleName(tr("JEPX スポット価格 — {0}").format(area))
+        self.setAccessibleDescription(
+            tr("平均 {0:.2f} 円/kWh, 最高 {1:.2f}, 最低 {2:.2f}").format(avg, max_v, min_v)
+        )
 
     def set_no_data(self):
         self._val_color = None
@@ -806,3 +811,6 @@ class SpotDashCard(QFrame):
             f"font-size: {Typography.DISPLAY}; font-weight: bold;"
             f" background: transparent; color: {UIColors.text_default(self.is_dark)};"
         )
+        # P1-19 — 데이터 없는 상태 라벨
+        self.setAccessibleName(tr("JEPX スポット価格"))
+        self.setAccessibleDescription(tr("現在データなし"))
