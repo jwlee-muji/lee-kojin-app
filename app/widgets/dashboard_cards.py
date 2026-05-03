@@ -1,3 +1,4 @@
+import logging
 import math
 import random as _random
 from PySide6.QtWidgets import (
@@ -12,6 +13,8 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QBrush, QPainterPath
 from app.ui.common import get_tinted_pixmap
 from app.ui.theme import Typography, UIColors
 from app.core.i18n import tr
+
+logger = logging.getLogger(__name__)
 
 
 _WMO_CATEGORY: dict[int, str] = {
@@ -600,6 +603,11 @@ class SummaryCard(QFrame):
             self.icon_lbl.setPixmap(get_tinted_pixmap(f":/img/{self.icon_name}.svg", self.is_dark))
             self.icon_lbl.setStyleSheet("background: transparent;")
         except Exception:
+            logger.warning(
+                f"SummaryCard icon load failed (icon_name={self.icon_name!r}) — "
+                f"falling back to text glyph",
+                exc_info=True,
+            )
             self.icon_lbl.setText(self.icon_name)
             self.icon_lbl.setStyleSheet("font-size: 26px; background: transparent;")
 
@@ -702,6 +710,10 @@ class SpotDashCard(QFrame):
             self.icon_lbl.setPixmap(get_tinted_pixmap(":/img/spot.svg", self.is_dark))
             self.icon_lbl.setStyleSheet("background: transparent;")
         except Exception:
+            logger.warning(
+                "SpotDashCard spot.svg load failed — falling back to ⚡ glyph",
+                exc_info=True,
+            )
             self.icon_lbl.setText("⚡")
             self.icon_lbl.setStyleSheet("font-size: 20px; background: transparent;")
         self.setStyleSheet(
