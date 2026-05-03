@@ -48,7 +48,9 @@ def get_db_connection(db_path: Path):
     conn = sqlite3.connect(str(db_path), timeout=15.0)
     try:
         conn.execute('PRAGMA journal_mode=WAL;')
-        conn.execute('PRAGMA synchronous=NORMAL;')   # WAL + NORMAL: 안전성 유지하며 쓰기 성능 향상
+        conn.execute('PRAGMA synchronous=NORMAL;')    # WAL + NORMAL: 안전성 유지하며 쓰기 성능 향상
+        conn.execute('PRAGMA cache_size=-64000;')      # 64MiB 페이지 캐시 (음수 = KiB)
+        conn.execute('PRAGMA temp_store=MEMORY;')      # 임시 인덱스/정렬을 메모리에서
         yield conn
     finally:
         conn.close()
