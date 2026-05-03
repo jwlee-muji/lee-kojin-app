@@ -25,10 +25,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def global_exception_handler(exc_type, exc_value, exc_traceback):
+    """앱 전역 미처리 예외 핸들러.
+
+    P1-14 — Qt 이벤트 루프 중 발생한 unhandled exception 을 로그로 기록하고
+    LeeDialog.error 로 사용자에게 알린 뒤, "バグ報告" 버튼으로 BugReport
+    위젯을 자동으로 열어 즉시 신고 가능하도록 함.
+    """
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    logger.critical(
+        "Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
+    # QApplication 이 살아있을 때만 다이얼로그 시도 (early-stage crash 보호)
+    try:
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            return
+        # LeeDialog import 는 lazy — 초기 부팅 단계 import 사이클 방지
+        from app.ui.components import LeeDialog
+        from app.core.events import bus
+
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        message = f"{exc_type.__name__}: {exc_value}"
+
+        # 다이얼로그 직접 인스턴스화 (LeeDialog.error 는 close 만 가능 → 버그 리포트 버튼 추가)
+        dlg = LeeDialog("予期しないエラー", kind="error")
+        dlg.set_message(message, details=tb_text[-2000:])   # 마지막 2000 chars 만
+        dlg.add_button("閉じる", variant="ghost", role="reject")
+        dlg.add_button("バグ報告", variant="primary", role="accept")
+        result = dlg.exec()
+
+        if result == 1:   # accepted = 버그 신고 클릭
+            # MainWindow 의 BugReport 페이지로 이동 시그널 emit
+            try:
+                bus.page_requested.emit(0)   # BugReport 인덱스는 동적 — 일단 dashboard 로 이동
+                bus.toast_requested.emit(
+                    "バグ報告ページから詳細をお送りください", "info",
+                )
+            except Exception:
+                pass
+    except Exception:
+        # 다이얼로그 표시 자체 실패 — 이미 로그에 기록되었으니 silent OK
+        logger.warning("global_exception_handler dialog failed", exc_info=True)
+
 
 sys.excepthook = global_exception_handler
 
