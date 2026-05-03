@@ -1610,7 +1610,9 @@ class EventDetailDialog(LeeDialog):
         layout.setContentsMargins(24, 20, 24, 16); layout.setSpacing(10)
 
         ev = self._ev; cal_id = ev.get("_calendar_id", "")
-        color = self._cal_colors.get(cal_id, "#4285F4")
+        # 캘린더 색 매핑이 없는 경우 디자인 토큰 c_cal (#34C759) 로 fallback
+        from app.ui.theme import ThemeManager
+        color = self._cal_colors.get(cal_id) or ThemeManager.instance().tokens["c_cal"]
 
         title_row = QHBoxLayout(); title_row.setSpacing(10)
         bar = QFrame(); bar.setObjectName("evtColorBar"); bar.setFixedSize(4, 40)
