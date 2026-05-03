@@ -386,17 +386,33 @@ def invalidate_settings_cache() -> None:
         _settings_cache = None
 
 def get_theme_qss(theme_name: str) -> str:
-    """분리된 .qss 파일에서 테마 데이터를 읽어옵니다."""
+    """분리된 .qss 파일에서 테마 데이터를 읽어와 디자인 토큰으로 템플릿 치환.
+
+    `.qss` 안의 ``<<token_name>>`` 마커를 ``TOKENS_DARK/LIGHT`` 의 값으로
+    치환한다. 마커 형식은 ``{}`` (Python format) 가 아닌 ``<<>>`` 를 사용해
+    QSS 의 셀렉터 블록 ``{ ... }`` 와 충돌하지 않게 한다.
+    """
     import sys
     if getattr(sys, 'frozen', False):
         base_dir = Path(sys._MEIPASS) / "app"
     else:
         base_dir = Path(__file__).parent.parent
-        
+
     qss_file = base_dir / "ui" / "themes" / f"{theme_name}.qss"
-        
+
     try:
-        return qss_file.read_text(encoding='utf-8')
+        text = qss_file.read_text(encoding='utf-8')
     except OSError as e:
         print(f"Theme load error: {e}")
         return ""
+
+    # 토큰 placeholder 치환 (<<name>> → tokens[name])
+    try:
+        from app.ui.theme import TOKENS_DARK, TOKENS_LIGHT
+        tokens = TOKENS_DARK if theme_name == "dark" else TOKENS_LIGHT
+        for k, v in tokens.items():
+            text = text.replace(f"<<{k}>>", str(v))
+    except Exception as e:
+        print(f"Theme token substitution error: {e}")
+
+    return text

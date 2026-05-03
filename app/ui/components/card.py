@@ -36,7 +36,7 @@ _REST_ALPHA   = 60
 _HOVER_BLUR   = 36
 _HOVER_OFFSETY= 8
 _HOVER_ALPHA  = 110
-_HOVER_DUR_MS = 140
+_HOVER_DUR_MS = 120   # design spec: 02-components.md hover lift 120ms
 
 
 class LeeCard(QFrame):

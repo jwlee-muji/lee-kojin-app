@@ -1,63 +1,64 @@
-/* Phase 6 — 디자인 토큰 (TOKENS_DARK) 정합 */
+/* Phase 6 — 디자인 토큰 (TOKENS_DARK) 정합 + Step 6 placeholder 치환
+   <token> 형태 placeholder 는 app.core.config.get_theme_qss 가 치환. */
 QWidget {
     font-family: "Pretendard", "Noto Sans JP", "Meiryo";
     font-size: 9pt;
-    background-color: #0A0B0F;            /* bg_app */
-    color: #F2F4F7;                       /* fg_primary */
+    background-color: <<bg_app>>;
+    color: <<fg_primary>>;
 }
 QTableWidget {
-    background-color: #14161C;            /* bg_surface */
-    alternate-background-color: #1B1E26;  /* bg_surface_2 */
+    background-color: <<bg_surface>>;
+    alternate-background-color: <<bg_surface_2>>;
     gridline-color: rgba(255,255,255,0.08);
-    color: #F2F4F7;
+    color: <<fg_primary>>;
     selection-background-color: rgba(255,122,69,0.30);
     selection-color: #FFFFFF;
 }
 QHeaderView::section {
-    background-color: #1B1E26;            /* bg_surface_2 */
-    color: #A8B0BD;                       /* fg_secondary */
+    background-color: <<bg_surface_2>>;
+    color: <<fg_secondary>>;
     padding: 4px;
-    border: 1px solid rgba(255,255,255,0.04);
+    border: 1px solid <<border_subtle>>;
 }
 QPushButton {
-    background-color: #1B1E26;            /* bg_surface_2 */
-    color: #F2F4F7;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: <<bg_surface_2>>;
+    color: <<fg_primary>>;
+    border: 1px solid <<border>>;
     border-radius: 4px;
     padding: 5px 10px;
 }
-QPushButton:hover { background-color: #232730; }    /* bg_surface_3 */
-QPushButton:pressed { background-color: #14161C; }
-QPushButton:disabled { background-color: #14161C; color: #6B7280; border: 1px solid rgba(255,255,255,0.04); }
-QListWidget { background-color: #14161C; border: none; border-right: 1px solid rgba(255,255,255,0.04); outline: 0; }
-QListWidget::item { padding: 12px 10px; margin: 2px 8px; border-radius: 6px; font-size: 13px; color: #A8B0BD; }
-QListWidget::item:hover { background-color: #1B1E26; color: #F2F4F7; }
-QListWidget::item:selected { background-color: rgba(255,122,69,0.20); color: #FFFFFF; font-weight: bold; border-left: 3px solid #FF7A45; }
-QDateEdit, QComboBox { background-color: #1B1E26; color: #F2F4F7; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 3px 5px; }
+QPushButton:hover { background-color: <<bg_surface_3>>; }
+QPushButton:pressed { background-color: <<bg_surface>>; }
+QPushButton:disabled { background-color: <<bg_surface>>; color: <<fg_tertiary>>; border: 1px solid <<border_subtle>>; }
+QListWidget { background-color: <<bg_surface>>; border: none; border-right: 1px solid <<border_subtle>>; outline: 0; }
+QListWidget::item { padding: 12px 10px; margin: 2px 8px; border-radius: 6px; font-size: 13px; color: <<fg_secondary>>; }
+QListWidget::item:hover { background-color: <<bg_surface_2>>; color: <<fg_primary>>; }
+QListWidget::item:selected { background-color: rgba(255,122,69,0.20); color: #FFFFFF; font-weight: bold; border-left: 3px solid <<accent>>; }
+QDateEdit, QComboBox { background-color: <<bg_surface_2>>; color: <<fg_primary>>; border: 1px solid <<border>>; border-radius: 6px; padding: 3px 5px; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 0px; }
 QScrollBar::handle:vertical { background: rgba(255,255,255,0.18); border-radius: 5px; min-height: 20px; margin: 1px; }
 QScrollBar::handle:vertical:hover { background: rgba(255,255,255,0.32); margin: 0px; border-radius: 5px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; background: none; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QSplitter::handle { background-color: transparent; }
-QMessageBox { background-color: #14161C; }
+QMessageBox { background-color: <<bg_surface>>; }
 QSpinBox, QDoubleSpinBox {
-    background-color: #1B1E26;
-    color: #F2F4F7;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: <<bg_surface_2>>;
+    color: <<fg_primary>>;
+    border: 1px solid <<border>>;
     border-radius: 6px;
     padding: 3px 5px;
 }
 QSpinBox::up-button, QDoubleSpinBox::up-button {
-    background-color: #232730;
+    background-color: <<bg_surface_3>>;
     border: none;
-    border-left: 1px solid rgba(255,255,255,0.08);
+    border-left: 1px solid <<border>>;
     width: 16px;
 }
 QSpinBox::down-button, QDoubleSpinBox::down-button {
-    background-color: #232730;
+    background-color: <<bg_surface_3>>;
     border: none;
-    border-left: 1px solid rgba(255,255,255,0.08);
+    border-left: 1px solid <<border>>;
     width: 16px;
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
@@ -68,48 +69,48 @@ QScrollBar::handle:horizontal:hover { background: rgba(255,255,255,0.32); margin
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; background: none; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QPlainTextEdit {
-    background-color: #14161C;
-    color: #F2F4F7;
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: <<bg_surface>>;
+    color: <<fg_primary>>;
+    border: 1px solid <<border>>;
     selection-background-color: rgba(255,122,69,0.30);
     selection-color: #FFFFFF;
 }
-QComboBox::drop-down { background-color: #232730; border: none; border-left: 1px solid rgba(255,255,255,0.08); width: 20px; }
+QComboBox::drop-down { background-color: <<bg_surface_3>>; border: none; border-left: 1px solid <<border>>; width: 20px; }
 QComboBox QAbstractItemView {
-    background-color: #1B1E26;
-    color: #F2F4F7;
+    background-color: <<bg_surface_2>>;
+    color: <<fg_primary>>;
     selection-background-color: rgba(255,122,69,0.30);
     selection-color: #FFFFFF;
-    border: 1px solid rgba(255,255,255,0.14);
+    border: 1px solid <<border_strong>>;
     outline: none;
 }
 QComboBox QAbstractItemView::item {
     padding: 5px 10px;
     min-height: 22px;
-    color: #F2F4F7;
+    color: <<fg_primary>>;
 }
 QComboBox QAbstractItemView::item:hover {
-    background-color: #232730;
+    background-color: <<bg_surface_3>>;
     color: #FFFFFF;
 }
 QComboBox QAbstractItemView::item:selected {
     background-color: rgba(255,122,69,0.30);
     color: #FFFFFF;
 }
-QCalendarWidget QWidget { background-color: #14161C; color: #F2F4F7; }
+QCalendarWidget QWidget { background-color: <<bg_surface>>; color: <<fg_primary>>; }
 QCalendarWidget QAbstractItemView {
-    background-color: #14161C;
-    color: #F2F4F7;
-    selection-background-color: #FF7A45;
+    background-color: <<bg_surface>>;
+    color: <<fg_primary>>;
+    selection-background-color: <<accent>>;
     selection-color: #FFFFFF;
-    gridline-color: rgba(255,255,255,0.04);
+    gridline-color: <<border_subtle>>;
 }
-QCalendarWidget QAbstractItemView:disabled { color: #3D424D; }
-QCalendarWidget QToolButton { background-color: #1B1E26; color: #F2F4F7; border: none; border-radius: 6px; padding: 3px 6px; }
-QCalendarWidget QToolButton:hover { background-color: #232730; }
-QCalendarWidget #qt_calendar_navigationbar { background-color: #1B1E26; padding: 4px; }
-QPushButton:focus { border: 1px solid #FF7A45; outline: none; }
-QDateEdit:focus, QComboBox:focus { border: 1px solid #FF7A45; outline: none; }
-QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #FF7A45; outline: none; }
-QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid #FF7A45; outline: none; }
-QListWidget::item:focus { background-color: #1B1E26; color: #F2F4F7; }
+QCalendarWidget QAbstractItemView:disabled { color: <<fg_quaternary>>; }
+QCalendarWidget QToolButton { background-color: <<bg_surface_2>>; color: <<fg_primary>>; border: none; border-radius: 6px; padding: 3px 6px; }
+QCalendarWidget QToolButton:hover { background-color: <<bg_surface_3>>; }
+QCalendarWidget #qt_calendar_navigationbar { background-color: <<bg_surface_2>>; padding: 4px; }
+QPushButton:focus { border: 1px solid <<accent>>; outline: none; }
+QDateEdit:focus, QComboBox:focus { border: 1px solid <<accent>>; outline: none; }
+QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid <<accent>>; outline: none; }
+QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid <<accent>>; outline: none; }
+QListWidget::item:focus { background-color: <<bg_surface_2>>; color: <<fg_primary>>; }

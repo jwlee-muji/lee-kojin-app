@@ -17,7 +17,10 @@ QDateEdit / QDateTimeEdit 의 popup 을 디자인 시스템 톤에 맞춰 통일
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QDate, Qt, Signal, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import (
+    QDate, Qt, Signal, QPropertyAnimation, QEasingCurve, QRect,
+    QParallelAnimationGroup,
+)
 from PySide6.QtGui import QTextCharFormat, QColor, QFont
 from PySide6.QtWidgets import (
     QCalendarWidget, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton,
@@ -64,19 +67,37 @@ class LeeMiniCalendar(QCalendarWidget):
         # 외부에서 wrap 하면 됨. 단순화를 위해 본 위젯은 footer 없이 내부만.
         self._apply_qss()
 
-    # ── 팝업 fade-in (디자인: calPop 0.15s ease-out) ──────────
+    # ── 팝업 calPop (디자인: 0.15s scale 0.97→1.0 + opacity 0→1, ease-out) ──
     def showEvent(self, event):
         super().showEvent(event)
+        # Opacity fade-in
         eff = QGraphicsOpacityEffect(self)
         eff.setOpacity(0.0)
         self.setGraphicsEffect(eff)
-        anim = QPropertyAnimation(eff, b"opacity", self)
-        anim.setDuration(150)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.setStartValue(0.0); anim.setEndValue(1.0)
-        anim.finished.connect(lambda: self.setGraphicsEffect(None))
-        anim.start()
-        self._pop_anim = anim   # GC 방지
+        anim_op = QPropertyAnimation(eff, b"opacity", self)
+        anim_op.setDuration(150)
+        anim_op.setEasingCurve(QEasingCurve.OutCubic)
+        anim_op.setStartValue(0.0); anim_op.setEndValue(1.0)
+        anim_op.finished.connect(lambda: self.setGraphicsEffect(None))
+
+        # Scale-in (center-anchored geometry shrink → grow)
+        # Qt 의 QWidget 은 QGraphicsScale 직접 적용 불가 → geometry 애니메이션으로 모방
+        full = QRect(self.geometry())
+        cx, cy = full.center().x(), full.center().y()
+        sw = max(1, int(full.width() * 0.97))
+        sh = max(1, int(full.height() * 0.97))
+        start_geom = QRect(cx - sw // 2, cy - sh // 2, sw, sh)
+        anim_g = QPropertyAnimation(self, b"geometry", self)
+        anim_g.setDuration(150)
+        anim_g.setEasingCurve(QEasingCurve.OutCubic)
+        anim_g.setStartValue(start_geom)
+        anim_g.setEndValue(full)
+
+        grp = QParallelAnimationGroup(self)
+        grp.addAnimation(anim_op); grp.addAnimation(anim_g)
+        self.setGeometry(start_geom)   # 시작 위치 즉시 적용 → 깜빡임 방지
+        grp.start()
+        self._pop_anim = grp           # GC 방지
 
     # ── public ────────────────────────────────────────────────
     def set_theme(self, is_dark: bool) -> None:
