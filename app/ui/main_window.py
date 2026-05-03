@@ -719,13 +719,25 @@ class MainWindow(QMainWindow):
     # QMainWindow 의 mousePressEvent 는 centralWidget 의 자식들이 이벤트를
     # 흡수하면 호출되지 않으므로, 자식 위젯의 마우스 이벤트도 가로채려면
     # app.installEventFilter(self) 가 필요하다.
+    # P1-9 — 모든 마우스 이벤트 가로채기 비용을 최소화하기 위해 5 종류만 통과
+    _RELEVANT_EVENT_TYPES = frozenset()   # 첫 호출 때 lazy 초기화
+
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent as _QEvent
+        et = event.type()
+
+        # 0) Fast path — 마우스 이벤트가 아니면 즉시 반환 (대부분의 경우)
+        if not MainWindow._RELEVANT_EVENT_TYPES:
+            MainWindow._RELEVANT_EVENT_TYPES = frozenset({
+                _QEvent.MouseButtonPress, _QEvent.MouseButtonRelease,
+                _QEvent.MouseMove, _QEvent.MouseButtonDblClick,
+            })
+        if et not in MainWindow._RELEVANT_EVENT_TYPES:
+            return False
+
         # 우리 윈도우 안의 위젯 이벤트만 처리
         if not isinstance(obj, QWidget) or obj.window() is not self:
-            return super().eventFilter(obj, event)
-
-        et = event.type()
+            return False
 
         # ── 1) MouseButtonPress: edge 면 resize 시작, 타이틀바 빈 영역이면 drag ──
         if et == _QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
