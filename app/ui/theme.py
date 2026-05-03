@@ -347,19 +347,24 @@ class ThemeManager(QObject):
 # 기존 코드 (하위 호환 유지 — Phase 5 이후 점진적으로 토큰으로 교체)
 # =============================================================================
 class ThemePalette:
-    """アプリ全体の背景色パレット。散在していたハードコードを一元管理します。"""
+    """アプリ全体の背景色パレット。散在していたハードコードを一元管理します。
 
-    # ── ダークテーマ背景 ──────────────────────────────────────────────────────
-    BG_PRIMARY_DARK   = "#1e1e1e"   # メインウィンドウ背景
-    BG_SECONDARY_DARK = "#252526"   # カード・パネル背景
-    BG_TERTIARY_DARK  = "#2d2d30"   # ホバー・強調背景
-    BG_INPUT_DARK     = "#3c3c3c"   # 入力フィールド背景
+    Phase 6 — 値을 모두 디자인 토큰 (TOKENS_DARK/LIGHT) 과 동기화. 외부에서
+    상수 직접 참조하는 대신 새 코드는 ``ThemeManager`` 또는 토큰 dict 를
+    사용할 것 (이 클래스는 하위 호환용).
+    """
 
-    # ── ライトテーマ背景 ─────────────────────────────────────────────────────
-    BG_PRIMARY_LIGHT   = "#f4f4f4"
-    BG_SECONDARY_LIGHT = "#ffffff"
-    BG_TERTIARY_LIGHT  = "#f0f0f0"
-    BG_INPUT_LIGHT     = "#ffffff"
+    # ── ダークテーマ背景 (토큰 정합) ─────────────────────────────────────────
+    BG_PRIMARY_DARK   = TOKENS_DARK["bg_app"]         # #0A0B0F
+    BG_SECONDARY_DARK = TOKENS_DARK["bg_surface"]     # #14161C — カード・パネル
+    BG_TERTIARY_DARK  = TOKENS_DARK["bg_surface_3"]   # #232730 — hover
+    BG_INPUT_DARK     = TOKENS_DARK["bg_input"]       # #1B1E26
+
+    # ── ライトテーマ背景 (토큰 정합) ─────────────────────────────────────────
+    BG_PRIMARY_LIGHT   = TOKENS_LIGHT["bg_app"]       # #F5F6F8
+    BG_SECONDARY_LIGHT = TOKENS_LIGHT["bg_surface"]   # #FFFFFF
+    BG_TERTIARY_LIGHT  = TOKENS_LIGHT["bg_surface_2"] # #F0F2F5
+    BG_INPUT_LIGHT     = TOKENS_LIGHT["bg_input"]     # #FFFFFF
 
     @staticmethod
     def bg_primary(is_dark: bool) -> str:
@@ -384,8 +389,7 @@ class UIColors:
     # --- 기본 텍스트 색상 ---
     TEXT_PRIMARY_DARK    = "#d4d4d4"
     TEXT_PRIMARY_LIGHT   = "#333333"
-    # WCAG AA 기준 4.5:1 이상 대비도
-    # #bbbbbb on #1e1e1e ≈ 8.0:1 (AAA), #555555 on #f4f4f4 ≈ 6.6:1 (AA)
+    # WCAG AA 기준 4.5:1 이상 대비도 보장 (text on bg_surface 조합 기준)
     TEXT_SECONDARY_DARK  = "#bbbbbb"
     TEXT_SECONDARY_LIGHT = "#555555"
     TEXT_EMPHASIS_DARK   = "#eeeeee"
@@ -414,9 +418,9 @@ class UIColors:
     LOGOUT_COLOR    = "#ff5252"
     LOGOUT_HOVER_BG = "rgba(255,82,82,0.12)"
 
-    # --- ボーダー色 ---
-    BORDER_DARK  = "#3e3e42"
-    BORDER_LIGHT = "#e0e0e0"
+    # --- ボーダー色 (토큰 정합 — alpha 표현으로 대체) ---
+    BORDER_DARK  = TOKENS_DARK["border_strong"]    # rgba(255,255,255,0.14)
+    BORDER_LIGHT = TOKENS_LIGHT["border_strong"]   # rgba(11,18,32,0.18)
 
     @staticmethod
     def icon_tint(is_dark: bool) -> str:
@@ -440,30 +444,35 @@ class UIColors:
         return UIColors.TEXT_DEFAULT_DARK if is_dark else UIColors.TEXT_DEFAULT_LIGHT
 
     @staticmethod
-    def get_imbalance_alert_colors(is_dark: bool, level: int):
-        """인밸런스 단가 레벨: 1(Normal) ~ 5(Critical)"""
-        if is_dark:
-            return {
-                1: ("#113344", "#d4d4d4"), 2: ("#1e401e", "#d4d4d4"),
-                3: ("#804000", "#d4d4d4"), 4: ("#801515", "#d4d4d4"), 5: ("#5c1111", "#ffffff"),
-            }.get(level, ("transparent", "#d4d4d4"))
-        else:
-            return {
-                1: ("#e1f5fe", "#333333"), 2: ("#dcf0dc", "#333333"),
-                3: ("#fff0cc", "#333333"), 4: ("#ffdddd", "#333333"), 5: ("#ffcccc", "#ff0000"),
-            }.get(level, ("transparent", "#333333"))
+    def get_imbalance_alert_colors(is_dark: bool, level: int) -> tuple[str, str]:
+        """인밸런스 단가 레벨: 1(Normal) ~ 5(Critical).
+
+        디자인 토큰 (c_info / c_ok / c_warn / c_bad) 의 rgba 변형으로 표현.
+        반환은 ``(background, foreground)`` 튜플.
+        """
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
+        fg = t["fg_primary"]
+        # c_info=#0A84FF, c_ok=#30D158, c_warn=#FF9F0A, c_bad=#FF453A
+        return {
+            1: ("rgba(10,132,255,0.14)",   fg),    # Normal — info tint
+            2: ("rgba(48,209,88,0.14)",    fg),    # Low    — ok tint
+            3: ("rgba(255,159,10,0.18)",   fg),    # Mid    — warn tint
+            4: ("rgba(255,69,58,0.22)",    fg),    # High   — bad tint
+            5: ("rgba(255,69,58,0.38)", "#FFFFFF"),  # Critical — bad strong
+        }.get(level, ("transparent", fg))
 
     @staticmethod
-    def get_reserve_alert_colors(is_dark: bool, status: str):
-        """예비율 경고 상태"""
-        if is_dark:
-            return {
-                'low': ("#7f1d1d", "#ffffff"), 'warning': ("#785b0d", "#ffffff"), 'past': ("#2d2d30", "#777777")
-            }.get(status, ("transparent", "#d4d4d4"))
-        else:
-            return {
-                'low': ("#ff6666", "#000000"), 'warning': ("#ffeb3b", "#000000"), 'past': ("#e0e0e0", "#888888")
-            }.get(status, ("transparent", "#333333"))
+    def get_reserve_alert_colors(is_dark: bool, status: str) -> tuple[str, str]:
+        """예비율 경고 상태 ('low' | 'warning' | 'past').
+
+        디자인 토큰 (c_bad / c_warn) 의 rgba 변형. 'past' 는 surface 톤.
+        """
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
+        return {
+            'low':     ("rgba(255,69,58,0.35)",   "#FFFFFF"),
+            'warning': ("rgba(255,159,10,0.35)",  "#FFFFFF"),
+            'past':    (t["bg_surface_3"],        t["fg_tertiary"]),
+        }.get(status, ("transparent", t["fg_primary"]))
 
     @staticmethod
     def get_panel_colors(is_dark: bool):
@@ -492,8 +501,11 @@ class UIColors:
 
     @staticmethod
     def get_sidebar_header_color(is_dark: bool) -> str:
-        """サイドバーグループヘッダーのテキスト色"""
-        return "#e0e0e0" if is_dark else "#1a1a1a"
+        """サイドバーグループヘッダーのテキスト色. 토큰 기반.
+
+        다크 = fg_secondary (살짝 dim 한 헤더), 라이트 = fg_primary (강한 헤더).
+        """
+        return TOKENS_DARK["fg_secondary"] if is_dark else TOKENS_LIGHT["fg_primary"]
 
     @staticmethod
     def get_util_strip_colors(is_dark: bool) -> dict:
@@ -524,14 +536,14 @@ class UIColors:
 
     @staticmethod
     def get_chat_colors(is_dark: bool) -> dict:
-        """AI チャットウィジェットのバブル・アバター配色. 토큰 기반 (c_ai)."""
+        """AI チャットウィジェットのバブル・アバター配色. 토큰 기반 (c_ai / c_ai_soft)."""
         t = TOKENS_DARK if is_dark else TOKENS_LIGHT
         return {
             "user_bg":   t["c_ai"],          # #5856D6 — design AI accent
             "user_fg":   "#FFFFFF",
             "asst_bg":   t["bg_surface_2"],
             "asst_fg":   t["fg_primary"],
-            "avatar_bg": t["c_ai"],
+            "avatar_bg": t["c_ai_soft"],     # #E1E0F8 — soft indigo (디자인 정합)
             "time_fg":   t["fg_tertiary"],
         }
 
