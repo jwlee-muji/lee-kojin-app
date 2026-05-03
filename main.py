@@ -280,6 +280,18 @@ def main():
 
     update_manager.start_check()
 
+    # P1-15 — 이전 세션에서 송신 실패한 bug report 가 있으면 백그라운드 재송신
+    def _flush_pending():
+        try:
+            from app.api.email_api import flush_pending_bug_reports
+            n = flush_pending_bug_reports()
+            if n:
+                logger.info(f"전 세션 bug report 재송신 완료: {n} 건")
+        except Exception:
+            logger.warning("flush_pending_bug_reports 호출 실패", exc_info=True)
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(8_000, _flush_pending)   # 8 초 후 (네트워크 안정 시점)
+
     app.aboutToQuit.connect(lambda: logger.info("=== LEE電力モニター アプリ終了 ==="))
     sys.exit(app.exec())
 
