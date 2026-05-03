@@ -730,9 +730,9 @@ class MailListPanel(QWidget):
             self._empty_lbl.hide()
 
     def set_mails(self, mails: list, next_token: str) -> None:
-        # 첫 데이터 도착 시 skeleton 제거 (mails 가 비어있어도 응답이 온 것이므로 제거)
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if getattr(self, "_list_skel", None) is not None:
-            self._list_skel.stop(); self._list_skel.deleteLater(); self._list_skel = None
+            self._list_skel.stop()
         self._list.clear()
         self._selected_ids.clear()
         self._last_check_row = None
@@ -1595,6 +1595,10 @@ class GmailWidget(BaseWidget):
             self._mail_panel.set_loading(True)
             self.set_loading(True, self._mail_panel)
             self._set_status(tr("読込中..."))
+            # MailListPanel 내부 skeleton — 페이지 1 fetch 시작 시 다시 표시
+            sk = getattr(self._mail_panel, "_list_skel", None)
+            if sk is not None:
+                sk.start()
         max_r = self.settings.get("gmail_max_results", 50)
         w = FetchMailListWorker(label_ids, max_results=max_r,
                                 page_token=page_token, q=q)

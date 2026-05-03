@@ -802,6 +802,8 @@ class JkmWidget(BaseWidget):
             self._worker = None
         self._btn_fetch.setEnabled(False)
         self._set_status(tr("全銘柄データ取得中..."))
+        if getattr(self, "_chart_skel", None) is not None:
+            self._chart_skel.start()
         self._worker = FetchEnergyIndicatorsWorker()
         self._worker.progress.connect(self._set_status)
         self._worker.finished.connect(self._on_fetch_done)
@@ -924,9 +926,9 @@ class JkmWidget(BaseWidget):
         self._chart.clear_curves()
         if not self._dates or not self._closes:
             return
-        # 첫 데이터 도착 시 skeleton 제거
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if getattr(self, "_chart_skel", None) is not None:
-            self._chart_skel.stop(); self._chart_skel.deleteLater(); self._chart_skel = None
+            self._chart_skel.stop()
 
         x_vals = list(range(len(self._dates)))
         n = len(self._dates)

@@ -1440,6 +1440,8 @@ class HjksWidget(BaseWidget):
             self._fetch_worker = None
         self._btn_fetch.setEnabled(False)
         self._set_status(tr("データ取得中..."))
+        if getattr(self, "_chart_skel", None) is not None:
+            self._chart_skel.start()
         self._fetch_worker = FetchHjksWorker()
         self._fetch_worker.finished.connect(self._on_fetch_done)
         self._fetch_worker.error.connect(self._on_fetch_error)
@@ -1551,9 +1553,9 @@ class HjksWidget(BaseWidget):
     # 렌더링
     # ──────────────────────────────────────────────────────────
     def _render(self) -> None:
-        # 첫 데이터 도착 시 skeleton 제거
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if self._rows and getattr(self, "_chart_skel", None) is not None:
-            self._chart_skel.stop(); self._chart_skel.deleteLater(); self._chart_skel = None
+            self._chart_skel.stop()
         # Chart
         self._chart.set_data(self._rows, self._sel_methods, self._sel_regions)
         self._render_kpi()

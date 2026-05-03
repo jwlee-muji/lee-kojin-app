@@ -1330,6 +1330,8 @@ class JepxSpotWidget(BaseWidget):
         self._fetching = True
         self._btn_refresh.setEnabled(False)
         self._set_status(tr("データ取得中…"))
+        if getattr(self, "_chart_skel", None) is not None:
+            self._chart_skel.start()
 
         w = FetchJepxSpotHistoryWorker()
         w.progress.connect(self._on_hist_progress)
@@ -1625,9 +1627,9 @@ class JepxSpotWidget(BaseWidget):
         x_vals, x_labels = self._last_x_vals, self._last_x_labels
         areas = self._enabled_areas()
         self._chart.clear_curves()
-        # 첫 데이터 도착 시 skeleton 제거
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if rows and areas and getattr(self, "_chart_skel", None) is not None:
-            self._chart_skel.stop(); self._chart_skel.deleteLater(); self._chart_skel = None
+            self._chart_skel.stop()
         if not rows or not areas:
             return
 

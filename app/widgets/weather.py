@@ -845,6 +845,8 @@ class WeatherWidget(BaseWidget):
             self.worker = None
         self._btn_refresh.setEnabled(False)
         self._set_status(tr("天気データ取得中..."))
+        if getattr(self, "_data_skel", None) is not None:
+            self._data_skel.start()
         self.worker = FetchWeatherWorker()
         self.worker.finished.connect(self._on_fetch_success)
         self.worker.error.connect(self._on_fetch_error)
@@ -905,9 +907,9 @@ class WeatherWidget(BaseWidget):
     def _render_region(self, idx: int) -> None:
         if idx < 0 or idx >= len(self.weather_data):
             return
-        # 첫 데이터 도착 시 skeleton 제거
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if getattr(self, "_data_skel", None) is not None:
-            self._data_skel.stop(); self._data_skel.deleteLater(); self._data_skel = None
+            self._data_skel.stop()
         region = WEATHER_REGIONS[idx]
         data   = self.weather_data[idx]
         current = data.get("current") or {}

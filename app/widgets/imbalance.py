@@ -990,6 +990,8 @@ class ImbalanceWidget(BaseWidget):
         self._btn_update.setEnabled(False)
         self.set_loading(True)
         self._set_status(tr("DB更新中..."))
+        if getattr(self, "_chart_skel", None) is not None:
+            self._chart_skel.start()
         self.worker = UpdateImbalanceWorker()
         self.worker.finished.connect(self._on_update_success)
         self.worker.error.connect(self._on_update_error)
@@ -1156,9 +1158,9 @@ class ImbalanceWidget(BaseWidget):
         self._chart.clear_curves()
         if not self._last_rows or not self._last_cols:
             return
-        # 첫 데이터 도착 시 skeleton 제거
+        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
         if getattr(self, "_chart_skel", None) is not None:
-            self._chart_skel.stop(); self._chart_skel.deleteLater(); self._chart_skel = None
+            self._chart_skel.stop()
 
         # X 축: 슬롯 라벨
         x_labels = [str(r[0]) for r in self._last_rows]

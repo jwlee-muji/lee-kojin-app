@@ -906,6 +906,8 @@ class BriefingWidget(BaseWidget):
         self._set_status(tr("⏳ 準備中..."), busy=True)
         self._content_view.clear()
         self._content_view.setPlaceholderText("")
+        if getattr(self, "_content_skel", None) is not None:
+            self._content_skel.start()
 
         worker = BriefingWorker(self._current_period, self._current_lang)
         worker.result.connect(self._on_result)
@@ -923,7 +925,7 @@ class BriefingWidget(BaseWidget):
         except sqlite3.Error as e:
             logger.error(f"briefing save error: {e}")
         if getattr(self, "_content_skel", None) is not None:
-            self._content_skel.stop(); self._content_skel.deleteLater(); self._content_skel = None
+            self._content_skel.stop()   # 재사용 가능 — 다음 refresh 시 .start()
         self._content_view.setMarkdown(text)
         self._set_status(tr("✅ 生成完了 {0}").format(created_at[:16]))
         self._rebuild_list(select_latest=True)
@@ -1005,7 +1007,7 @@ class BriefingWidget(BaseWidget):
             self._meta_lang.setText(lang_name_map.get(lang, lang))
             self._meta_time.setText(created_at[:19])
             if getattr(self, "_content_skel", None) is not None:
-                self._content_skel.stop(); self._content_skel.deleteLater(); self._content_skel = None
+                self._content_skel.stop()   # 재사용 가능 — 다음 refresh 시 .start()
             self._content_view.setMarkdown(content)
 
     def _on_delete(self) -> None:
