@@ -139,6 +139,7 @@ USER_EMAIL_FILE      = APP_DIR / 'current_user.json'
 DB_IMBALANCE      = APP_DIR / 'imbalance_data.db'
 DB_HJKS           = APP_DIR / 'hjks_data.db'
 DB_JKM            = APP_DIR / 'jkm_data.db'
+DB_ENERGY         = APP_DIR / 'energy_indicators.db'   # 다지표 통합 DB
 DB_JEPX_SPOT      = APP_DIR / 'jepx_spot.db'
 DB_POWER_RESERVE  = APP_DIR / 'power_reserve.db'
 DB_WEATHER        = APP_DIR / 'weather.db'
@@ -156,6 +157,18 @@ API_JEPX_SPOT_BASE  = "https://www.jepx.jp/market/excel"
 
 # ── ウィジェット定数 ──────────────────────────────────────────────────────────
 JKM_TICKER = 'JKM=F'
+
+# ── エネルギー指標 (Yahoo Finance multi-ticker) ───────────────────────────────
+# 디자인 출처: handoff/LEE_PROJECT/varA-detail-screens2.jsx INDICATORS
+# id: 내부 키, ticker: yfinance 심볼, label: 표시명, unit: 단위, color: 차트색
+ENERGY_INDICATORS = [
+    {"id": "jkm",    "ticker": "JKM=F",    "label": "JKM (LNG)",     "unit": "USD/MMBtu", "color": "#F4B740"},
+    {"id": "henry",  "ticker": "NG=F",     "label": "Henry Hub",     "unit": "USD/MMBtu", "color": "#34A853"},
+    {"id": "brent",  "ticker": "BZ=F",     "label": "Brent 原油",    "unit": "USD/bbl",   "color": "#1A73E8"},
+    {"id": "wti",    "ticker": "CL=F",     "label": "WTI 原油",      "unit": "USD/bbl",   "color": "#0B8043"},
+    {"id": "usdjpy", "ticker": "JPY=X",    "label": "USD/JPY",       "unit": "JPY",       "color": "#EA4335"},
+    {"id": "eurjpy", "ticker": "EURJPY=X", "label": "EUR/JPY",       "unit": "JPY",       "color": "#7986CB"},
+]
 
 JEPX_SPOT_START_FY = 2005   # 収集開始会計年度
 JEPX_SPOT_AREAS = [          # (表示名, DBカラム名)

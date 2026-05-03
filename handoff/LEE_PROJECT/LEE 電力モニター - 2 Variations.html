@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LEE 電力モニター — 디자인 업그레이드</title>
+  <link rel="stylesheet" href="tokens.css"/>
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    body { background: #f0eee9; }
+    #root { height: 100vh; width: 100vw; }
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideInRight {
+      from { opacity: 0; transform: translateX(24px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes drawLine {
+      to { stroke-dashoffset: 0; }
+    }
+    .varA-nav-btn:hover { background: var(--bg-surface-2) !important; }
+    .lee-card-hover:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+    /* ── モダンなスクロールバー (細く・控えめ) ─────────────────── */
+    .lee-scroll, aside, .lee-scroll-thin {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong, #4a4a4a) transparent;
+    }
+    .lee-scroll::-webkit-scrollbar,
+    aside::-webkit-scrollbar,
+    .lee-scroll-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .lee-scroll::-webkit-scrollbar-track,
+    aside::-webkit-scrollbar-track,
+    .lee-scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .lee-scroll::-webkit-scrollbar-thumb,
+    aside::-webkit-scrollbar-thumb,
+    .lee-scroll-thin::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--fg-tertiary) 35%, transparent);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .lee-scroll::-webkit-scrollbar-thumb:hover,
+    aside::-webkit-scrollbar-thumb:hover,
+    .lee-scroll-thin::-webkit-scrollbar-thumb:hover {
+      background: color-mix(in srgb, var(--fg-tertiary) 60%, transparent);
+      background-clip: padding-box;
+    }
+    .lee-scroll::-webkit-scrollbar-corner { background: transparent; }
+    /* ── タブクリックフィードバック ───────────────────────────── */
+    .lee-tab-btn { transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease; }
+    .lee-tab-btn:active { transform: scale(0.97); }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="data.js"></script>
+  <script type="text/babel" src="icons.jsx"></script>
+  <script type="text/babel" src="weather-illust.jsx"></script>
+  <script type="text/babel" src="varA-atoms.jsx"></script>
+  <script type="text/babel" src="varA-detail-atoms.jsx"></script>
+  <script type="text/babel" src="varA-datepicker.jsx"></script>
+  <script type="text/babel" src="varA-pivot.jsx"></script>
+  <script type="text/babel" src="varA-cards.jsx"></script>
+  <script type="text/babel" src="varA-widgets.jsx"></script>
+  <script type="text/babel" src="varA-shell.jsx"></script>
+  <script type="text/babel" src="varA-pivot.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens2.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens3.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens4.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens5.jsx"></script>
+  <script type="text/babel" src="varA-calendar-detail.jsx"></script>
+  <script type="text/babel" src="varA-gmail-detail.jsx"></script>
+  <script type="text/babel" src="varA-detail-screens6.jsx"></script>
+  <script type="text/babel" src="varA-manual-detail.jsx"></script>
+  <script type="text/babel" src="varA-misc-detail.jsx"></script>
+  <script type="text/babel" src="varA-misc-detail2.jsx"></script>
+  <script type="text/babel" src="varA-app.jsx"></script>
+  <script type="text/babel" src="varB-shell.jsx"></script>
+  <script type="text/babel" src="varB-app.jsx"></script>
+  <script type="text/babel" src="varA-login-window.jsx"></script>
+  <script type="text/babel" src="varA-dialogs.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Iframe wrapper: each variation needs its own [data-theme] context.
+    // We use a custom-styled wrapper div with its own data-theme.
+    const VarFrame = ({ children, themePref, width, height }) => {
+      const ref = React.useRef();
+      // Each frame manages its own theme via a wrapper, not the html element.
+      // We override the data-theme via inline style + scoped wrapper.
+      return (
+        <div ref={ref} style={{
+          width, height, overflow: "hidden",
+          borderRadius: 12, background: "#000",
+          position: "relative",
+        }}>
+          <div style={{ position: "absolute", inset: 0 }}>
+            {children}
+          </div>
+        </div>
+      );
+    };
+
+    // Themed frame — applies data-theme to a local subtree using [data-theme="..."] CSS scoping.
+    // Since tokens.css uses [data-theme="..."] selectors, we need a wrapper element with that attr.
+    const ThemedFrame = ({ theme, children, width, height }) => (
+      <div data-theme={theme} style={{
+        width, height, overflow: "hidden",
+        borderRadius: 14, position: "relative",
+        background: "var(--bg-app)",
+        color: "var(--fg-primary)",
+        boxShadow: "0 18px 50px rgba(0,0,0,0.18), 0 4px 14px rgba(0,0,0,0.08)",
+      }}>
+        {children}
+      </div>
+    );
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "varA_theme": "dark",
+      "varB_theme": "dark",
+      "spotAccent": "#FF7A45",
+      "imbalanceAccent": "#F25C7A",
+      "lnggradAccent": "#F4B740",
+      "fontPair": "Pretendard + Noto Sans JP",
+      "showToast": true,
+      "denseMode": false
+    }/*EDITMODE-END*/;
+
+    const App = () => {
+      const [tweaks, setTweak] = window.useTweaks
+        ? window.useTweaks(TWEAK_DEFAULTS)
+        : [TWEAK_DEFAULTS, () => {}];
+
+      // Apply accent overrides as inline CSS variables to root
+      useEffect(() => {
+        const r = document.documentElement;
+        if (tweaks.spotAccent)       r.style.setProperty("--c-spot", tweaks.spotAccent);
+        if (tweaks.imbalanceAccent)  r.style.setProperty("--c-imb",  tweaks.imbalanceAccent);
+        if (tweaks.lnggradAccent)    r.style.setProperty("--c-jkm",  tweaks.lnggradAccent);
+      }, [tweaks.spotAccent, tweaks.imbalanceAccent, tweaks.lnggradAccent]);
+
+      const { DesignCanvas, DCSection, DCArtboard } = window;
+
+      return (
+        <>
+          <DesignCanvas>
+            <DCSection id="overview" title="LEE 電力モニター 2.0" subtitle="既存 PySide6 アプリの全面リデザイン提案 — 2 Variations">
+              <DCArtboard id="varA" label="Variation A · Apple Energy / iOS 위젯" width={1440} height={900}>
+                <ThemedFrame theme={tweaks.varA_theme} width={1440} height={900}>
+                  <window.VarAApp/>
+                </ThemedFrame>
+              </DCArtboard>
+              <DCArtboard id="varB" label="Variation B · Trading Terminal (정밀 그리드)" width={1440} height={900}>
+                <ThemedFrame theme={tweaks.varB_theme} width={1440} height={900}>
+                  <window.VarBApp/>
+                </ThemedFrame>
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="login" title="ログイン Window" subtitle="login_window.py 의 디자인 모킹업 — 480 × 580 / 3 ページ (Sign In / Not Registered / Loading) · 우측 하단 칩으로 페이지 전환">
+              <DCArtboard id="loginAPlus" label="A+ · Refined Dark (브랜드 헤더 + 다크 베이스) ⭐ 추천" width={480} height={580}>
+                <window.LoginWindowAPlus/>
+              </DCArtboard>
+              <DCArtboard id="loginA" label="A · Classic 中央寄せ (現行 1:1 リデザイン)" width={480} height={580}>
+                <window.LoginWindowA/>
+              </DCArtboard>
+              <DCArtboard id="loginB" label="B · Split Hero (좌측 브랜드 + 우측 폼)" width={480} height={580}>
+                <window.LoginWindowB/>
+              </DCArtboard>
+              <DCArtboard id="loginC" label="C · Glass Dark (그래픽 BG + 글래스모피즘)" width={480} height={580}>
+                <window.LoginWindowC/>
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="dialogs" title="システム ダイアログ" subtitle="アプリケーション 전반에서 사용되는 다이얼로그 13종 — 다크 베이스 + 액센트 통일">
+              <DCArtboard id="dlg-update-avail" label="① アップデートのお知らせ" width={460} height={350}>
+                <window.DlgUpdateAvailable/>
+              </DCArtboard>
+              <DCArtboard id="dlg-update-progress" label="② アップデート ダウンロード中" width={420} height={250}>
+                <window.DlgUpdateProgress/>
+              </DCArtboard>
+              <DCArtboard id="dlg-update-ready" label="③ アップデート準備完了" width={460} height={290}>
+                <window.DlgUpdateReady/>
+              </DCArtboard>
+              <DCArtboard id="dlg-update-error" label="④ ダウンロードエラー" width={460} height={340}>
+                <window.DlgDownloadError/>
+              </DCArtboard>
+              <DCArtboard id="dlg-quit" label="⑤ 終了の確認 (3 ボタン)" width={480} height={310}>
+                <window.DlgQuitConfirm/>
+              </DCArtboard>
+              <DCArtboard id="dlg-logout" label="⑥ ログアウト確認" width={420} height={310}>
+                <window.DlgLogoutConfirm/>
+              </DCArtboard>
+              <DCArtboard id="dlg-startup-err" label="⑦ 起動エラー (Critical)" width={520} height={400}>
+                <window.DlgStartupError/>
+              </DCArtboard>
+              <DCArtboard id="dlg-delete" label="⑧ 削除の確認 (汎用)" width={420} height={240}>
+                <window.DlgConfirmDelete/>
+              </DCArtboard>
+              <DCArtboard id="dlg-access" label="⑨ アクセスを申請する (SMTP送信)" width={440} height={420}>
+                <window.DlgAccessRequest/>
+              </DCArtboard>
+              <DCArtboard id="dlg-info" label="⑩ 通知 (情報メッセージ)" width={400} height={210}>
+                <window.DlgInfoNotice/>
+              </DCArtboard>
+              <DCArtboard id="dlg-category" label="⑪ カテゴリ管理 (manual.py)" width={500} height={420}>
+                <window.DlgCategoryManager/>
+              </DCArtboard>
+              <DCArtboard id="dlg-image-edit" label="⑫ 画像の簡単な編集 (赤ペン)" width={680} height={520}>
+                <window.DlgImageEdit/>
+              </DCArtboard>
+              <DCArtboard id="dlg-image-preview" label="⑬ 画像プレビュー" width={620} height={460}>
+                <window.DlgImagePreview/>
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection id="comparison" title="비교 포인트" subtitle="두 안의 결정적인 차이 — 어느 쪽 방향이 매력적인지 골라주세요">
+              <DCArtboard id="compare" label="A vs B 핵심 비교" width={1440} height={520}>
+                <div data-theme="light" style={{
+                  width: 1440, height: 520, padding: 48,
+                  background: "var(--bg-app)", color: "var(--fg-primary)",
+                  fontFamily: "var(--font-sans)",
+                  display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32,
+                }}>
+                  {[
+                    {
+                      title: "Variation A — Apple Energy",
+                      tag: "둥글둥글 · 친근 · 컬러풀",
+                      color: "var(--c-spot)",
+                      bullets: [
+                        ["둥근 모서리 (20px) + 넉넉한 여백", "iOS 위젯의 친숙한 감각"],
+                        ["지표별 컬러 타일 아이콘", "한눈에 카테고리 구분"],
+                        ["1440 x 900 기준 9 카드", "정보 밀도 보통, 보기 편함"],
+                        ["Pretendard 가변폰트 + 큰 숫자", "한일 모두 자연스러운 타이포"],
+                        ["부드러운 토스트 + 그라데이션", "감정적인 알림"],
+                      ],
+                    },
+                    {
+                      title: "Variation B — Trading Terminal",
+                      tag: "정밀 · 고밀도 · 데이터 우선",
+                      color: "var(--c-power)",
+                      bullets: [
+                        ["6px 모서리 + 1px 보더", "정밀 계측기 같은 강한 그리드"],
+                        ["라이브 티커 + 모노스페이스 숫자", "Bloomberg / 트레이딩 화면 감각"],
+                        ["1440 x 900 기준 12 패널", "정보 밀도 높음, 한 번에 모두 보기"],
+                        ["JetBrains Mono 숫자 + 작은 라벨", "전문가용 단위/델타 표시"],
+                        ["멀티 액센트 left-border", "지표 우선순위 즉시 인식"],
+                      ],
+                    },
+                  ].map((v, i) => (
+                    <div key={i} style={{
+                      background: "var(--bg-surface)", borderRadius: 16, padding: 28,
+                      border: `1px solid var(--border-subtle)`,
+                      borderLeft: `4px solid ${v.color}`,
+                    }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: v.color, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>{v.tag}</div>
+                      <h3 style={{ fontSize: 22, fontWeight: 800, marginBottom: 18, color: "var(--fg-primary)" }}>{v.title}</h3>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {v.bullets.map(([h, d], j) => (
+                          <div key={j} style={{ display: "flex", gap: 12 }}>
+                            <span style={{ width: 6, height: 6, borderRadius: 999, background: v.color, marginTop: 7, flexShrink: 0 }}/>
+                            <div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg-primary)" }}>{h}</div>
+                              <div style={{ fontSize: 12, color: "var(--fg-secondary)" }}>{d}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          {window.TweaksPanel && (
+            <window.TweaksPanel title="Tweaks">
+              <window.TweakSection title="테마">
+                <window.TweakRadio
+                  label="Variation A 테마"
+                  value={tweaks.varA_theme}
+                  onChange={v => setTweak("varA_theme", v)}
+                  options={[{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }]}
+                />
+                <window.TweakRadio
+                  label="Variation B 테마"
+                  value={tweaks.varB_theme}
+                  onChange={v => setTweak("varB_theme", v)}
+                  options={[{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }]}
+                />
+              </window.TweakSection>
+              <window.TweakSection title="액센트 컬러">
+                <window.TweakColor label="Spot" value={tweaks.spotAccent} onChange={v => setTweak("spotAccent", v)}/>
+                <window.TweakColor label="Imbalance" value={tweaks.imbalanceAccent} onChange={v => setTweak("imbalanceAccent", v)}/>
+                <window.TweakColor label="JKM LNG" value={tweaks.lnggradAccent} onChange={v => setTweak("lnggradAccent", v)}/>
+              </window.TweakSection>
+              <window.TweakSection title="옵션">
+                <window.TweakToggle label="토스트 알림" value={tweaks.showToast} onChange={v => setTweak("showToast", v)}/>
+              </window.TweakSection>
+            </window.TweaksPanel>
+          )}
+        </>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>

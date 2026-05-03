@@ -1,274 +1,928 @@
+"""システムログビューア — Phase 5.12 リニューアル.
+
+機能:
+    - 上部툴바: 레벨 segment / 검색 / 期間 segment / 새로고침 / 실시간 토글 /
+      ダウンロード / クリア
+    - 본문: QTableView + LogTableModel (가상 스크롤, 10万+ 행 OK)
+      · Time (mono) / Level (color pill 텍스트) / Module / Message
+      · 행 클릭 → 하단 상세 패널 (전체 텍스트 + 멀티라인 traceback)
+      · 우클릭 → 行をコピー / モジュールでフィルタ / 즐겨찾기
+    - 데이터: app.log + app.log.1 + app.log.2 (RotatingFileHandler 출력)
+    - 다운로드: 현재 필터된 로그를 .txt / .csv 로 내보내기
+
+레벨 색상 (handoff/01-design-tokens.md):
+    DEBUG → --fg-tertiary, INFO → --c-info, WARN → --c-warn, ERROR → --c-bad
+
+기존 호환성:
+    - main_window.py 가 import 하는 LogViewerWidget 클래스명 보존
+"""
+from __future__ import annotations
+
+import csv
 import logging
 import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
-from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit,
-    QComboBox
+from typing import Optional
+
+from PySide6.QtCore import (
+    QAbstractTableModel, QFileSystemWatcher, QModelIndex, QPoint, QTimer,
+    Qt, Signal,
 )
-from PySide6.QtCore import QFileSystemWatcher, QTimer
-from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon
+from PySide6.QtWidgets import (
+    QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMenu, QSplitter, QTableView,
+    QTextEdit, QVBoxLayout, QWidget,
+)
+
 from app.core.config import LOG_FILE
+from app.core.events import bus
 from app.core.i18n import tr
-from app.core.constants import Timers, Cache
-from app.ui.theme import UIColors
 from app.ui.common import BaseWidget
+from app.ui.components import (
+    LeeButton, LeeDetailHeader, LeeDialog, LeePill, LeeSegment,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class _LogHighlighter(QSyntaxHighlighter):
-    """ログ行をパターンマッチで色分けする QSyntaxHighlighter。
-    appendPlainText と組み合わせることで appendHtml より大幅に高速になる。"""
+# ──────────────────────────────────────────────────────────────────────
+# 토큰 (모듈 로컬)
+# ──────────────────────────────────────────────────────────────────────
+_C_LOG     = "#A8B0BD"   # 시스템 로그 accent (그레이)
+_C_DEBUG   = "#6B7280"   # fg-tertiary
+_C_INFO    = "#0A84FF"   # info
+_C_WARN    = "#FF9F0A"   # warn
+_C_ERROR   = "#FF453A"   # bad
 
-    def __init__(self, document, colors: dict):
-        super().__init__(document)
-        self._rules: list[tuple[re.Pattern, QTextCharFormat]] = []
-        self._build_rules(colors)
+_LEVEL_COLOR = {
+    "DEBUG":   _C_DEBUG,
+    "INFO":    _C_INFO,
+    "WARNING": _C_WARN,
+    "WARN":    _C_WARN,
+    "ERROR":   _C_ERROR,
+    "CRITICAL": _C_ERROR,
+}
 
-    def update_colors(self, colors: dict):
-        """テーマ切替時に色を更新して再ハイライトする。"""
-        self._build_rules(colors)
-        self.rehighlight()
+# 로그 라인 정규식: "2026-05-03 10:30:45 - [INFO] app.widgets.weather : message"
+_LINE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*-\s*\[(\w+)\]\s*([^\s:]+)\s*:\s*(.*)$"
+)
 
-    def _build_rules(self, c: dict):
-        def _fmt(color_str: str, bold: bool = False,
-                 bg: str | None = None) -> QTextCharFormat:
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(color_str))
-            if bold:
-                fmt.setFontWeight(QFont.Bold)
-            if bg:
-                fmt.setBackground(QColor(bg))
-            return fmt
+_PERIOD_DELTA = {
+    "1h":  timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d":  timedelta(days=7),
+    "all": None,
+}
 
-        # 順序が重要: 後のルールが前のルールを上書きする
-        # モジュール名パターンを先に置き、ログレベルキーワードを後に置くことで
-        # レベルキーワードが必ずモジュール色を上書きする
-        self._rules = [
-            (re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'), _fmt(c['time'])),
-            # モジュール名: app.xxx.yyy または __main__ (括弧なし)
-            (re.compile(r'\b(?:app(?:\.\w+)+|__main__)'), _fmt(c['module'])),
-            # ログレベルは後に置いて優先度を最高にする
-            (re.compile(r'\[INFO\]'),    _fmt(c['info'])),
-            (re.compile(r'\[WARNING\]'), _fmt(c['warning'], bold=True)),
-            (re.compile(r'\[ERROR\]'),   _fmt(c['error'],   bold=True)),
-        ]
-        # 行全体の背景色用フォーマット (ERROR / WARNING)
-        self._error_line_fmt   = _fmt(c['error'],   bold=True, bg=c.get('error_bg'))
-        self._warning_line_fmt = _fmt(c['warning'], bold=True, bg=c.get('warn_bg'))
 
-    def highlightBlock(self, text: str):
-        # ERROR / WARNING 行は行全体に背景色を適用してから前景ルールを重ねる
-        if '[ERROR]' in text:
-            self.setFormat(0, len(text), self._error_line_fmt)
-        elif '[WARNING]' in text:
-            self.setFormat(0, len(text), self._warning_line_fmt)
+# ──────────────────────────────────────────────────────────────────────
+# 1. LogRecord — 파싱된 로그 1 레코드
+# ──────────────────────────────────────────────────────────────────────
+@dataclass
+class LogRecord:
+    ts: datetime          # 파싱된 시각
+    ts_str: str           # 원본 시각 문자열
+    level: str            # INFO / WARNING / ERROR / DEBUG
+    module: str           # app.widgets.weather 등
+    message: str          # 단일 행 메시지
+    extra: list[str]      # 후행 라인 (traceback 등) — message 의 멀티라인 보충
+    raw_lines: list[str]  # 디스크에서 읽은 원본 행들 (복사·내보내기용)
 
-        for pattern, fmt in self._rules:
-            for m in pattern.finditer(text):
-                self.setFormat(m.start(), m.end() - m.start(), fmt)
+
+# ──────────────────────────────────────────────────────────────────────
+# 2. LogParser — 회전 로그 파일 통합 파싱
+# ──────────────────────────────────────────────────────────────────────
+def _ordered_log_files(base: Path) -> list[Path]:
+    """app.log + app.log.1 + app.log.2 를 시간순 (오래된 → 최신) 으로."""
+    files: list[Path] = []
+    for ext in (".2", ".1", ""):
+        p = Path(str(base) + ext)
+        if p.exists() and p.stat().st_size > 0:
+            files.append(p)
+    return files
+
+
+def _parse_log_text(text: str) -> list[LogRecord]:
+    """텍스트 → LogRecord 리스트. 멀티라인 (traceback) 은 직전 레코드의 extra 에 합침."""
+    out: list[LogRecord] = []
+    cur: Optional[LogRecord] = None
+    for raw in text.splitlines():
+        if not raw:
+            continue
+        m = _LINE_RE.match(raw)
+        if m:
+            ts_str, level, module, msg = m.groups()
+            try:
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                ts = datetime.min
+            cur = LogRecord(
+                ts=ts, ts_str=ts_str, level=level.upper(),
+                module=module, message=msg,
+                extra=[], raw_lines=[raw],
+            )
+            out.append(cur)
+        else:
+            # 후속 라인 (traceback 등) → 직전 레코드에 추가
+            if cur is not None:
+                cur.extra.append(raw)
+                cur.raw_lines.append(raw)
+            else:
+                # 첫 줄부터 매치 안 되면 별도 placeholder 레코드로
+                cur = LogRecord(
+                    ts=datetime.min, ts_str="", level="DEBUG",
+                    module="?", message=raw,
+                    extra=[], raw_lines=[raw],
+                )
+                out.append(cur)
+    return out
+
+
+def load_all_records(base: Path, max_records: int = 100_000) -> list[LogRecord]:
+    """app.log* 전체 파싱 — 시간순 오래된 → 최신. 최신 max_records 만 유지."""
+    text_parts: list[str] = []
+    for p in _ordered_log_files(base):
+        try:
+            text_parts.append(p.read_text(encoding="utf-8", errors="replace"))
+        except OSError as e:
+            logger.warning(f"log file 읽기 실패: {p.name} {e}")
+    if not text_parts:
+        return []
+    records = _parse_log_text("\n".join(text_parts))
+    if len(records) > max_records:
+        records = records[-max_records:]
+    return records
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 3. LogTableModel — QAbstractTableModel (가상 스크롤)
+# ──────────────────────────────────────────────────────────────────────
+COL_TIME, COL_LEVEL, COL_MODULE, COL_MESSAGE = range(4)
+_HEADERS = ["時刻", "レベル", "モジュール", "メッセージ"]
+
+
+class LogTableModel(QAbstractTableModel):
+    """가상 스크롤 모델. 전체 records + 표시용 인덱스 리스트 분리."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._records: list[LogRecord] = []
+        self._visible_idx: list[int] = []
+        self._is_dark = True
+
+    # ── 데이터 설정 / 필터 ─────────────────────────────────────
+    def set_records(self, records: list[LogRecord]) -> None:
+        self.beginResetModel()
+        self._records = records
+        self._visible_idx = list(range(len(records)))
+        self.endResetModel()
+
+    def append_records(self, new_records: list[LogRecord], max_total: int) -> None:
+        """auto-tail — 새 레코드만 추가."""
+        if not new_records:
+            return
+        if len(self._records) + len(new_records) > max_total:
+            # 오래된 레코드 절단
+            keep = max_total - len(new_records)
+            if keep <= 0:
+                self._records = list(new_records[-max_total:])
+            else:
+                self._records = self._records[-keep:] + list(new_records)
+        else:
+            self._records.extend(new_records)
+
+    def all_records(self) -> list[LogRecord]:
+        return self._records
+
+    def set_visible(self, indices: list[int]) -> None:
+        self.beginResetModel()
+        self._visible_idx = list(indices)
+        self.endResetModel()
+
+    def visible_records(self) -> list[LogRecord]:
+        return [self._records[i] for i in self._visible_idx if 0 <= i < len(self._records)]
+
+    def record_at(self, row: int) -> Optional[LogRecord]:
+        if 0 <= row < len(self._visible_idx):
+            i = self._visible_idx[row]
+            if 0 <= i < len(self._records):
+                return self._records[i]
+        return None
+
+    def set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        if self._records:
+            top = self.index(0, 0)
+            bot = self.index(self.rowCount() - 1, self.columnCount() - 1)
+            self.dataChanged.emit(top, bot, [Qt.ForegroundRole, Qt.BackgroundRole])
+
+    # ── Qt overrides ───────────────────────────────────────────
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._visible_idx)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 4
+
+    def headerData(self, section: int, orientation, role: int = Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return tr(_HEADERS[section]) if 0 <= section < 4 else ""
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        rec = self.record_at(index.row())
+        if rec is None:
+            return None
+        col = index.column()
+        if role == Qt.DisplayRole:
+            if col == COL_TIME:    return rec.ts_str or "—"
+            if col == COL_LEVEL:   return rec.level
+            if col == COL_MODULE:  return rec.module
+            if col == COL_MESSAGE:
+                # 멀티라인 표시는 한 행만 — extra 가 있으면 +N 표기
+                msg = rec.message
+                if rec.extra:
+                    msg = f"{msg}   …(+{len(rec.extra)} {tr('行')})"
+                return msg
+        if role == Qt.FontRole:
+            if col == COL_TIME:
+                return QFont("JetBrains Mono", 10)
+            if col == COL_LEVEL:
+                f = QFont("Inter", 10); f.setBold(True); return f
+            if col == COL_MODULE:
+                return QFont("JetBrains Mono", 10)
+        if role == Qt.ForegroundRole:
+            if col == COL_LEVEL:
+                return QBrush(QColor(_LEVEL_COLOR.get(rec.level, _C_DEBUG)))
+            if col == COL_TIME or col == COL_MODULE:
+                return QBrush(QColor("#6B7280" if self._is_dark else "#8A93A6"))
+        if role == Qt.ToolTipRole:
+            if rec.extra:
+                return "\n".join(rec.raw_lines)
+            return rec.message
+        return None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 4. LogViewerWidget — 메인 페이지
+# ──────────────────────────────────────────────────────────────────────
+_AUTO_TAIL_INTERVAL_MS = 1000   # 1초 polling
+_MAX_RECORDS           = 100_000
 
 
 class LogViewerWidget(BaseWidget):
-    """
-    앱의 백그라운드 동작 상태(app.log)를 실시간으로 보여주는 시스템 로그 뷰어
-    BaseWidget 継承により set_theme() / apply_theme_custom() / showEvent() を統一管理します。
-    """
+    """システムログ — 시스템 로그 뷰어 (Phase 5.12)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        # is_dark は BaseWidget.__init__ で True に初期化済み
-        self._log_file = LOG_FILE
-        self._last_pos = 0        # 마지막으로 읽은 파일 위치 캐싱
-        self._all_lines: list[str] = []  # 読込済み行のインメモリキャッシュ (最大1000行)
-        self._log_buffer = []     # 대량 로그 처리용 버퍼
+        self._log_file: Path = LOG_FILE if isinstance(LOG_FILE, Path) else Path(LOG_FILE)
+        if not self._log_file.exists():
+            try:
+                self._log_file.touch()
+            except OSError:
+                pass
 
-        self._process_timer = QTimer(self)
-        self._process_timer.setInterval(Timers.LOG_PROCESS_INTERVAL_MS)
-        self._process_timer.timeout.connect(self._process_log_buffer)
+        self._level_filter = "ALL"     # ALL / DEBUG / INFO / WARN / ERROR
+        self._period_filter = "24h"    # 1h / 24h / 7d / all
+        self._search = ""
+        self._auto_tail = False
+        self._favorites: set[str] = set()   # 즐겨찾기 message 시그니처
+        self._last_sizes: dict[str, int] = {}  # 파일별 마지막 크기 (auto-tail 변화 감지)
 
         self._build_ui()
 
-        # OS 이벤트 기반 로그 파일 변경 감지 (I/O 최적화 / 즉시 반영)
-        if not self._log_file.exists():
-            self._log_file.touch()
+        # 모델
+        self._model = LogTableModel(self)
+        self._model.set_theme(self.is_dark)
+        self.table.setModel(self._model)
+        sm = self.table.selectionModel()
+        if sm:
+            sm.selectionChanged.connect(lambda *_: self._on_selection_changed())
 
-        self.watcher = QFileSystemWatcher(self)
-        self.watcher.addPath(str(self._log_file.absolute()))
-        self.watcher.fileChanged.connect(self._load_logs)
+        # 컬럼 폭
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(COL_LEVEL, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(COL_MODULE, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(COL_MESSAGE, QHeaderView.Stretch)
 
-        self._load_logs()
+        # 파일 변화 감지 (즉시 반영 — auto-tail 켜져있을 때)
+        self._watcher = QFileSystemWatcher(self)
+        self._watcher.addPath(str(self._log_file.absolute()))
+        self._watcher.fileChanged.connect(self._on_file_changed)
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        
-        top = QHBoxLayout()
-        title = QLabel(tr("システムログ (System Logs)"))
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        top.addWidget(title)
-        top.addSpacing(15)
+        # auto-tail 폴링 (watcher 가 일부 환경에서 누락하므로 보조)
+        self._tail_timer = QTimer(self)
+        self._tail_timer.setInterval(_AUTO_TAIL_INTERVAL_MS)
+        self._tail_timer.timeout.connect(self._on_tail_tick)
 
-        self.module_combo = QComboBox()
-        self.module_combo.addItems([
-            tr("すべての機能"),
-            tr("システム起動・終了"),
-            tr("発電停止状況 (HJKS)"),
-            tr("インバランス単価"),
-            tr("JKM LNG 価格"),
-            tr("全国天気予報"),
-            tr("電力予備率 (OCCTO)")
-        ])
-        self.module_combo.currentIndexChanged.connect(self._on_filter_changed)
-        top.addWidget(self.module_combo)
+        # 검색 디바운스
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self._apply_filters)
 
-        self.level_combo = QComboBox()
-        self.level_combo.addItems([tr("すべてのログレベル"), "INFO", "WARNING", "ERROR"])
-        self.level_combo.currentIndexChanged.connect(self._on_filter_changed)
-        top.addWidget(self.level_combo)
+        QTimer.singleShot(50, self._reload_all)
 
-        top.addStretch()
+    # ── UI 빌드 ───────────────────────────────────────────────
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 22, 28, 22); outer.setSpacing(14)
 
-        self.clear_btn = QPushButton(tr("ログ消去"))
-        self.clear_btn.clicked.connect(self._clear_logs)
-
-        refresh_btn = QPushButton(tr("手動更新"))
-        refresh_btn.clicked.connect(self._load_logs)
-        
-        top.addWidget(self.clear_btn)
-        top.addWidget(refresh_btn)
-        layout.addLayout(top)
-        
-        self.log_text = QPlainTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Consolas", 11))
-        _lc = UIColors.get_log_colors(self.is_dark)
-        self.log_text.setStyleSheet(
-            f"background-color: {_lc['bg']}; color: {_lc['text']}; padding: 10px; border: none;"
+        # 1) DetailHeader
+        self._header = LeeDetailHeader(
+            title=tr("システムログ"),
+            subtitle=tr("アプリのバックグラウンド動作ログをリアルタイム表示"),
+            accent=_C_LOG,
+            icon_qicon=QIcon(":/img/log.svg"),
+            badge=None,
+            show_export=False,
         )
-        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.log_text.document().setMaximumBlockCount(Cache.LOG_MAX_LINES)
-        # QSyntaxHighlighter を文書に接続 (appendPlainText より高速な色付け)
-        self._highlighter = _LogHighlighter(self.log_text.document(), _lc)
-        layout.addWidget(self.log_text)
+        self._header.back_clicked.connect(lambda: bus.page_requested.emit(0))
+        outer.addWidget(self._header)
 
-    def apply_theme_custom(self):
-        is_dark = self.is_dark
-        lc = UIColors.get_log_colors(is_dark)
-        self.clear_btn.setStyleSheet(
-            f"background-color: {'#5c1111' if is_dark else '#ffcccc'}; "
-            f"color: {'#ffffff' if is_dark else '#cc0000'}; "
-            f"border: 1px solid {'#801515' if is_dark else '#ff9999'};"
+        # 2) 툴바 카드
+        toolbar = QFrame(); toolbar.setObjectName("logToolbar")
+        tlb = QVBoxLayout(toolbar); tlb.setContentsMargins(14, 12, 14, 12); tlb.setSpacing(8)
+        outer.addWidget(toolbar)
+
+        # 첫 행 — 레벨 segment + 期間 segment + 새로고침 + auto-tail + export + clear
+        row1 = QHBoxLayout(); row1.setSpacing(8)
+        row1.addWidget(self._field_lbl(tr("レベル")))
+        self.level_seg = LeeSegment(
+            [("ALL", tr("全て")),
+             ("DEBUG", "DEBUG"), ("INFO", "INFO"),
+             ("WARN", "WARN"),  ("ERROR", "ERROR")],
+            value="ALL", accent=_C_INFO,
         )
-        self.log_text.setStyleSheet(
-            f"background-color: {lc['bg']}; color: {lc['text']}; padding: 10px; border: none;"
+        self.level_seg.value_changed.connect(self._on_level_changed)
+        row1.addWidget(self.level_seg)
+
+        row1.addSpacing(10)
+        row1.addWidget(self._field_lbl(tr("期間")))
+        self.period_seg = LeeSegment(
+            [("1h", "1h"), ("24h", "24h"), ("7d", "7d"), ("all", tr("全て"))],
+            value="24h", accent=_C_LOG,
         )
-        # ハイライトカラーを更新してキャッシュから再描画
-        self._highlighter.update_colors(lc)
-        self._rerender_from_cache()
+        self.period_seg.value_changed.connect(self._on_period_changed)
+        row1.addWidget(self.period_seg)
 
-    def _on_filter_changed(self):
-        # フィルタ変更: ディスク再読み込みなしにキャッシュから再描画
-        self._rerender_from_cache()
+        row1.addStretch()
 
-    def _rerender_from_cache(self):
-        """_all_lines キャッシュから表示を再構築。ディスクアクセスなし。"""
-        self.log_text.clear()
-        if self._all_lines:
-            self._log_buffer = list(self._all_lines)
-            if not self._process_timer.isActive():
-                self._process_timer.start()
+        self.btn_refresh = LeeButton("↻  " + tr("更新"), variant="secondary", size="sm")
+        self.btn_refresh.clicked.connect(self._reload_all)
+        row1.addWidget(self.btn_refresh)
 
-    def _load_logs(self):
-        if not self._log_file.exists():
-            return
-            
-        try:
-            current_size = self._log_file.stat().st_size
-            if current_size < self._last_pos:
-                # ファイルが切り詰められた (ログ消去等): キャッシュをリセット
-                self.log_text.clear()
-                self._last_pos = 0
-                self._all_lines.clear()
+        # auto-tail 토글
+        self.btn_autotail = LeeButton("⏸  " + tr("リアルタイム OFF"), variant="secondary", size="sm")
+        self.btn_autotail.setCheckable(True)
+        self.btn_autotail.clicked.connect(self._toggle_autotail)
+        row1.addWidget(self.btn_autotail)
 
-            if current_size == self._last_pos:
-                return  # 추가된 변경 내용 없음
-                
-            with open(self._log_file, 'r', encoding='utf-8', errors='replace') as f:
-                # 처음 읽을 때 파일이 500KB를 넘으면 뒤에서부터 읽음 (OOM/프리징 방지)
-                MAX_READ_BYTES = Cache.LOG_MAX_READ_BYTES
-                if self._last_pos == 0 and current_size > MAX_READ_BYTES:
-                    f.seek(current_size - MAX_READ_BYTES)
-                    # 잘린 첫 줄은 버리기 위해 readlines 대신 부분 읽기 후 첫 줄 컷
-                    f.readline()
-                    new_content = f.read()
-                    self._last_pos = f.tell()
-                else:
-                    f.seek(self._last_pos)
-                    new_content = f.read()
-                    self._last_pos = f.tell()
-                
-            if not new_content:
-                return
+        self.btn_export = LeeButton("⬇  " + tr("エクスポート"), variant="secondary", size="sm")
+        self.btn_export.clicked.connect(self._export_filtered)
+        row1.addWidget(self.btn_export)
 
-            lines = new_content.splitlines()
-            # インメモリキャッシュを更新 (最大1000行に制限)
-            self._all_lines.extend(lines)
-            if len(self._all_lines) > 1000:
-                self._all_lines = self._all_lines[-Cache.LOG_MAX_LINES:]
-            self._log_buffer.extend(lines)
-            
-            if not self._process_timer.isActive():
-                self._process_timer.start()
-                
-        except (IOError, OSError) as e:
-            self.log_text.appendPlainText(f"[ERROR] {tr('ログの読み込みに失敗しました: {0}').format(e)}")
-        except Exception as e:
-            self.log_text.appendPlainText(f"[ERROR] {tr('予期せぬエラーが発生しました: {0}').format(e)}")
-            logger.error(f"Log viewer error: {e}", exc_info=True)
-            
-    def _process_log_buffer(self):
-        if not self._log_buffer:
-            self._process_timer.stop()
-            return
+        self.btn_clear = LeeButton("🗑  " + tr("クリア"), variant="destructive", size="sm")
+        self.btn_clear.clicked.connect(self._clear_logs)
+        row1.addWidget(self.btn_clear)
 
-        chunk = self._log_buffer[:Cache.LOG_CHUNK_SIZE]
-        self._log_buffer = self._log_buffer[Cache.LOG_CHUNK_SIZE:]
+        tlb.addLayout(row1)
 
-        bar = self.log_text.verticalScrollBar()
-        at_bottom = bar.value() == bar.maximum()
+        # 둘째 행 — 검색 input + count pill
+        row2 = QHBoxLayout(); row2.setSpacing(8)
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("logSearch")
+        self.search_input.setPlaceholderText("🔍  " + tr("検索 (メッセージ / モジュール)"))
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedHeight(30)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        row2.addWidget(self.search_input, 1)
 
-        lvl_idx    = self.level_combo.currentIndex()
-        lvl_filter = self.level_combo.currentText()
-        mod_idx    = self.module_combo.currentIndex()
+        self._count_pill = LeePill("0 / 0", variant="info")
+        row2.addWidget(self._count_pill)
 
-        lines_to_add = []
-        for line in chunk:
-            # Level filter (index 0 = all)
-            if lvl_idx != 0 and f"[{lvl_filter}]" not in line:
+        tlb.addLayout(row2)
+
+        # 3) 본문 — 분할 (테이블 위 / 상세 아래)
+        self._splitter = QSplitter(Qt.Vertical)
+        self._splitter.setHandleWidth(1)
+        outer.addWidget(self._splitter, 1)
+
+        # 테이블
+        self.table = QTableView()
+        self.table.setObjectName("logTable")
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setWordWrap(False)
+        self.table.horizontalHeader().setHighlightSections(False)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
+        self._splitter.addWidget(self.table)
+
+        # 상세 패널
+        detail_wrap = QFrame(); detail_wrap.setObjectName("logDetailWrap")
+        dl = QVBoxLayout(detail_wrap); dl.setContentsMargins(14, 10, 14, 10); dl.setSpacing(6)
+
+        head = QHBoxLayout(); head.setSpacing(8)
+        self._detail_head = QLabel(tr("行を選択してください"))
+        self._detail_head.setObjectName("logDetailHead")
+        head.addWidget(self._detail_head, 1)
+        self._level_pill = LeePill("—", variant="info")
+        head.addWidget(self._level_pill)
+        dl.addLayout(head)
+
+        self.detail_view = QTextEdit()
+        self.detail_view.setObjectName("logDetailView")
+        self.detail_view.setReadOnly(True)
+        self.detail_view.setLineWrapMode(QTextEdit.NoWrap)
+        dl.addWidget(self.detail_view, 1)
+
+        self._splitter.addWidget(detail_wrap)
+        self._splitter.setStretchFactor(0, 4)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([580, 200])
+
+    def _field_lbl(self, text: str) -> QLabel:
+        lbl = QLabel(text); lbl.setObjectName("logFieldLbl")
+        return lbl
+
+    # ── 테마 ─────────────────────────────────────────────────
+    def apply_theme_custom(self) -> None:
+        self._header.set_theme(self.is_dark)
+        self.level_seg.set_theme(self.is_dark)
+        self.period_seg.set_theme(self.is_dark)
+        self._model.set_theme(self.is_dark)
+        self._apply_qss()
+
+    def _apply_qss(self) -> None:
+        d = self.is_dark
+        bg_app        = "#0A0B0F" if d else "#F5F6F8"
+        bg_surface    = "#14161C" if d else "#FFFFFF"
+        bg_surface_2  = "#1B1E26" if d else "#F0F2F5"
+        bg_alt        = "#161922" if d else "#F7F8FA"
+        fg_primary    = "#F2F4F7" if d else "#0B1220"
+        fg_secondary  = "#A8B0BD" if d else "#4A5567"
+        fg_tertiary   = "#6B7280" if d else "#8A93A6"
+        border_subtle = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+        border        = "rgba(255,255,255,0.10)" if d else "rgba(11,18,32,0.10)"
+        sel_bg        = "rgba(168,176,189,0.14)" if d else "rgba(168,176,189,0.10)"
+
+        self.setStyleSheet(f"""
+            QFrame#logToolbar {{
+                background: {bg_surface};
+                border: 1px solid {border_subtle};
+                border-radius: 14px;
+            }}
+            QLabel#logFieldLbl {{
+                color: {fg_tertiary}; background: transparent;
+                font-size: 11px; font-weight: 700;
+                letter-spacing: 0.04em;
+            }}
+            QLineEdit#logSearch {{
+                background: {bg_surface_2}; color: {fg_primary};
+                border: 1px solid {border_subtle}; border-radius: 8px;
+                padding: 0 12px; font-size: 12px;
+            }}
+            QLineEdit#logSearch:focus {{ border: 1px solid {_C_INFO}; }}
+
+            QTableView#logTable {{
+                background: {bg_surface};
+                color: {fg_primary};
+                border: 1px solid {border_subtle}; border-radius: 14px;
+                gridline-color: {border_subtle};
+                alternate-background-color: {bg_alt};
+                font-size: 11.5px;
+            }}
+            QTableView#logTable::item:selected {{
+                background: {sel_bg};
+                color: {fg_primary};
+            }}
+            QHeaderView::section {{
+                background: {bg_surface_2};
+                color: {fg_secondary};
+                border: none;
+                border-bottom: 1px solid {border_subtle};
+                padding: 8px 10px;
+                font-size: 11px; font-weight: 800;
+                letter-spacing: 0.04em;
+            }}
+
+            QFrame#logDetailWrap {{
+                background: {bg_surface};
+                border: 1px solid {border_subtle}; border-radius: 14px;
+            }}
+            QLabel#logDetailHead {{
+                color: {fg_secondary}; background: transparent;
+                font-size: 12px; font-weight: 700;
+            }}
+            QTextEdit#logDetailView {{
+                background: {bg_surface_2}; color: {fg_primary};
+                border: 1px solid {border_subtle}; border-radius: 10px;
+                padding: 10px 12px;
+                font-family: "JetBrains Mono", "Consolas", monospace;
+                font-size: 11px;
+                selection-background-color: {sel_bg};
+            }}
+
+            QSplitter::handle {{ background: transparent; }}
+        """)
+
+    # ── 데이터 로드 / 필터 ────────────────────────────────────
+    def _reload_all(self) -> None:
+        records = load_all_records(self._log_file, max_records=_MAX_RECORDS)
+        self._model.set_records(records)
+        # 마지막 파일 사이즈 캐싱
+        self._last_sizes = {
+            str(p): p.stat().st_size for p in _ordered_log_files(self._log_file)
+        }
+        self._apply_filters()
+
+    def _apply_filters(self) -> None:
+        records = self._model.all_records()
+        # 期間 필터
+        delta = _PERIOD_DELTA.get(self._period_filter)
+        cutoff = datetime.now() - delta if delta else None
+        # 레벨 매핑
+        lvl_set: Optional[set[str]] = None
+        lf = self._level_filter.upper()
+        if lf == "WARN":
+            lvl_set = {"WARN", "WARNING"}
+        elif lf == "ERROR":
+            lvl_set = {"ERROR", "CRITICAL"}
+        elif lf in ("DEBUG", "INFO"):
+            lvl_set = {lf}
+        # 검색어
+        q = self._search.lower().strip()
+
+        visible = []
+        for i, r in enumerate(records):
+            if cutoff and r.ts != datetime.min and r.ts < cutoff:
                 continue
-            # Module filter (index 0 = all) — index-based to avoid translation mismatch
-            if   mod_idx == 1 and "__main__"      not in line: continue
-            elif mod_idx == 2 and "hjks"           not in line: continue
-            elif mod_idx == 3 and "imbalance"      not in line: continue
-            elif mod_idx == 4 and "jkm"            not in line: continue
-            elif mod_idx == 5 and "weather"        not in line: continue
-            elif mod_idx == 6 and "power_reserve"  not in line: continue
-            lines_to_add.append(line)
+            if lvl_set is not None and r.level not in lvl_set:
+                continue
+            if q:
+                if (q not in r.message.lower() and q not in r.module.lower()
+                        and not any(q in e.lower() for e in r.extra)):
+                    continue
+            visible.append(i)
 
-        if lines_to_add:
-            # appendPlainText + QSyntaxHighlighter は appendHtml より大幅に高速
-            # \n 結合で 1 回の呼び出しに集約してブロック生成コストを最小化する
-            self.log_text.appendPlainText("\n".join(lines_to_add))
+        self._model.set_visible(visible)
+        self._count_pill.setText(f"{len(visible):,} / {len(records):,}")
+        self._on_selection_changed()
 
-        if at_bottom:
-            bar.setValue(bar.maximum())
+        # 자동 스크롤 (auto-tail 이면 맨 아래)
+        if self._auto_tail and self._model.rowCount() > 0:
+            self.table.scrollToBottom()
 
-    def _clear_logs(self):
+    # ── 핸들러 ───────────────────────────────────────────────
+    def _on_level_changed(self, key: str) -> None:
+        self._level_filter = key
+        self._apply_filters()
+
+    def _on_period_changed(self, key: str) -> None:
+        self._period_filter = key
+        self._apply_filters()
+
+    def _on_search_changed(self, text: str) -> None:
+        self._search = text
+        self._search_timer.start()
+
+    def _toggle_autotail(self) -> None:
+        self._auto_tail = self.btn_autotail.isChecked()
+        if self._auto_tail:
+            self.btn_autotail.setText("▶  " + tr("リアルタイム ON"))
+            self._tail_timer.start()
+            QTimer.singleShot(0, self.table.scrollToBottom)
+        else:
+            self.btn_autotail.setText("⏸  " + tr("リアルタイム OFF"))
+            self._tail_timer.stop()
+
+    def _on_file_changed(self, _path: str) -> None:
+        # 파일 swap 후에는 watcher 가 트래킹을 잃을 수 있어 재등록
+        if str(self._log_file) not in self._watcher.files():
+            try:
+                self._watcher.addPath(str(self._log_file.absolute()))
+            except Exception:
+                pass
+        if self._auto_tail:
+            self._poll_new_records()
+
+    def _on_tail_tick(self) -> None:
+        if self._auto_tail:
+            self._poll_new_records()
+
+    def _poll_new_records(self) -> None:
+        """현재 app.log 의 변경분만 incremental 로 읽어 추가."""
+        files = _ordered_log_files(self._log_file)
+        any_new = False
+        new_records: list[LogRecord] = []
+        for p in files:
+            key = str(p)
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            last = self._last_sizes.get(key, 0)
+            if size < last:
+                # 회전됨 — 전체 재로딩 안전 경로
+                self._reload_all()
+                return
+            if size == last:
+                continue
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last)
+                    chunk = f.read()
+                self._last_sizes[key] = size
+                if chunk:
+                    new_records.extend(_parse_log_text(chunk))
+                    any_new = True
+            except OSError as e:
+                logger.warning(f"log tail 실패 {p.name}: {e}")
+        if any_new and new_records:
+            self._model.append_records(new_records, max_total=_MAX_RECORDS)
+            self._apply_filters()
+
+    def _on_selection_changed(self) -> None:
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        if not rows:
+            self._detail_head.setText(tr("行を選択してください"))
+            self._level_pill.setText("—")
+            self.detail_view.clear()
+            return
+        rec = self._model.record_at(rows[0].row())
+        if rec is None:
+            return
+        self._detail_head.setText(f"{rec.ts_str}  ·  {rec.module}")
+        self._level_pill.setText(rec.level)
+        # detail = message + extra (traceback 등)
+        body = rec.message
+        if rec.extra:
+            body += "\n" + "\n".join(rec.extra)
+        self.detail_view.setPlainText(body)
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        idx = self.table.indexAt(pos)
+        if not idx.isValid():
+            return
+        rec = self._model.record_at(idx.row())
+        if rec is None:
+            return
+
+        menu = QMenu(self)
+        a_copy = QAction(tr("行をコピー"), menu)
+        a_copy.triggered.connect(lambda: self._copy_to_clipboard("\n".join(rec.raw_lines)))
+        menu.addAction(a_copy)
+
+        a_copy_msg = QAction(tr("メッセージのみコピー"), menu)
+        a_copy_msg.triggered.connect(lambda: self._copy_to_clipboard(rec.message))
+        menu.addAction(a_copy_msg)
+
+        menu.addSeparator()
+
+        a_filter_mod = QAction(tr("「{0}」 でフィルタ").format(rec.module), menu)
+        a_filter_mod.triggered.connect(lambda: self._set_search(rec.module))
+        menu.addAction(a_filter_mod)
+
+        a_filter_lvl = QAction(tr("レベル {0} のみ").format(rec.level), menu)
+        a_filter_lvl.triggered.connect(lambda lv=rec.level: self._set_level(lv))
+        menu.addAction(a_filter_lvl)
+
+        menu.addSeparator()
+
+        sig = self._fav_sig(rec)
+        if sig in self._favorites:
+            a_unfav = QAction("★  " + tr("お気に入り解除"), menu)
+            a_unfav.triggered.connect(lambda: self._toggle_favorite(rec))
+            menu.addAction(a_unfav)
+        else:
+            a_fav = QAction("☆  " + tr("お気に入りに追加"), menu)
+            a_fav.triggered.connect(lambda: self._toggle_favorite(rec))
+            menu.addAction(a_fav)
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+        bus.toast_requested.emit(tr("クリップボードにコピーしました"), "success")
+
+    def _set_search(self, text: str) -> None:
+        self.search_input.setText(text)
+
+    def _set_level(self, level: str) -> None:
+        # WARN / ERROR / INFO / DEBUG → segment key
+        key = "WARN" if level in ("WARN", "WARNING") else level
+        if key in ("DEBUG", "INFO", "WARN", "ERROR", "ALL"):
+            self.level_seg.set_value(key, emit=True)
+
+    @staticmethod
+    def _fav_sig(rec: LogRecord) -> str:
+        return f"{rec.module}|{rec.level}|{rec.message}"
+
+    def _toggle_favorite(self, rec: LogRecord) -> None:
+        sig = self._fav_sig(rec)
+        if sig in self._favorites:
+            self._favorites.discard(sig)
+            bus.toast_requested.emit(tr("お気に入りから削除しました"), "info")
+        else:
+            self._favorites.add(sig)
+            bus.toast_requested.emit(tr("お気に入りに追加しました"), "success")
+
+    # ── 내보내기 / 클리어 ────────────────────────────────────
+    def _export_filtered(self) -> None:
+        records = self._model.visible_records()
+        if not records:
+            LeeDialog.info(tr("エクスポート"), tr("エクスポートするログがありません。"), parent=self)
+            return
+        path, ftype = QFileDialog.getSaveFileName(
+            self, tr("ログをエクスポート"),
+            f"lee_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            f"Text (*.txt);;CSV (*.csv)",
+        )
+        if not path:
+            return
         try:
-            with open(self._log_file, 'w', encoding='utf-8') as f:
+            if path.lower().endswith(".csv") or "csv" in ftype.lower():
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["time", "level", "module", "message", "extra"])
+                    for r in records:
+                        w.writerow([r.ts_str, r.level, r.module, r.message,
+                                    "\n".join(r.extra)])
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    for r in records:
+                        f.write("\n".join(r.raw_lines))
+                        f.write("\n")
+            bus.toast_requested.emit(
+                tr("✅ {0} 件をエクスポートしました").format(f"{len(records):,}"),
+                "success",
+            )
+        except OSError as e:
+            LeeDialog.error(tr("エラー"), tr("エクスポートに失敗しました: {0}").format(e), parent=self)
+
+    def _clear_logs(self) -> None:
+        if not LeeDialog.confirm(
+            tr("ログのクリア"),
+            tr("現在のログファイル ({0}) を空にします。よろしいですか?\n"
+               "(回転バックアップ .1 .2 は残ります)").format(self._log_file.name),
+            ok_text=tr("クリア"), destructive=True, parent=self,
+        ):
+            return
+        try:
+            with open(self._log_file, "w", encoding="utf-8") as f:
                 f.write("")
-            self.log_text.clear()
-            self._last_pos = 0
-            self._all_lines.clear()
-            self._load_logs()
-        except (IOError, OSError):
+            self._reload_all()
+            bus.toast_requested.emit(tr("ログをクリアしました"), "info")
+        except OSError as e:
+            LeeDialog.error(tr("エラー"), str(e), parent=self)
+
+    # ── 라이프사이클 ─────────────────────────────────────────
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 표시될 때 selection 시그널 재연결 (model 이 reset 되면 selectionModel 이 교체될 수 있음)
+        sm = self.table.selectionModel()
+        if sm:
+            try:
+                sm.selectionChanged.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            sm.selectionChanged.connect(lambda *_: self._on_selection_changed())
+
+
+# ──────────────────────────────────────────────────────────────────────
+# LogViewerCard — 대시보드용 (시스템 상태 미니 카드)
+# ──────────────────────────────────────────────────────────────────────
+class LogViewerCard(QFrame):
+    """대시보드 — 최근 ERROR/WARN 카운트 + 마지막 로그 1줄."""
+    open_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("logDashCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self._is_dark = True
+        self._build_ui()
+        self._apply_qss()
+
+    def _build_ui(self) -> None:
+        v = QVBoxLayout(self); v.setContentsMargins(18, 16, 18, 16); v.setSpacing(10)
+
+        head = QHBoxLayout(); head.setSpacing(10)
+        from PySide6.QtGui import QIcon as _QI
+        from app.ui.components import LeeIconTile as _LIT
+        head.addWidget(_LIT(icon=_QI(":/img/log.svg"), color=_C_LOG, size=40, radius=10))
+        title_box = QVBoxLayout(); title_box.setSpacing(2); title_box.setContentsMargins(0, 0, 0, 0)
+        t = QLabel(tr("システムログ")); t.setObjectName("logDashTitle")
+        s = QLabel(tr("バックグラウンド動作ログ")); s.setObjectName("logDashSub"); s.setWordWrap(True)
+        title_box.addWidget(t); title_box.addWidget(s)
+        head.addLayout(title_box, 1)
+
+        self._lvl_pill = LeePill("OK", variant="info")
+        head.addWidget(self._lvl_pill, 0, Qt.AlignTop)
+        v.addLayout(head)
+
+        self._stats_lbl = QLabel(tr("ERROR 0  ·  WARN 0"))
+        self._stats_lbl.setObjectName("logDashStats")
+        v.addWidget(self._stats_lbl)
+        self._last_lbl = QLabel(tr("最終: —"))
+        self._last_lbl.setObjectName("logDashLast")
+        self._last_lbl.setWordWrap(True)
+        v.addWidget(self._last_lbl)
+
+    def refresh(self) -> None:
+        """app.log* 에서 최근 통계 + 마지막 로그 1줄 표시."""
+        try:
+            from app.core.config import LOG_FILE
+            base = LOG_FILE if isinstance(LOG_FILE, Path) else Path(LOG_FILE)
+            records = load_all_records(base, max_records=2000)
+        except Exception:
+            records = []
+        if not records:
+            self._stats_lbl.setText(tr("ERROR 0  ·  WARN 0"))
+            self._last_lbl.setText(tr("最終: —"))
+            self._set_pill("OK", "info")
+            return
+        # 최근 24시간 통계
+        cutoff = datetime.now() - timedelta(hours=24)
+        recent = [r for r in records if r.ts >= cutoff]
+        n_err  = sum(1 for r in recent if r.level in ("ERROR", "CRITICAL"))
+        n_warn = sum(1 for r in recent if r.level in ("WARN", "WARNING"))
+        self._stats_lbl.setText(f"ERROR {n_err}  ·  WARN {n_warn}  ·  ({tr('過去24時間')})")
+        last = records[-1]
+        self._last_lbl.setText(f"{last.ts_str[-8:]}  {last.module[:24]}  {last.message[:50]}")
+        if n_err > 0:
+            self._set_pill(tr("異常"), "error")
+        elif n_warn > 0:
+            self._set_pill(tr("注意"), "warning")
+        else:
+            self._set_pill("OK", "success")
+
+    def _set_pill(self, text: str, variant: str) -> None:
+        # LeePill variant 변경 — destructive/error/warning/info/success 중 매핑
+        self._lvl_pill.setText(text)
+        # variant 직접 세팅 (LeePill 내부 property)
+        try:
+            self._lvl_pill.setProperty("variant", variant)
+            self._lvl_pill.style().unpolish(self._lvl_pill)
+            self._lvl_pill.style().polish(self._lvl_pill)
+        except Exception:
             pass
+
+    def set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        self._apply_qss()
+
+    def _apply_qss(self) -> None:
+        d = self._is_dark
+        bg = "#14161C" if d else "#FFFFFF"
+        fg_p = "#F2F4F7" if d else "#0B1220"
+        fg_t = "#6B7280" if d else "#8A93A6"
+        bs = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+        self.setStyleSheet(f"""
+            QFrame#logDashCard {{
+                background: {bg}; border: 1px solid {bs};
+                border-left: 4px solid {_C_LOG};
+                border-radius: 14px;
+            }}
+            QFrame#logDashCard:hover {{ border-color: {_C_LOG}; }}
+            QLabel#logDashTitle {{
+                color: {fg_p}; background: transparent;
+                font-size: 14px; font-weight: 800;
+            }}
+            QLabel#logDashSub {{
+                color: {fg_t}; background: transparent; font-size: 11px;
+            }}
+            QLabel#logDashStats {{
+                color: {fg_p}; background: transparent;
+                font-size: 12px; font-weight: 700;
+                font-family: "JetBrains Mono", "Consolas", monospace;
+            }}
+            QLabel#logDashLast {{
+                color: {fg_t}; background: transparent;
+                font-size: 10.5px;
+                font-family: "JetBrains Mono", "Consolas", monospace;
+            }}
+        """)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.open_requested.emit()
+        super().mouseReleaseEvent(event)
+
+
+__all__ = ["LogViewerWidget", "LogViewerCard", "LogRecord", "LogTableModel",
+           "load_all_records"]

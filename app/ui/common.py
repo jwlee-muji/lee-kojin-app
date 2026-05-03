@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect, QMessageBox
-from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon
-from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt
+from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect, QLabel
+from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon, QPen
+from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt, QPoint
 from PySide6.QtSvg import QSvgRenderer
 import pyqtgraph as pg
 from app.core.config import load_settings
@@ -9,6 +9,23 @@ from typing import Optional
 from app.core.events import bus
 from app.core.i18n import tr
 
+# PyQtGraph 렌더링 퀄리티 글로벌 향상
+pg.setConfigOptions(antialias=True)
+
+
+class Curves:
+    """디자인 시스템 표준 이징 / duration. handoff/02-components.md 4.1 기반.
+
+    - PAGE_*    : 페이지 / 모달 전환 (smooth standard, 180ms cubic-bezier(.4,0,.6,1))
+    - SPRING_*  : 카드 등장 / drawer / overshoot (240ms OutBack)
+    - FAST_*    : 버튼 / 호버 마이크로 인터랙션 (120ms OutCubic)
+    """
+    PAGE_DUR_MS    = 180
+    PAGE_EASING    = QEasingCurve.OutCubic
+    SPRING_DUR_MS  = 240
+    SPRING_EASING  = QEasingCurve.OutBack
+    FAST_DUR_MS    = 120
+    FAST_EASING    = QEasingCurve.OutCubic
 
 _tint_icon_cache:   dict[tuple[str, bool], QIcon]         = {}
 _tint_pixmap_cache: dict[tuple[str, bool, int, int], QPixmap] = {}
@@ -107,14 +124,17 @@ class ExcelCopyTableWidget(QTableWidget):
 
 
 class FadeStackedWidget(QStackedWidget):
-    """부드러운 페이드 인/아웃 화면 전환 애니메이션이 적용된 StackedWidget"""
+    """부드러운 페이드 인/아웃 화면 전환 애니메이션이 적용된 StackedWidget.
+
+    디자인 명세: 180ms cubic-bezier(0.4, 0, 0.6, 1) — Qt 의 OutCubic 으로 매칭.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         # parent 지정으로 Qt 객체 트리에 등록 → 위젯 소멸 시 자동 정리
         self._fade_anim = QPropertyAnimation(self)
         self._fade_anim.setPropertyName(b"opacity")
-        self._fade_anim.setDuration(200)
-        self._fade_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._fade_anim.setDuration(Curves.PAGE_DUR_MS)
+        self._fade_anim.setEasingCurve(Curves.PAGE_EASING)
         self._fade_anim.finished.connect(self._on_fade_finished)
         self.currentChanged.connect(self._on_current_changed)
 
@@ -138,6 +158,69 @@ class FadeStackedWidget(QStackedWidget):
             self._current_widget.setGraphicsEffect(None)
 
 
+class ToastNotification(QLabel):
+    """전역으로 사용할 수 있는 모던 토스트 알림 위젯"""
+    def __init__(self, text: str, parent: QWidget = None, is_dark: bool = True, duration_ms: int = 3000):
+        super().__init__(text, parent)
+        self.duration_ms = duration_ms
+        self.setAlignment(Qt.AlignCenter)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.ToolTip)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        
+        bg_color = "#333333" if is_dark else "#ffffff"
+        text_color = "#ffffff" if is_dark else "#000000"
+        border_color = "#555555" if is_dark else "#dddddd"
+        
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+        """)
+        
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        
+        self._anim = QPropertyAnimation(self._effect, b"opacity")
+        self._anim.setDuration(300)
+        self._anim.finished.connect(self._on_anim_finished)
+        
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide_toast)
+        
+    def show_toast(self):
+        if self.parent():
+            parent_rect = self.parent().rect()
+            self.adjustSize()
+            x = parent_rect.width() // 2 - self.width() // 2
+            y = parent_rect.height() - self.height() - 40
+            self.move(x, y)
+            
+        self.show()
+        self._anim.stop()
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(0.95)
+        self._anim.start()
+        self._timer.start(self.duration_ms)
+        
+    def hide_toast(self):
+        self._anim.stop()
+        self._anim.setStartValue(self._effect.opacity())
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+        
+    def _on_anim_finished(self):
+        if self._effect.opacity() == 0.0:
+            self.hide()
+            self.deleteLater()
+
+
 class BasePlotWidget(pg.PlotWidget):
     """앱 전체에서 공통으로 사용되는 PyQtGraph 추상화 클래스"""
     def __init__(self, y_label="値", x_label="日付", parent=None):
@@ -145,7 +228,7 @@ class BasePlotWidget(pg.PlotWidget):
         self.is_dark = True
         self.y_label = y_label
         self.x_label = x_label
-        self.showGrid(x=True, y=True, alpha=0.25)
+        self.showGrid(x=True, y=True, alpha=0.3)
         self.plotItem.hideAxis('top')
         self.plotItem.hideAxis('right')
         self.apply_theme_custom()  # setBackground はここで一元管理
@@ -157,7 +240,8 @@ class BasePlotWidget(pg.PlotWidget):
     def apply_theme_custom(self):
         gc = UIColors.get_graph_colors(self.is_dark)
         self.setBackground(gc['bg'])
-        ax_pen   = pg.mkPen(color=gc['axis'], width=1)
+        # 그리드 라인을 점선(DashLine)으로 변경하여 시각적 간섭 최소화
+        ax_pen   = pg.mkPen(color=gc['axis'], width=1, style=Qt.DashLine)
         text_col = gc['text']
         text_pen = pg.mkPen(text_col)
         for ax_name in ('left', 'bottom'):
@@ -201,12 +285,18 @@ class BaseWidget(QWidget):
     def _safe_terminate_workers(self):
         """앱 종료 시 실행 중인 스레드를 안전하게 종료합니다.
         quit() + wait() 후에도 실행 중이면 terminate() 로 강제 종료하여 좀비 스레드를 방지합니다."""
+        import shiboken6
         for worker in self._active_workers:
-            if worker.isRunning():
-                worker.quit()
-                if not worker.wait(1000):
-                    worker.terminate()
-                    worker.wait()
+            try:
+                if shiboken6.isValid(worker):
+                    if worker.isRunning():
+                        worker.quit()
+                        if not worker.wait(1000):
+                            worker.terminate()
+                            worker.wait()
+            except Exception as e:
+                pass
+        self._active_workers.clear()
 
     def _copy_graph(self, target_widget=None):
         """グラフウィジェットをクリップボードにコピーします。target_widget が None の場合は self.plot_widget を使用。"""
@@ -214,10 +304,8 @@ class BaseWidget(QWidget):
         if widget is None:
             return
         QApplication.clipboard().setPixmap(widget.grab())
-        QMessageBox.information(
-            self, tr("完了"),
-            tr("グラフ画像をクリップボードにコピーしました。\n(Excel等に貼り付け可能です)"),
-        )
+        # 메인 토스트 시스템 으로 통합 (직접 floating window 생성 안 함)
+        bus.toast_requested.emit(tr("グラフ画像をクリップボードにコピーしました。"), "success")
 
     def setup_timer(self, interval_minutes: int, timeout_slot, stagger_seconds: int = 0):
         """타이머를 설정합니다.

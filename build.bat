@@ -40,6 +40,7 @@ pyinstaller ^
   --collect-all googleapiclient ^
   --collect-all numpy ^
   --collect-all requests ^
+  --collect-submodules "app.widgets" ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^
   --hidden-import "bs4" ^

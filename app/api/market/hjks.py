@@ -10,7 +10,7 @@ import logging
 from urllib3.util.ssl_ import create_urllib3_context
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QObject, Signal
 from app.api.base import BaseWorker
 from app.core.config import DB_HJKS, HJKS_REGIONS, HJKS_METHODS
 from app.core.database import get_db_connection
@@ -179,7 +179,8 @@ class FetchHjksWorker(BaseWorker):
             logger.error(f"HJKS データ取得中に予期せぬエラーが発生しました: {str(e)}", exc_info=True)
             self.error.emit(f"予期せぬエラー: {str(e)}")
 
-class AggregateHjksWorker(QThread):
+class AggregateHjksTask(QObject):
+    """현대화된 QObject 기반 Worker 및 SQLite 집계 오프로딩 적용"""
     finished = Signal(list, list)
 
     def run(self):
@@ -193,9 +194,10 @@ class AggregateHjksWorker(QThread):
                         SELECT DISTINCT date FROM hjks_capacity
                         WHERE date >= ? ORDER BY date LIMIT 14
                     )
-                    SELECT h.date, h.region, h.method, h.operating_kw, h.stopped_kw
+                    SELECT h.date, h.region, h.method, SUM(h.operating_kw), SUM(h.stopped_kw)
                     FROM hjks_capacity h
                     WHERE h.date IN (SELECT date FROM target_dates)
+                    GROUP BY h.date, h.region, h.method
                     ORDER BY h.date
                 """
                 rows = conn.execute(query, [today_str]).fetchall()
@@ -210,19 +212,16 @@ class AggregateHjksWorker(QThread):
             unique_dates = sorted(list(set(r[0] for r in rows)))
             dates_str = unique_dates
             
-            from collections import defaultdict
-            grouped = defaultdict(list)
-            for r in rows:
-                grouped[r[0]].append(r)
-                
-            for dt in unique_dates:
-                day_dict = {r: {m: {"op": 0, "st": 0} for m in HJKS_METHODS} for r in HJKS_REGIONS}
-                for row in grouped[dt]:
-                    r, m, op, st = row[1], row[2], row[3], row[4]
-                    if r in day_dict and m in day_dict[r]:
-                        day_dict[r][m]["op"] += op
-                        day_dict[r][m]["st"] += st
-                base_daily_data.append(day_dict)
+            # SQLite에서 이미 집계된 데이터를 즉시 Dictionary로 할당 (Python 연산 오버헤드 제거)
+            day_dicts = {dt: {r: {m: {"op": 0, "st": 0} for m in HJKS_METHODS} for r in HJKS_REGIONS} for dt in unique_dates}
+            
+            for row in rows:
+                dt, r, m, op, st = row
+                if dt in day_dicts and r in day_dicts[dt] and m in day_dicts[dt][r]:
+                    day_dicts[dt][r][m]["op"] = op
+                    day_dicts[dt][r][m]["st"] = st
+                    
+            base_daily_data = [day_dicts[dt] for dt in unique_dates]
         else:
             base_date = datetime.now().date()
             dates_str = [(base_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]

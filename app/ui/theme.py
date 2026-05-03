@@ -1,3 +1,351 @@
+# =============================================================================
+# Phase 0 — 디자인 토큰 시스템 (handoff/01-design-tokens.md 기준)
+# =============================================================================
+from PySide6.QtCore import QObject, Signal
+
+# ── 인디케이터 컬러 (라이트/다크 공통) ─────────────────────────────────────
+_INDICATOR_TOKENS = {
+    "c_power":        "#5B8DEF",
+    "c_power_soft":   "#DCE7FB",
+    "c_spot":         "#FF7A45",
+    "c_spot_soft":    "#FFE4D6",
+    "c_imb":          "#F25C7A",
+    "c_imb_soft":     "#FFE0E6",
+    "c_jkm":          "#F4B740",
+    "c_jkm_soft":     "#FFEFD0",
+    "c_weather":      "#2EC4B6",
+    "c_weather_soft": "#D2F4F0",
+    "c_hjks":         "#A78BFA",
+    "c_hjks_soft":    "#EBE3FE",
+    "c_cal":          "#34C759",
+    "c_cal_soft":     "#DAF6E1",
+    "c_mail":         "#EA4335",
+    "c_mail_soft":    "#FCE0DD",
+    "c_ai":           "#5856D6",
+    "c_ai_soft":      "#E1E0F8",
+    "c_memo":         "#FFCC00",
+    "c_memo_soft":    "#FFF4C2",
+    "c_notice":       "#FF9500",
+    "c_notice_soft":  "#FFE7C7",
+    # 시맨틱 (테마 공통)
+    "c_ok":    "#30D158",
+    "c_warn":  "#FF9F0A",
+    "c_bad":   "#FF453A",
+    "c_info":  "#0A84FF",
+    "accent":  "#FF7A45",
+    # 스페이싱
+    "s1": "4",  "s2": "8",  "s3": "12", "s4": "16",
+    "s5": "20", "s6": "24", "s8": "32", "s10": "40", "s12": "48",
+    # 라디우스
+    "r_xs": "6",  "r_sm": "10", "r_md": "14", "r_lg": "20",
+    "r_xl": "28", "r_2xl": "36", "r_pill": "999",
+    # accent 위 텍스트
+    "fg_on_accent": "#FFFFFF",
+}
+
+TOKENS_DARK: dict = {
+    **_INDICATOR_TOKENS,
+    # Surface
+    "bg_app":       "#0A0B0F",
+    "bg_surface":   "#14161C",
+    "bg_surface_2": "#1B1E26",
+    "bg_surface_3": "#232730",
+    "bg_elevated":  "#1B1E26",
+    "bg_input":     "#1B1E26",
+    # Foreground
+    "fg_primary":    "#F2F4F7",
+    "fg_secondary":  "#A8B0BD",
+    "fg_tertiary":   "#6B7280",
+    "fg_quaternary": "#3D424D",
+    # Border
+    "border_subtle": "rgba(255,255,255,0.04)",
+    "border":        "rgba(255,255,255,0.08)",
+    "border_strong": "rgba(255,255,255,0.14)",
+    # QSS 헬퍼 (기존 get_global_qss 호환)
+    "scroll_handle":        "#555555",
+    "scroll_hover":         "#777777",
+    "grp_border":           "#303030",
+    "grp_title":            "#b0b0b0",
+    "primary_btn_bg":       "#0e639c",
+    "primary_btn_hover":    "#0b5a8e",
+    "secondary_btn_bg":     "#444444",
+    "secondary_btn_hover":  "#555555",
+    "toast_ok":             "#4caf50",
+    "selection_bg":         "rgba(255,122,69,0.3)",
+}
+
+TOKENS_LIGHT: dict = {
+    **_INDICATOR_TOKENS,
+    # Surface
+    "bg_app":       "#F5F6F8",
+    "bg_surface":   "#FFFFFF",
+    "bg_surface_2": "#F0F2F5",
+    "bg_surface_3": "#E6E9EE",
+    "bg_elevated":  "#FFFFFF",
+    "bg_input":     "#FFFFFF",
+    # Foreground
+    "fg_primary":    "#0B1220",
+    "fg_secondary":  "#4A5567",
+    "fg_tertiary":   "#8A93A6",
+    "fg_quaternary": "#C2C8D2",
+    # Border
+    "border_subtle": "rgba(11,18,32,0.06)",
+    "border":        "rgba(11,18,32,0.10)",
+    "border_strong": "rgba(11,18,32,0.18)",
+    # QSS 헬퍼
+    "scroll_handle":        "#c0c0c0",
+    "scroll_hover":         "#a0a0a0",
+    "grp_border":           "#dedede",
+    "grp_title":            "#444444",
+    "primary_btn_bg":       "#1a73e8",
+    "primary_btn_hover":    "#1565c0",
+    "secondary_btn_bg":     "#dddddd",
+    "secondary_btn_hover":  "#cccccc",
+    "toast_ok":             "#388e3c",
+    "selection_bg":         "rgba(11,18,32,0.15)",
+}
+
+
+QSS_TEMPLATE = """
+/* ── 공통 툴팁 ─────────────────────────────────────────────────────────── */
+QToolTip {{
+    background-color: {bg_surface};
+    color: {fg_primary};
+    border: 1px solid {border};
+    border-radius: 4px;
+    padding: 5px;
+}}
+
+/* ── SettingsWidget QGroupBox ──────────────────────────────────────────── */
+QGroupBox#settingsGroup {{
+    font-weight: bold;
+    border: 1px solid {grp_border};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding-top: 6px;
+    color: {fg_primary};
+}}
+QGroupBox#settingsGroup::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 14px;
+    top: -1px;
+    padding: 2px 8px;
+    background-color: {bg_app};
+    color: {grp_title};
+    font-size: 12px;
+    font-weight: bold;
+    border-radius: 4px;
+}}
+
+/* ── 공통 액션 버튼 ────────────────────────────────────────────────────── */
+QPushButton#primaryActionBtn {{
+    font-weight: bold;
+    background-color: {primary_btn_bg};
+    color: white;
+    border: none;
+    padding: 8px;
+    border-radius: 4px;
+}}
+QPushButton#primaryActionBtn:hover {{ background-color: {primary_btn_hover}; }}
+
+QPushButton#secondaryActionBtn {{
+    font-weight: bold;
+    background-color: {secondary_btn_bg};
+    color: {fg_primary};
+    border: 1px solid {border};
+    padding: 8px;
+    border-radius: 4px;
+}}
+QPushButton#secondaryActionBtn:hover {{ background-color: {secondary_btn_hover}; }}
+
+/* ── 토스트 알림 ────────────────────────────────────────────────────────── */
+QLabel#successToast {{
+    color: {toast_ok};
+    font-weight: bold;
+}}
+
+/* ── 설정 체크박스 ─────────────────────────────────────────────────────── */
+QCheckBox#settingsCheckbox {{
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: transparent;
+    color: {fg_primary};
+    font-size: 13px;
+}}
+QCheckBox#settingsCheckbox:hover {{ background-color: {bg_surface_2}; }}
+
+/* ── SummaryCard (dynamic property) ───────────────────────────────────── */
+SummaryCard[theme="dark"] {{
+    background-color: {bg_surface};
+    border: 1px solid {border_subtle};
+    border-radius: 8px;
+}}
+SummaryCard[theme="dark"]:hover {{ background-color: {bg_surface_3}; }}
+SummaryCard[theme="light"] {{
+    background-color: {bg_surface};
+    border: 1px solid {border};
+    border-radius: 8px;
+}}
+SummaryCard[theme="light"]:hover {{ background-color: {bg_surface_2}; }}
+
+/* ── QScrollBar ────────────────────────────────────────────────────────── */
+QScrollBar:vertical {{
+    background: {bg_app};
+    width: 8px;
+    border: none;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {scroll_handle};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {scroll_hover}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; border: none; }}
+QScrollBar::add-page:vertical,  QScrollBar::sub-page:vertical  {{ background: none; }}
+
+QScrollBar:horizontal {{
+    background: {bg_app};
+    height: 8px;
+    border: none;
+    margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {scroll_handle};
+    border-radius: 4px;
+    min-width: 24px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {scroll_hover}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; border: none; }}
+QScrollBar::add-page:horizontal,  QScrollBar::sub-page:horizontal  {{ background: none; }}
+
+/* ── QComboBox ─────────────────────────────────────────────────────────── */
+QComboBox {{
+    background: {bg_input};
+    color: {fg_primary};
+    border: 1px solid {border};
+    border-radius: 4px;
+    padding: 4px 8px;
+    min-height: 24px;
+}}
+QComboBox:hover {{ border-color: {accent}; }}
+QComboBox::drop-down {{ border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right; }}
+QComboBox QAbstractItemView {{
+    background: {bg_surface};
+    color: {fg_primary};
+    border: 1px solid {border};
+    selection-background-color: {accent};
+    selection-color: #ffffff;
+    outline: none;
+}}
+
+/* ── QLineEdit ─────────────────────────────────────────────────────────── */
+QLineEdit {{
+    background: {bg_input};
+    color: {fg_primary};
+    border: 1px solid {border};
+    border-radius: 4px;
+    padding: 5px 8px;
+    selection-background-color: {selection_bg};
+}}
+QLineEdit:focus {{ border-color: {accent}; }}
+QLineEdit:disabled {{ color: {fg_tertiary}; background: {bg_surface}; }}
+
+/* ── QTextEdit / QPlainTextEdit ────────────────────────────────────────── */
+QTextEdit, QPlainTextEdit {{
+    background: {bg_input};
+    color: {fg_primary};
+    border: 1px solid {border};
+    border-radius: 4px;
+    selection-background-color: {selection_bg};
+}}
+QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
+
+/* ── QTableWidget / QHeaderView ────────────────────────────────────────── */
+QTableWidget {{
+    background: {bg_app};
+    color: {fg_primary};
+    gridline-color: {border};
+    border: 1px solid {border};
+    border-radius: 4px;
+}}
+QTableWidget::item {{ padding: 4px; }}
+QTableWidget::item:selected {{
+    background: {accent};
+    color: #ffffff;
+}}
+QHeaderView::section {{
+    background: {bg_surface};
+    color: {fg_primary};
+    border: none;
+    border-right: 1px solid {border};
+    border-bottom: 1px solid {border};
+    padding: 6px 8px;
+    font-weight: bold;
+    font-size: 12px;
+}}
+QHeaderView::section:first {{ border-left: none; }}
+
+/* ── QDialog ────────────────────────────────────────────────────────────── */
+QDialog {{
+    background: {bg_surface};
+}}
+"""
+
+
+def get_global_qss(theme: str = "dark") -> str:
+    """토큰 딕셔너리를 QSS_TEMPLATE에 format()해서 반환."""
+    tokens = TOKENS_DARK if theme == "dark" else TOKENS_LIGHT
+    return QSS_TEMPLATE.format(**tokens)
+
+
+class ThemeManager(QObject):
+    """앱 전체 테마를 관리하는 싱글턴. set_theme() 호출 시 QSS를 교체하고 시그널을 emit."""
+
+    theme_changed = Signal(str)
+    _instance: "ThemeManager | None" = None
+
+    @classmethod
+    def instance(cls) -> "ThemeManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_theme = "dark"
+
+    def set_theme(self, theme: str) -> None:
+        self._current_theme = theme
+        from PySide6.QtWidgets import QApplication
+        from app.core.config import get_theme_qss
+        from app.ui.components import components_qss
+        from app.ui.dialogs import dialogs_qss
+        tokens = TOKENS_DARK if theme == "dark" else TOKENS_LIGHT
+        full_qss = "\n".join([
+            get_theme_qss(theme),
+            get_global_qss(theme),
+            components_qss(tokens),
+            dialogs_qss(tokens),
+        ])
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(full_qss)
+        self.theme_changed.emit(theme)
+
+    @property
+    def current_theme(self) -> str:
+        return self._current_theme
+
+    def is_dark(self) -> bool:
+        return self._current_theme == "dark"
+
+
+# =============================================================================
+# 기존 코드 (하위 호환 유지 — Phase 5 이후 점진적으로 토큰으로 교체)
+# =============================================================================
 class ThemePalette:
     """アプリ全体の背景色パレット。散在していたハードコードを一元管理します。"""
 
@@ -119,19 +467,28 @@ class UIColors:
 
     @staticmethod
     def get_panel_colors(is_dark: bool):
-        """패널 및 リスト 아이템, 툴팁 등에 사용되는 배경/텍스트 색상 모듈화"""
-        if is_dark:
-            return {"bg": "#252526", "border": "#3e3e42", "text": "#d4d4d4", "text_dim": "#888888", "hover": "#333333"}
-        else:
-            return {"bg": "#fcfcfc", "border": "#cccccc", "text": "#333333", "text_dim": "#666666", "hover": "#e8e8e8"}
+        """패널 및 リスト 아이템, 툴팁 등에 사용되는 배경/텍스트 색상.
+
+        Phase 6 — 디자인 토큰 (TOKENS_DARK/LIGHT) 으로 리다이렉트.
+        """
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
+        return {
+            "bg":       t["bg_surface"],
+            "border":   t["border_subtle"],
+            "text":     t["fg_primary"],
+            "text_dim": t["fg_tertiary"],
+            "hover":    t["bg_surface_3"],
+        }
 
     @staticmethod
     def get_graph_colors(is_dark: bool) -> dict:
-        """PyQtGraph 배경 및 축, 그리드에 사용되는 색상 모듈화"""
-        if is_dark:
-            return {"bg": "#1e1e1e", "axis": "#555555", "text": "#aaaaaa"}
-        else:
-            return {"bg": "#ffffff", "axis": "#dddddd", "text": "#666666"}
+        """PyQtGraph 배경 및 축, 그리드에 사용되는 색상. 토큰 기반."""
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
+        return {
+            "bg":   t["bg_surface"],
+            "axis": t["fg_quaternary"],
+            "text": t["fg_secondary"],
+        }
 
     @staticmethod
     def get_sidebar_header_color(is_dark: bool) -> str:
@@ -140,34 +497,24 @@ class UIColors:
 
     @staticmethod
     def get_util_strip_colors(is_dark: bool) -> dict:
-        """ユーティリティストリップ (サイドバー下部ボタンバー) の配色"""
-        if is_dark:
-            return {
-                "bg":       ThemePalette.BG_SECONDARY_DARK,
-                "border":   UIColors.BORDER_DARK,
-                "text":     UIColors.ICON_TINT_DARK,
-                "active":   UIColors.ACTION_BLUE_DARK,
-                "hover_bg": "rgba(255,255,255,0.08)",
-            }
+        """ユーティリティストリップ (サイドバー下部ボタンバー) の配色. 토큰 기반."""
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
         return {
-            "bg":       "#f0f0f0",
-            "border":   UIColors.BORDER_LIGHT,
-            "text":     UIColors.ICON_TINT_LIGHT,
-            "active":   UIColors.ACTION_BLUE_LIGHT,
-            "hover_bg": "rgba(0,0,0,0.07)",
+            "bg":       t["bg_surface_2"],
+            "border":   t["border_subtle"],
+            "text":     t["fg_secondary"],
+            "active":   t["accent"],
+            "hover_bg": "rgba(255,255,255,0.08)" if is_dark else "rgba(0,0,0,0.07)",
         }
 
     @staticmethod
     def get_notification_list_style(is_dark: bool) -> str:
-        """通知センター QListWidget のスタイル文字列"""
-        if is_dark:
-            return (
-                "QListWidget { background: #1e1e1e; color: #e0e0e0; }"
-                "QListWidget::item { border-bottom: 1px solid #333; padding: 15px; font-size: 13px; }"
-            )
+        """通知センター QListWidget のスタイル文字列. 토큰 기반."""
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
         return (
-            "QListWidget { background: #ffffff; color: #212121; }"
-            "QListWidget::item { border-bottom: 1px solid #e0e0e0; padding: 15px; font-size: 13px; }"
+            f"QListWidget {{ background: {t['bg_surface']}; color: {t['fg_primary']}; }}"
+            f"QListWidget::item {{ border-bottom: 1px solid {t['border_subtle']}; "
+            f"padding: 15px; font-size: 13px; }}"
         )
 
     @staticmethod
@@ -177,40 +524,42 @@ class UIColors:
 
     @staticmethod
     def get_chat_colors(is_dark: bool) -> dict:
-        """AI チャットウィジェットのバブル・アバター配色"""
+        """AI チャットウィジェットのバブル・アバター配色. 토큰 기반 (c_ai)."""
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
         return {
-            "user_bg":   "#0078d4",
-            "user_fg":   "#ffffff",
-            "asst_bg":   "#2a2d2e" if is_dark else "#e4e4e4",
-            "asst_fg":   "#d4d4d4" if is_dark else "#1a1a1a",
-            "avatar_bg": "#5c6bc0",
-            "time_fg":   "#888888" if is_dark else "#aaaaaa",
+            "user_bg":   t["c_ai"],          # #5856D6 — design AI accent
+            "user_fg":   "#FFFFFF",
+            "asst_bg":   t["bg_surface_2"],
+            "asst_fg":   t["fg_primary"],
+            "avatar_bg": t["c_ai"],
+            "time_fg":   t["fg_tertiary"],
         }
 
     @staticmethod
     def get_log_colors(is_dark: bool) -> dict:
-        """システムログビューアに使用するログレベル別の配色"""
+        """システムログビューアに使用するログレベル別の配色. bg/text/time 만 토큰화."""
+        t = TOKENS_DARK if is_dark else TOKENS_LIGHT
         if is_dark:
             return {
-                "bg":       "#1e1e1e",
-                "text":     "#d4d4d4",
+                "bg":       t["bg_surface"],
+                "text":     t["fg_primary"],
                 "error":    "#ff5555",
                 "warning":  "#ffb86c",
                 "info":     "#8be9fd",
                 "module":   "#bd93f9",
-                "time":     "#777777",
+                "time":     t["fg_tertiary"],
                 "error_bg": "#3b1111",
                 "warn_bg":  "#2e2000",
             }
         else:
             return {
-                "bg":       "#ffffff",
-                "text":     "#333333",
+                "bg":       t["bg_surface"],
+                "text":     t["fg_primary"],
                 "error":    "#cc0000",
                 "warning":  "#e65100",
                 "info":     "#1565c0",
                 "module":   "#6a1b9a",
-                "time":     "#888888",
+                "time":     t["fg_tertiary"],
                 "error_bg": "#fff0f0",
                 "warn_bg":  "#fff8e1",
             }
@@ -231,200 +580,3 @@ class Typography:
     CHART   = "9pt"    # グラフ軸ラベル (pyqtgraph は pt 単位)
 
 
-def get_global_qss(theme: str) -> str:
-    """
-    앱 전체에서 공통으로 사용되는 커스텀 위젯들의 스타일시트(QSS)를 반환합니다.
-    """
-    is_dark = (theme == "dark")
-
-    bc              = "#555555" if is_dark else "#cccccc"
-    tc              = UIColors.text_primary(is_dark)
-    primary_bg      = UIColors.ACCENT_DARK if is_dark else "#0d47a1"
-    primary_hover   = "#0b5a8e" if is_dark else UIColors.ACCENT_LIGHT
-    secondary_bg    = "#444444" if is_dark else "#dddddd"
-    secondary_hover = "#555555" if is_dark else "#cccccc"
-    toast_color     = UIColors.ONLINE_COLOR if is_dark else "#388e3c"
-    main_bg         = ThemePalette.bg_primary(is_dark)
-    card_bg         = ThemePalette.bg_secondary(is_dark)
-    card_hover      = ThemePalette.bg_tertiary(is_dark)
-    grp_border      = "#303030" if is_dark else "#dedede"
-    grp_title       = "#b0b0b0" if is_dark else "#444444"
-    input_bg        = ThemePalette.BG_INPUT_DARK if is_dark else ThemePalette.BG_INPUT_LIGHT
-    accent          = UIColors.action_blue(is_dark)
-    scroll_handle   = "#555555" if is_dark else "#c0c0c0"
-    scroll_hover    = "#777777" if is_dark else "#a0a0a0"
-
-    return f"""
-    /* 앱 전체 공통 툴팁 스타일 */
-    QToolTip {{
-        background-color: {card_bg};
-        color: {tc};
-        border: 1px solid {bc};
-        border-radius: 4px;
-        padding: 5px;
-    }}
-
-    /* SettingsWidget - QGroupBox (배경 없음 → 자식 위젯 가시성 확보) */
-    QGroupBox#settingsGroup {{
-        font-weight: bold;
-        border: 1px solid {grp_border};
-        border-radius: 8px;
-        margin-top: 14px;
-        padding-top: 6px;
-        color: {tc};
-    }}
-    QGroupBox#settingsGroup::title {{
-        subcontrol-origin: margin;
-        subcontrol-position: top left;
-        left: 14px;
-        top: -1px;
-        padding: 2px 8px;
-        background-color: {main_bg};
-        color: {grp_title};
-        font-size: 12px;
-        font-weight: bold;
-        border-radius: 4px;
-    }}
-
-    /* 공통 버튼 액션 스타일 */
-    QPushButton#primaryActionBtn {{
-        font-weight: bold; background-color: {primary_bg}; color: white; border: none; padding: 8px; border-radius: 4px;
-    }}
-    QPushButton#primaryActionBtn:hover {{ background-color: {primary_hover}; }}
-
-    QPushButton#secondaryActionBtn {{
-        font-weight: bold; background-color: {secondary_bg}; color: {tc}; border: 1px solid {bc}; padding: 8px; border-radius: 4px;
-    }}
-    QPushButton#secondaryActionBtn:hover {{ background-color: {secondary_hover}; }}
-
-    /* 공통 토스트 알림 라벨 */
-    QLabel#successToast {{
-        color: {toast_color};
-        font-weight: bold;
-    }}
-
-    /* 설정 화면 체크박스 */
-    QCheckBox#settingsCheckbox {{
-        border: none; padding: 6px 10px; border-radius: 6px; background: transparent;
-        color: {tc}; font-size: 13px;
-    }}
-    QCheckBox#settingsCheckbox:hover {{
-        background-color: {card_hover};
-    }}
-
-    /* SummaryCard Dynamic Property 적용 (하드코딩 제거) */
-    SummaryCard[theme="dark"] {{
-        background-color: {ThemePalette.BG_SECONDARY_DARK};
-        border: 1px solid #3e3e42;
-        border-radius: 8px;
-    }}
-    SummaryCard[theme="dark"]:hover {{ background-color: {ThemePalette.BG_TERTIARY_DARK}; }}
-
-    SummaryCard[theme="light"] {{
-        background-color: {ThemePalette.BG_SECONDARY_LIGHT};
-        border: 1px solid #dddddd;
-        border-radius: 8px;
-    }}
-    SummaryCard[theme="light"]:hover {{ background-color: #f4f8ff; }}
-
-    /* ── QScrollBar ─────────────────────────────────────────────── */
-    QScrollBar:vertical {{
-        background: {main_bg};
-        width: 8px;
-        border: none;
-        margin: 0;
-    }}
-    QScrollBar::handle:vertical {{
-        background: {scroll_handle};
-        border-radius: 4px;
-        min-height: 24px;
-    }}
-    QScrollBar::handle:vertical:hover {{ background: {scroll_hover}; }}
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; border: none; }}
-    QScrollBar::add-page:vertical,  QScrollBar::sub-page:vertical  {{ background: none; }}
-
-    QScrollBar:horizontal {{
-        background: {main_bg};
-        height: 8px;
-        border: none;
-        margin: 0;
-    }}
-    QScrollBar::handle:horizontal {{
-        background: {scroll_handle};
-        border-radius: 4px;
-        min-width: 24px;
-    }}
-    QScrollBar::handle:horizontal:hover {{ background: {scroll_hover}; }}
-    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; border: none; }}
-    QScrollBar::add-page:horizontal,  QScrollBar::sub-page:horizontal  {{ background: none; }}
-
-    /* ── QComboBox ──────────────────────────────────────────────── */
-    QComboBox {{
-        background: {input_bg};
-        color: {tc};
-        border: 1px solid {bc};
-        border-radius: 4px;
-        padding: 4px 8px;
-        min-height: 24px;
-    }}
-    QComboBox:hover {{ border-color: {accent}; }}
-    QComboBox::drop-down {{ border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right; }}
-    QComboBox QAbstractItemView {{
-        background: {card_bg};
-        color: {tc};
-        border: 1px solid {bc};
-        selection-background-color: {accent};
-        selection-color: #ffffff;
-        outline: none;
-    }}
-
-    /* ── QLineEdit ──────────────────────────────────────────────── */
-    QLineEdit {{
-        background: {input_bg};
-        color: {tc};
-        border: 1px solid {bc};
-        border-radius: 4px;
-        padding: 5px 8px;
-    }}
-    QLineEdit:focus {{ border-color: {accent}; }}
-    QLineEdit:disabled {{ color: #777777; background: {card_bg}; }}
-
-    /* ── QTextEdit / QPlainTextEdit ─────────────────────────────── */
-    QTextEdit, QPlainTextEdit {{
-        background: {input_bg};
-        color: {tc};
-        border: 1px solid {bc};
-        border-radius: 4px;
-    }}
-    QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
-
-    /* ── QTableWidget / QHeaderView ─────────────────────────────── */
-    QTableWidget {{
-        background: {main_bg};
-        color: {tc};
-        gridline-color: {bc};
-        border: 1px solid {bc};
-        border-radius: 4px;
-    }}
-    QTableWidget::item {{ padding: 4px; }}
-    QTableWidget::item:selected {{
-        background: {accent};
-        color: #ffffff;
-    }}
-    QHeaderView::section {{
-        background: {card_bg};
-        color: {tc};
-        border: none;
-        border-right: 1px solid {bc};
-        border-bottom: 1px solid {bc};
-        padding: 6px 8px;
-        font-weight: bold;
-        font-size: 12px;
-    }}
-    QHeaderView::section:first {{ border-left: none; }}
-
-    /* ── QDialog ────────────────────────────────────────────────── */
-    QDialog {{
-        background: {card_bg};
-    }}
-    """

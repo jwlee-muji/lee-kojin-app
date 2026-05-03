@@ -33,7 +33,14 @@ def _save_jkm(rows: list) -> int:
         ''')
         cur = conn.executemany("INSERT OR REPLACE INTO jkm_prices (date, open, high, low, close) VALUES (?,?,?,?,?)", rows)
         conn.commit()
-        return cur.rowcount
+        n = cur.rowcount
+    # energy_prices 통합 테이블에도 동시 저장 — 다지표 시스템 호환
+    try:
+        from app.api.market.energy_indicators import _save_indicator
+        _save_indicator("jkm", rows)
+    except Exception as e:
+        logger.warning(f"energy_prices 동시 저장 실패 (무시): {e}")
+    return n
 
 class FetchJkmWorker(BaseWorker):
     finished = Signal(int)

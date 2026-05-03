@@ -11,19 +11,22 @@ import json
 import logging
 from datetime import datetime, timezone
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSplitter, QScrollArea, QFrame, QDialog,
     QStackedWidget, QCheckBox, QLineEdit, QDateTimeEdit, QTextEdit,
-    QComboBox, QSizePolicy, QMessageBox,
+    QComboBox, QSizePolicy,
 )
 from PySide6.QtCore import (
     Qt, QDate, QDateTime, QTime, QTimer, Signal, QRect, QSize,
     QMimeData, QByteArray, QPoint,
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QFont, QCursor, QDrag,
+    QPainter, QColor, QPen, QFont, QCursor, QDrag, QIcon,
 )
 from app.ui.common import BaseWidget
+from app.ui.components import (
+    LeeButton, LeeDetailHeader, LeeDialog, LeeIconTile, LeePill, LeeSegment,
+)
 from app.ui.theme import UIColors
 from app.core.i18n import tr
 from app.core.events import bus
@@ -595,8 +598,9 @@ _RESIZE_EDGE_PX = 8   # 상단/하단 리사이즈 핸들 영역(px)
 class _TimedDayColumn(QWidget):
     """24시간 시간축 기반 하루 열 위젯."""
     event_clicked    = Signal(dict)
-    event_dropped    = Signal(dict, QDate, int)   # (ev, new_date, new_start_min)
-    event_resized    = Signal(dict, int, int)      # (ev, new_start_min, new_end_min)
+    event_dropped    = Signal(dict, QDate, int)   # (ev, new_date, new_start_min) — 이동
+    event_copied     = Signal(dict, QDate, int)   # (ev, new_date, new_start_min) — Ctrl+드래그 복사
+    event_resized    = Signal(dict, int, int)     # (ev, new_start_min, new_end_min)
     create_requested = Signal(QDate, int, int)    # (date, start_min, end_min)
 
     def __init__(self, parent=None):
@@ -955,17 +959,19 @@ class _TimedDayColumn(QWidget):
             return
 
         if self._press_ev is not None:
-            # 기존 이벤트 드래그 이동
+            # 기존 이벤트 드래그 — Ctrl 키 시 복사 / 그렇지 않으면 이동
+            from PySide6.QtWidgets import QApplication as _QA
+            is_copy = bool(_QA.keyboardModifiers() & Qt.ControlModifier)
             ev = self._press_ev; offset = self._press_offset
             self._press_pos = None; self._press_ev = None
             mime = QMimeData()
             mime.setData("application/x-calendar-event", QByteArray(
-                json.dumps({"ev": ev, "drag_offset_min": offset},
+                json.dumps({"ev": ev, "drag_offset_min": offset, "is_copy": is_copy},
                            ensure_ascii=False).encode()
             ))
             drag = QDrag(self)
             drag.setMimeData(mime)
-            drag.exec(Qt.MoveAction)
+            drag.exec(Qt.CopyAction if is_copy else Qt.MoveAction)
         else:
             # 드래그로 신규 이벤트 범위 선택
             em = _y_to_min(e.position().y())
@@ -1047,9 +1053,13 @@ class _TimedDayColumn(QWidget):
                 bytes(e.mimeData().data("application/x-calendar-event")).decode())
             ev   = raw.get("ev", raw) if isinstance(raw, dict) and "ev" in raw else raw
             off  = raw.get("drag_offset_min", 0) if isinstance(raw, dict) else 0
+            is_copy = bool(raw.get("is_copy", False)) if isinstance(raw, dict) else False
             drop_min      = _y_to_min(e.position().y())
             new_start_min = max(0, (drop_min - off) // SNAP_MIN * SNAP_MIN)
-            self.event_dropped.emit(ev, self._date, new_start_min)
+            if is_copy:
+                self.event_copied.emit(ev, self._date, new_start_min)
+            else:
+                self.event_dropped.emit(ev, self._date, new_start_min)
             e.acceptProposedAction()
         except Exception as exc:
             logger.warning(f"Drop parse error: {exc}"); e.ignore()
@@ -1061,7 +1071,8 @@ class _MultiDayView(QWidget):
     """타임 룰러 + 선택 범위(1~7일) 열 뷰."""
     event_clicked    = Signal(dict)
     event_dropped    = Signal(dict, QDate, int)
-    event_resized    = Signal(dict, int, int)      # (ev, new_start_min, new_end_min)
+    event_copied     = Signal(dict, QDate, int)    # Ctrl+드래그 복사
+    event_resized    = Signal(dict, int, int)
     create_requested = Signal(QDate, int, int)
 
     _MAX_COLS = 7
@@ -1145,6 +1156,7 @@ class _MultiDayView(QWidget):
             col = _TimedDayColumn()
             col.event_clicked.connect(self.event_clicked)
             col.event_dropped.connect(self.event_dropped)
+            col.event_copied.connect(self.event_copied)
             col.event_resized.connect(self.event_resized)
             col.create_requested.connect(self.create_requested)
             self._columns.append(col); il.addWidget(col, 1)
@@ -1227,41 +1239,384 @@ class _MultiDayView(QWidget):
             hdr.set_theme(is_dark)
 
 
+# ── MonthView ────────────────────────────────────────────────────────────────
+
+class _MonthCell(QFrame):
+    """월뷰 1일 셀 — 일자 + 이벤트 칩 (최대 3개) + 드래그 드롭."""
+    cell_clicked     = Signal(QDate)               # 빈 영역 클릭
+    event_clicked    = Signal(dict)                # 이벤트 칩 클릭
+    event_dropped    = Signal(dict, QDate, int)    # (ev, new_date, new_start_min) — 이동
+    event_copied     = Signal(dict, QDate, int)    # Ctrl+드래그 복사
+
+    _MAX_CHIPS = 3
+    _CHIP_H = 16
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._date = QDate.currentDate()
+        self._events: list = []
+        self._cal_colors: dict = {}
+        self._is_today = False
+        self._is_other_month = False
+        self._is_dark = True
+        self._press_pos: QPoint | None = None
+        self._press_ev: dict | None = None
+        self.setObjectName("monthCell")
+        self.setMinimumHeight(80)
+        self.setAcceptDrops(True)
+        self.setMouseTracking(True)
+
+    def set_day(self, date: QDate, events: list, cal_colors: dict,
+                is_today: bool, is_other_month: bool, is_dark: bool):
+        self._date = date
+        self._events = events
+        self._cal_colors = cal_colors
+        self._is_today = is_today
+        self._is_other_month = is_other_month
+        self._is_dark = is_dark
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        W, H = self.width(), self.height()
+        d = self._is_dark
+
+        # 배경
+        bg_app   = "#0A0B0F" if d else "#F5F6F8"
+        bg_cell  = "#14161C" if d else "#FFFFFF"
+        bg_other = "#0F1115" if d else "#FAFBFC"
+        bd       = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+        fg_pri   = "#F2F4F7" if d else "#0B1220"
+        fg_oth   = "#3D424D" if d else "#C2C8D2"
+        fg_ter   = "#6B7280" if d else "#8A93A6"
+        sat_c    = "#42A5F5" if d else "#1a73e8"
+        sun_c    = "#EF5350" if d else "#d32f2f"
+
+        bg = bg_other if self._is_other_month else bg_cell
+        p.fillRect(0, 0, W, H, QColor(bg))
+
+        # 오늘 셀 배경 강조
+        if self._is_today:
+            tint = QColor("#34C759"); tint.setAlpha(28 if d else 22)
+            p.fillRect(0, 0, W, H, tint)
+
+        # 일자 라벨
+        dow = self._date.dayOfWeek()
+        if self._is_other_month:
+            num_color = fg_oth
+        elif dow == 6:
+            num_color = sat_c
+        elif dow == 7:
+            num_color = sun_c
+        else:
+            num_color = fg_pri
+
+        if self._is_today:
+            # 원형 배경 + 흰 숫자
+            p.setPen(Qt.NoPen); p.setBrush(QColor("#34C759"))
+            p.drawEllipse(6, 6, 22, 22)
+            p.setPen(QColor("white"))
+            p.setFont(QFont("Inter", 9, QFont.Bold))
+            p.drawText(QRect(6, 6, 22, 22), Qt.AlignCenter, str(self._date.day()))
+        else:
+            p.setPen(QColor(num_color))
+            p.setFont(QFont("Inter", 9, QFont.Bold if dow in (6, 7) else QFont.Normal))
+            p.drawText(QRect(8, 4, 26, 18), Qt.AlignLeft | Qt.AlignVCenter,
+                       str(self._date.day()))
+
+        # 이벤트 칩 (최대 3개)
+        chip_y = 26
+        max_chips = min(len(self._events), self._MAX_CHIPS)
+        for i in range(max_chips):
+            ev = self._events[i]
+            cal_id = ev.get("_calendar_id", "")
+            color = QColor(self._cal_colors.get(cal_id, "#34C759"))
+            chip_rect = QRect(4, chip_y + i * (self._CHIP_H + 2), W - 8, self._CHIP_H)
+
+            # 종일 vs 시간지정 구분
+            start = ev.get("start", {})
+            is_allday = "date" in start
+
+            if is_allday:
+                # 종일: 배경 채움
+                bg_c = QColor(color); bg_c.setAlpha(190)
+                p.setPen(Qt.NoPen); p.setBrush(bg_c)
+                p.drawRoundedRect(chip_rect, 3, 3)
+                p.setPen(QColor("white"))
+                p.setFont(QFont("Inter", 7, QFont.Bold))
+                title = ev.get("summary", tr("(タイトルなし)"))
+                t_rect = QRect(chip_rect.x() + 5, chip_rect.y(),
+                               chip_rect.width() - 8, chip_rect.height())
+                p.drawText(t_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                           title[:18] + ("…" if len(title) > 18 else ""))
+            else:
+                # 시간 지정: 도트 + 시간 + 제목
+                p.setPen(Qt.NoPen); p.setBrush(color)
+                p.drawEllipse(chip_rect.x() + 4, chip_rect.y() + 5, 6, 6)
+                title = ev.get("summary", tr("(タイトルなし)"))
+                # 시각 추출
+                time_str = ""
+                try:
+                    s_dt = datetime.fromisoformat(
+                        start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    time_str = s_dt.strftime("%H:%M")
+                except Exception:
+                    pass
+                p.setPen(QColor(fg_ter))
+                p.setFont(QFont("JetBrains Mono", 7))
+                t_rect = QRect(chip_rect.x() + 14, chip_rect.y(), 32, chip_rect.height())
+                p.drawText(t_rect, Qt.AlignLeft | Qt.AlignVCenter, time_str)
+                p.setPen(QColor(fg_pri))
+                p.setFont(QFont("Inter", 7))
+                title_rect = QRect(chip_rect.x() + 50, chip_rect.y(),
+                                   chip_rect.width() - 50, chip_rect.height())
+                p.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                           title[:14] + ("…" if len(title) > 14 else ""))
+
+        # 더보기 표시
+        if len(self._events) > self._MAX_CHIPS:
+            extra = len(self._events) - self._MAX_CHIPS
+            p.setPen(QColor(fg_ter))
+            p.setFont(QFont("Inter", 7, QFont.Bold))
+            p.drawText(QRect(4, chip_y + self._MAX_CHIPS * (self._CHIP_H + 2),
+                             W - 8, self._CHIP_H),
+                       Qt.AlignLeft | Qt.AlignVCenter, tr("他 {0} 件").format(extra))
+
+        # 셀 보더
+        p.setPen(QPen(QColor(bd), 1)); p.setBrush(Qt.NoBrush)
+        p.drawRect(0, 0, W - 1, H - 1)
+        p.end()
+
+    def _ev_chip_at(self, pos: QPoint) -> dict | None:
+        chip_y = 26
+        max_chips = min(len(self._events), self._MAX_CHIPS)
+        for i in range(max_chips):
+            chip_rect = QRect(4, chip_y + i * (self._CHIP_H + 2),
+                              self.width() - 8, self._CHIP_H)
+            if chip_rect.contains(pos):
+                return self._events[i]
+        return None
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return
+        self._press_pos = e.position().toPoint()
+        self._press_ev = self._ev_chip_at(self._press_pos)
+
+    def mouseMoveEvent(self, e):
+        if not (e.buttons() & Qt.LeftButton) or self._press_pos is None:
+            return
+        if (e.position().toPoint() - self._press_pos).manhattanLength() < 8:
+            return
+        if self._press_ev is None:
+            return
+        is_copy = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        ev = self._press_ev
+        self._press_pos = None; self._press_ev = None
+        mime = QMimeData()
+        mime.setData("application/x-calendar-event", QByteArray(
+            json.dumps({"ev": ev, "drag_offset_min": 0, "is_copy": is_copy},
+                       ensure_ascii=False).encode()
+        ))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.CopyAction if is_copy else Qt.MoveAction)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return
+        if self._press_ev is not None:
+            self.event_clicked.emit(self._press_ev)
+        elif self._press_pos is not None:
+            # 빈 영역 → 새 이벤트
+            self.cell_clicked.emit(self._date)
+        self._press_pos = None; self._press_ev = None
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasFormat("application/x-calendar-event"):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if e.mimeData().hasFormat("application/x-calendar-event"):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dropEvent(self, e):
+        if not e.mimeData().hasFormat("application/x-calendar-event"):
+            e.ignore(); return
+        try:
+            raw = json.loads(
+                bytes(e.mimeData().data("application/x-calendar-event")).decode())
+            ev = raw.get("ev", raw) if isinstance(raw, dict) and "ev" in raw else raw
+            is_copy = bool(raw.get("is_copy", False)) if isinstance(raw, dict) else False
+            # 월뷰: 시간 정보 보존 (start_min = -1 을 'preserve' 신호로 사용)
+            new_start_min = -1
+            if is_copy:
+                self.event_copied.emit(ev, self._date, new_start_min)
+            else:
+                self.event_dropped.emit(ev, self._date, new_start_min)
+            e.acceptProposedAction()
+        except Exception as exc:
+            logger.warning(f"MonthCell drop parse error: {exc}"); e.ignore()
+
+
+class _MonthView(QWidget):
+    """6 행 x 7 열 월 뷰 — 각 셀에 일자 + 이벤트 칩."""
+    event_clicked    = Signal(dict)
+    event_dropped    = Signal(dict, QDate, int)
+    event_copied     = Signal(dict, QDate, int)
+    create_requested = Signal(QDate, int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._year = QDate.currentDate().year()
+        self._month = QDate.currentDate().month()
+        self._is_dark = True
+        self._cells: list[_MonthCell] = []
+        self._build_ui()
+
+    def _build_ui(self):
+        v = QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+
+        # 요일 헤더
+        hdr = QFrame(); hdr.setObjectName("monthDayHdr")
+        hdr.setFixedHeight(28)
+        hl = QHBoxLayout(hdr); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(0)
+        for i, name in enumerate(_DAY_NAMES_JP):
+            lbl = QLabel(name)
+            lbl.setObjectName("monthDayHdrLbl")
+            lbl.setProperty("dow", "sat" if i == 5 else ("sun" if i == 6 else "wd"))
+            lbl.setAlignment(Qt.AlignCenter)
+            hl.addWidget(lbl, 1)
+        v.addWidget(hdr)
+
+        # 6 x 7 그리드
+        from PySide6.QtWidgets import QGridLayout
+        grid_w = QWidget()
+        grid = QGridLayout(grid_w)
+        grid.setContentsMargins(0, 0, 0, 0); grid.setSpacing(0)
+        for r in range(6):
+            for c in range(7):
+                cell = _MonthCell()
+                cell.cell_clicked.connect(lambda d: self.create_requested.emit(d, 9 * 60, 10 * 60))
+                cell.event_clicked.connect(self.event_clicked)
+                cell.event_dropped.connect(self.event_dropped)
+                cell.event_copied.connect(self.event_copied)
+                self._cells.append(cell)
+                grid.addWidget(cell, r, c)
+        for r in range(6):
+            grid.setRowStretch(r, 1)
+        for c in range(7):
+            grid.setColumnStretch(c, 1)
+        v.addWidget(grid_w, 1)
+
+    def update_view(self, year: int, month: int, events: list, cal_colors: dict):
+        self._year = year
+        self._month = month
+
+        first = QDate(year, month, 1)
+        # 월의 1일이 속한 주의 월요일
+        start_col = (first.dayOfWeek() - 1) % 7
+        grid_start = first.addDays(-start_col)
+
+        today = QDate.currentDate()
+
+        # 이벤트를 날짜별로 분류
+        by_day: dict[tuple, list] = {}
+        for ev in events:
+            start = ev.get("start", {}); end_d = ev.get("end", {})
+            try:
+                if "date" in start:
+                    s_date = QDate.fromString(start["date"], Qt.ISODate)
+                    e_date = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+                    d = s_date
+                    while d < e_date:
+                        by_day.setdefault((d.year(), d.month(), d.day()), []).append(ev)
+                        d = d.addDays(1)
+                elif "dateTime" in start:
+                    s_dt = datetime.fromisoformat(
+                        start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    e_dt = datetime.fromisoformat(end_d.get("dateTime",
+                        start["dateTime"]).replace("Z", "+00:00")).astimezone()
+                    s_date = QDate(s_dt.year, s_dt.month, s_dt.day)
+                    e_date = QDate(e_dt.year, e_dt.month, e_dt.day)
+                    if e_dt.hour == 0 and e_dt.minute == 0 and e_dt.second == 0 and s_date != e_date:
+                        e_date = e_date.addDays(-1)
+                    d = s_date
+                    while d <= e_date:
+                        by_day.setdefault((d.year(), d.month(), d.day()), []).append(ev)
+                        d = d.addDays(1)
+            except Exception as e:
+                logger.debug(f"MonthView event parse failed: {e}")
+
+        # 셀에 분배
+        for i, cell in enumerate(self._cells):
+            d = grid_start.addDays(i)
+            key = (d.year(), d.month(), d.day())
+            day_events = by_day.get(key, [])
+            # 시간순 정렬 — 종일 우선
+            def _sort_key(ev):
+                s = ev.get("start", {})
+                if "date" in s:
+                    return (0, "")
+                return (1, s.get("dateTime", ""))
+            day_events.sort(key=_sort_key)
+            cell.set_day(d, day_events, cal_colors,
+                         is_today=(d == today),
+                         is_other_month=(d.month() != month),
+                         is_dark=self._is_dark)
+
+    def set_theme(self, is_dark: bool):
+        self._is_dark = is_dark
+        # 테마는 다음 update_view 에서 반영됨 — 즉시 반영을 위해 update 호출
+        for cell in self._cells:
+            cell._is_dark = is_dark
+            cell.update()
+
+
 # ── EventDetailDialog ─────────────────────────────────────────────────────────
 
-class EventDetailDialog(QDialog):
+class EventDetailDialog(LeeDialog):
     event_saved   = Signal(str, dict, str)
     event_deleted = Signal(str, str)
 
     def __init__(self, ev: dict, cal_colors: dict, calendars: list,
                  is_dark: bool = True, parent=None):
-        super().__init__(parent)
+        super().__init__(ev.get("summary", tr("イベント詳細")) or tr("イベント詳細"),
+                         kind="info", parent=parent)
         self._ev = ev; self._cal_colors = cal_colors
         self._calendars = calendars; self._is_dark = is_dark
-        self.setWindowTitle(ev.get("summary", tr("イベント詳細")))
-        self.setMinimumWidth(440); self.setModal(True)
-        self._build_ui(); self._apply_theme()
-
-    def _build_ui(self):
-        main = QVBoxLayout(self)
-        main.setSpacing(0); main.setContentsMargins(0, 0, 0, 0)
+        self.setMinimumWidth(440)
+        # body 영역을 stacked (detail/edit) 로 교체, footer 는 페이지 내부 액션바 사용
+        self.set_footer_visible(False)
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_detail_page())
         self._stack.addWidget(self._build_edit_page())
-        main.addWidget(self._stack)
+        self.set_compact_body(self._stack)
+        # QDateEdit/QDateTimeEdit popup 통일 (안전망)
+        try:
+            from app.ui.components.mini_calendar import install_on_date_edits
+            install_on_date_edits(self, accent=_C_CAL)
+        except Exception:
+            pass
 
     def _build_detail_page(self) -> QWidget:
-        w = QWidget(); layout = QVBoxLayout(w)
-        layout.setContentsMargins(24, 20, 24, 20); layout.setSpacing(10)
+        w = QWidget(); w.setObjectName("evtDetailPage")
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(24, 20, 24, 16); layout.setSpacing(10)
 
         ev = self._ev; cal_id = ev.get("_calendar_id", "")
         color = self._cal_colors.get(cal_id, "#4285F4")
 
-        title_row = QHBoxLayout()
-        bar = QFrame(); bar.setFixedSize(4, 40)
+        title_row = QHBoxLayout(); title_row.setSpacing(10)
+        bar = QFrame(); bar.setObjectName("evtColorBar"); bar.setFixedSize(4, 40)
         bar.setStyleSheet(f"background: {color}; border-radius: 2px;")
         title_lbl = QLabel(ev.get("summary", tr("(タイトルなし)")))
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding-left: 4px;")
+        title_lbl.setObjectName("evtTitle")
         title_lbl.setWordWrap(True)
         title_row.addWidget(bar); title_row.addWidget(title_lbl, 1)
         layout.addLayout(title_row)
@@ -1282,42 +1637,67 @@ class EventDetailDialog(QDialog):
                 s = start.get("dateTime", "")[:16].replace("T", " ")
                 e = end.get("dateTime", "")[-5:]
                 time_str = f"🕐  {s} – {e}"
-        time_lbl = QLabel(time_str)
-        time_lbl.setStyleSheet("font-size: 13px; color: #888; padding-left: 8px;")
+        time_lbl = QLabel(time_str); time_lbl.setObjectName("evtTime")
         layout.addWidget(time_lbl)
 
         cal_obj  = next((c for c in self._calendars if c.get("id") == cal_id), {})
         cal_name = _cal_name(cal_obj) if cal_obj else cal_id
-        cal_lbl  = QLabel(f"●  {cal_name}")
-        cal_lbl.setStyleSheet(
-            f"font-size: 12px; color: {color}; padding-left: 8px; font-weight: 600;")
+        cal_lbl  = QLabel(f"●  {cal_name}"); cal_lbl.setObjectName("evtCalLabel")
+        cal_lbl.setStyleSheet(f"color: {color}; font-size: 12px; "
+                              f"padding-left: 8px; font-weight: 600;")
         layout.addWidget(cal_lbl)
 
         memo = ev.get("description", "").strip()
         if memo:
-            sep_l = QFrame(); sep_l.setFrameShape(QFrame.HLine)
+            sep_l = QFrame(); sep_l.setObjectName("evtSep"); sep_l.setFixedHeight(1)
             layout.addWidget(sep_l)
-            memo_lbl = QLabel(memo)
-            memo_lbl.setStyleSheet("font-size: 12px; color: #999; padding-left: 8px;")
+            memo_lbl = QLabel(memo); memo_lbl.setObjectName("evtMemo")
             memo_lbl.setWordWrap(True); layout.addWidget(memo_lbl)
 
         layout.addStretch()
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); layout.addWidget(sep)
+        sep = QFrame(); sep.setObjectName("evtSep"); sep.setFixedHeight(1)
+        layout.addWidget(sep)
 
-        btn_row = QHBoxLayout()
-        btn_edit = QPushButton(f"✏  {tr('編集')}")
-        btn_edit.setObjectName("secondaryActionBtn"); btn_edit.setFixedHeight(32)
-        btn_edit.setCursor(Qt.PointingHandCursor); btn_edit.clicked.connect(self._switch_to_edit)
-        btn_del = QPushButton(f"🗑  {tr('削除')}")
-        btn_del.setObjectName("deleteBtnDlg"); btn_del.setFixedHeight(32)
-        btn_del.setCursor(Qt.PointingHandCursor); btn_del.clicked.connect(self._on_delete)
-        btn_close = QPushButton(tr("閉じる"))
-        btn_close.setObjectName("primaryActionBtn"); btn_close.setFixedHeight(32)
-        btn_close.setCursor(Qt.PointingHandCursor); btn_close.clicked.connect(self.reject)
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        btn_edit  = LeeButton(f"✏  {tr('編集')}",  variant="secondary",   size="md")
+        btn_del   = LeeButton(f"🗑  {tr('削除')}",  variant="destructive", size="md")
+        btn_close = LeeButton(tr("閉じる"),         variant="primary",     size="md")
+        btn_edit.clicked.connect(self._switch_to_edit)
+        btn_del.clicked.connect(self._on_delete)
+        btn_close.clicked.connect(self.reject)
         btn_row.addWidget(btn_edit); btn_row.addWidget(btn_del)
         btn_row.addStretch(); btn_row.addWidget(btn_close)
         layout.addLayout(btn_row)
+
+        self._apply_detail_qss(w)
         return w
+
+    def _apply_detail_qss(self, w: QWidget):
+        from app.ui.theme import TOKENS_DARK, TOKENS_LIGHT
+        t = TOKENS_DARK if self._is_dark else TOKENS_LIGHT
+        w.setStyleSheet(f"""
+            QWidget#evtDetailPage {{ background: {t['bg_surface']}; }}
+            QLabel#evtTitle {{
+                color: {t['fg_primary']};
+                font-size: 16px; font-weight: 700;
+                padding-left: 4px;
+                background: transparent;
+            }}
+            QLabel#evtTime {{
+                color: {t['fg_secondary']};
+                font-size: 13px; padding-left: 8px;
+                background: transparent;
+            }}
+            QLabel#evtMemo {{
+                color: {t['fg_secondary']};
+                font-size: 12px; padding-left: 8px;
+                background: transparent;
+            }}
+            QFrame#evtSep {{
+                background: {t['border_subtle']};
+                border: none;
+            }}
+        """)
 
     def _build_edit_page(self) -> QWidget:
         self._edit_panel = EventEditPanel()
@@ -1328,56 +1708,58 @@ class EventDetailDialog(QDialog):
     def _switch_to_edit(self):
         self._edit_panel.load_event(self._ev, self._calendars)
         self._stack.setCurrentIndex(1)
-        self.setWindowTitle(tr("イベントを編集")); self.adjustSize()
+        self.adjustSize()
 
     def _on_save(self, cal_id: str, body: dict, event_id: str):
         self.event_saved.emit(cal_id, body, event_id); self.accept()
 
     def _on_delete(self):
         title = self._ev.get("summary", "")
-        if QMessageBox.question(
-            self, tr("削除の確認"),
+        is_recurring = bool(self._ev.get("recurringEventId") or self._ev.get("recurrence"))
+        if is_recurring:
+            # 반복 이벤트: LeeDialog 로 3 옵션 confirm
+            dlg = LeeDialog(tr("繰り返しイベントの削除"), kind="question", parent=self)
+            dlg.set_message(tr("「{0}」 (繰り返し) を削除します。\n\n"
+                               "どの範囲を削除しますか?").format(title))
+            dlg.add_button(tr("キャンセル"), variant="ghost", role="reject")
+            # accept 시 self._delete_mode 에 결과 저장
+            self._delete_mode: str = ""
+            def _set_mode(m):
+                self._delete_mode = m
+                dlg.accept()
+            b1 = dlg.add_button(tr("このイベントのみ"),     variant="secondary", role="accept")
+            b2 = dlg.add_button(tr("以降すべて"),         variant="secondary", role="accept")
+            b3 = dlg.add_button(tr("シリーズ全体"),       variant="destructive", role="accept")
+            # 기본 connect 를 끊고 모드 세팅
+            try:
+                b1.clicked.disconnect(); b2.clicked.disconnect(); b3.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            b1.clicked.connect(lambda: _set_mode("this"))
+            b2.clicked.connect(lambda: _set_mode("future"))
+            b3.clicked.connect(lambda: _set_mode("all"))
+            if dlg.exec() == QDialog.Accepted and getattr(self, "_delete_mode", ""):
+                cal_id = self._ev.get("_calendar_id", "primary")
+                if self._delete_mode == "all":
+                    # 시리즈 전체 — 부모 ID 사용
+                    eid = self._ev.get("recurringEventId") or self._ev.get("id", "")
+                else:
+                    # this / future — 단일 인스턴스 ID
+                    eid = self._ev.get("id", "")
+                self.event_deleted.emit(cal_id, eid)
+                self.accept()
+            return
+
+        if LeeDialog.confirm(
+            tr("削除の確認"),
             tr("「{0}」を削除しますか？").format(title),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        ) == QMessageBox.StandardButton.Yes:
+            ok_text=tr("削除"),
+            destructive=True,
+            parent=self,
+        ):
             self.event_deleted.emit(
                 self._ev.get("_calendar_id", "primary"), self._ev.get("id", ""))
             self.accept()
-
-    def _apply_theme(self):
-        d = self._is_dark
-        pc = UIColors.get_panel_colors(d)
-        bg = pc["bg"]
-        bd = pc["border"]
-        txt = pc["text"]
-        accent = UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT
-        self.setStyleSheet(f"""
-            QDialog, QWidget {{ background: {bg}; color: {txt}; }}
-            QFrame {{ border: none; }}
-            QFrame[frameShape="4"] {{ border-top: 1px solid {bd}; }}
-            QPushButton#primaryActionBtn {{
-                background: {accent}; color: #fff; border: none;
-                border-radius: 4px; padding: 0 16px; font-weight: bold; }}
-            QPushButton#primaryActionBtn:hover {{ background: {'#1177bb' if d else '#1976d2'}; }}
-            QPushButton#secondaryActionBtn {{
-                background: {'#3e3e42' if d else '#e0e0e0'}; color: {txt};
-                border: none; border-radius: 4px; padding: 0 12px; }}
-            QPushButton#secondaryActionBtn:hover {{ background: {'#505055' if d else '#d0d0d0'}; }}
-            QPushButton#deleteBtnDlg {{
-                background: #3d1111; color: #ff6b6b;
-                border: 1px solid #5c1a1a; border-radius: 4px; padding: 0 12px; }}
-            QPushButton#deleteBtnDlg:hover {{ background: #5c1a1a; }}
-            QLineEdit, QTextEdit, QDateTimeEdit {{
-                background: {'#2d2d2d' if d else '#ffffff'};
-                border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
-            QLineEdit:focus, QTextEdit:focus, QDateTimeEdit:focus {{ border: 1px solid {accent}; }}
-            QComboBox {{
-                background: {'#3d3d3d' if d else '#ffffff'};
-                border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
-            QComboBox:focus {{ border: 1px solid {accent}; }}
-            QCheckBox {{ color: {txt}; }}
-        """)
-
 
 # ── EventEditPanel ────────────────────────────────────────────────────────────
 
@@ -1388,23 +1770,25 @@ class EventEditPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._calendars = []; self._editing_event = None
+        self.setObjectName("evtEditPanel")
         self._build_ui()
+        self._apply_qss()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16); layout.setSpacing(12)
 
         title_lbl = QLabel(tr("イベントを編集"))
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
+        title_lbl.setObjectName("evtEditTitle")
         layout.addWidget(title_lbl)
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); layout.addWidget(sep)
+        sep = QFrame(); sep.setObjectName("evtEditSep"); sep.setFixedHeight(1)
+        layout.addWidget(sep)
 
         form_w = QWidget(); form = QVBoxLayout(form_w); form.setSpacing(10)
 
         def _row(lbl_txt, widget):
-            row = QHBoxLayout(); lbl = QLabel(lbl_txt)
+            row = QHBoxLayout(); lbl = QLabel(lbl_txt); lbl.setObjectName("evtEditRowLabel")
             lbl.setFixedWidth(70); lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            lbl.setStyleSheet("color: #888; font-size: 12px;")
             row.addWidget(lbl); row.addWidget(widget); form.addLayout(row)
 
         self.edit_title = QLineEdit()
@@ -1417,15 +1801,44 @@ class EventEditPanel(QWidget):
         self.chk_allday = QCheckBox(tr("終日イベント"))
         self.chk_allday.toggled.connect(self._toggle_allday); form.addWidget(self.chk_allday)
 
+        # Phase 6 — 디자인 시스템 톤의 popup 적용
+        from app.ui.components.mini_calendar import LeeMiniCalendar as _MC
+
         self.edit_start = QDateTimeEdit()
         self.edit_start.setDisplayFormat("yyyy/MM/dd  HH:mm"); self.edit_start.setFixedHeight(34)
         self.edit_start.setCalendarPopup(True)
+        try: self.edit_start.setCalendarWidget(_MC(accent=_C_CAL))
+        except Exception: pass
         self.edit_start.setDateTime(QDateTime.currentDateTime()); _row(tr("開始:"), self.edit_start)
 
         self.edit_end = QDateTimeEdit()
         self.edit_end.setDisplayFormat("yyyy/MM/dd  HH:mm"); self.edit_end.setFixedHeight(34)
         self.edit_end.setCalendarPopup(True)
+        try: self.edit_end.setCalendarWidget(_MC(accent=_C_CAL))
+        except Exception: pass
         self.edit_end.setDateTime(QDateTime.currentDateTime().addSecs(3600)); _row(tr("終了:"), self.edit_end)
+
+        self.edit_location = QLineEdit()
+        self.edit_location.setPlaceholderText(tr("場所 (任意)")); self.edit_location.setFixedHeight(34)
+        _row(tr("場所:"), self.edit_location)
+
+        # 반복
+        self.cmb_recur = QComboBox(); self.cmb_recur.setFixedHeight(34)
+        self.cmb_recur.addItem(tr("なし"),       "")
+        self.cmb_recur.addItem(tr("毎日"),       "RRULE:FREQ=DAILY")
+        self.cmb_recur.addItem(tr("毎週"),       "RRULE:FREQ=WEEKLY")
+        self.cmb_recur.addItem(tr("毎月"),       "RRULE:FREQ=MONTHLY")
+        self.cmb_recur.addItem(tr("毎年"),       "RRULE:FREQ=YEARLY")
+        _row(tr("繰り返し:"), self.cmb_recur)
+
+        # 알림
+        self.cmb_reminder = QComboBox(); self.cmb_reminder.setFixedHeight(34)
+        self.cmb_reminder.addItem(tr("なし"),     -1)
+        self.cmb_reminder.addItem(tr("10分前"),  10)
+        self.cmb_reminder.addItem(tr("30分前"),  30)
+        self.cmb_reminder.addItem(tr("1時間前"), 60)
+        self.cmb_reminder.addItem(tr("1日前"),   1440)
+        _row(tr("通知:"), self.cmb_reminder)
 
         self.edit_memo = QTextEdit()
         self.edit_memo.setPlaceholderText(tr("メモ・詳細 (任意)")); self.edit_memo.setFixedHeight(80)
@@ -1433,15 +1846,47 @@ class EventEditPanel(QWidget):
 
         layout.addWidget(form_w); layout.addStretch()
 
-        btn_row = QHBoxLayout()
-        self.btn_save = QPushButton(tr("保存")); self.btn_save.setObjectName("primaryActionBtn")
-        self.btn_save.setFixedHeight(34); self.btn_save.setCursor(Qt.PointingHandCursor)
-        self.btn_save.clicked.connect(self._on_save)
-        self.btn_cancel = QPushButton(tr("キャンセル")); self.btn_cancel.setObjectName("secondaryActionBtn")
-        self.btn_cancel.setFixedHeight(34); self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        self.btn_cancel = LeeButton(tr("キャンセル"), variant="secondary", size="md")
         self.btn_cancel.clicked.connect(self.cancel_requested.emit)
+        self.btn_save = LeeButton(tr("保存"), variant="primary", size="md")
+        self.btn_save.clicked.connect(self._on_save)
         btn_row.addStretch(); btn_row.addWidget(self.btn_cancel); btn_row.addWidget(self.btn_save)
         layout.addLayout(btn_row)
+
+    def _apply_qss(self):
+        from app.ui.theme import ThemeManager, TOKENS_DARK, TOKENS_LIGHT
+        d = ThemeManager.instance().is_dark()
+        t = TOKENS_DARK if d else TOKENS_LIGHT
+        self.setStyleSheet(f"""
+            QWidget#evtEditPanel {{ background: {t['bg_surface']}; }}
+            QLabel#evtEditTitle {{
+                color: {t['fg_primary']};
+                font-size: 15px; font-weight: 700;
+                background: transparent;
+            }}
+            QLabel#evtEditRowLabel {{
+                color: {t['fg_tertiary']};
+                font-size: 12px;
+                background: transparent;
+            }}
+            QFrame#evtEditSep {{
+                background: {t['border_subtle']};
+                border: none;
+            }}
+            QLineEdit, QTextEdit, QDateTimeEdit, QComboBox {{
+                background: {t['bg_input']};
+                color: {t['fg_primary']};
+                border: 1px solid {t['border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus, QTextEdit:focus,
+            QDateTimeEdit:focus, QComboBox:focus {{
+                border: 1px solid {t['accent']};
+            }}
+            QCheckBox {{ color: {t['fg_primary']}; background: transparent; }}
+        """)
 
     def _toggle_allday(self, checked: bool):
         fmt = "yyyy/MM/dd" if checked else "yyyy/MM/dd  HH:mm"
@@ -1463,7 +1908,10 @@ class EventEditPanel(QWidget):
                     self.cmb_calendar.setCurrentIndex(i)
                     break
             self.edit_title.clear(); self.edit_memo.clear()
+            self.edit_location.clear()
             self.chk_allday.setChecked(False)
+            self.cmb_recur.setCurrentIndex(0)
+            self.cmb_reminder.setCurrentIndex(0)
             base_date = default_date or QDate.currentDate()
             if default_start_min is not None:
                 s_h, s_m = divmod(default_start_min, 60)
@@ -1477,6 +1925,31 @@ class EventEditPanel(QWidget):
         else:
             self.edit_title.setText(event.get("summary", ""))
             self.edit_memo.setText(event.get("description", ""))
+            self.edit_location.setText(event.get("location", ""))
+            # 반복 — recurrence 배열에서 RRULE 첫 줄만 추출
+            recur = event.get("recurrence", [])
+            recur_value = ""
+            if recur:
+                for r in recur:
+                    if r.startswith("RRULE:"):
+                        # 단순 매칭 — FREQ 값만 비교
+                        for i in range(self.cmb_recur.count()):
+                            stored = self.cmb_recur.itemData(i)
+                            if stored and stored in r:
+                                recur_value = stored; break
+                        break
+            for i in range(self.cmb_recur.count()):
+                if self.cmb_recur.itemData(i) == recur_value:
+                    self.cmb_recur.setCurrentIndex(i); break
+            # 알림 — reminders.overrides 첫 항목
+            reminders = event.get("reminders", {}) or {}
+            overrides = reminders.get("overrides") or []
+            r_minutes = -1
+            if overrides:
+                r_minutes = overrides[0].get("minutes", -1)
+            for i in range(self.cmb_reminder.count()):
+                if self.cmb_reminder.itemData(i) == r_minutes:
+                    self.cmb_reminder.setCurrentIndex(i); break
             start = event.get("start", {}); end = event.get("end", {})
             if "date" in start:
                 self.chk_allday.setChecked(True)
@@ -1496,7 +1969,7 @@ class EventEditPanel(QWidget):
     def _on_save(self):
         title = self.edit_title.text().strip()
         if not title:
-            QMessageBox.warning(self, tr("エラー"), tr("タイトルを入力してください。")); return
+            LeeDialog.error(tr("エラー"), tr("タイトルを入力してください。"), parent=self); return
         cal_id = self.cmb_calendar.currentData() or ""
         if not cal_id and self._calendars:
             cal_id = self._calendars[0].get("id", "primary")
@@ -1506,6 +1979,7 @@ class EventEditPanel(QWidget):
             body = {
                 "summary":     title,
                 "description": self.edit_memo.toPlainText(),
+                "location":    self.edit_location.text().strip(),
                 "start": {"date": self.edit_start.date().toString(Qt.ISODate)},
                 "end":   {"date": self.edit_end.date().addDays(1).toString(Qt.ISODate)},
             }
@@ -1515,14 +1989,31 @@ class EventEditPanel(QWidget):
             body = {
                 "summary":     title,
                 "description": self.edit_memo.toPlainText(),
+                "location":    self.edit_location.text().strip(),
                 "start": {"dateTime": f"{s}{tz_str}"},
                 "end":   {"dateTime": f"{e}{tz_str}"},
             }
+        # 반복
+        recur_rule = self.cmb_recur.currentData()
+        if recur_rule:
+            body["recurrence"] = [recur_rule]
+        # 알림 — overrides 가 빈 list 면 useDefault, 아니면 popup 알림
+        r_minutes = self.cmb_reminder.currentData()
+        if isinstance(r_minutes, int) and r_minutes >= 0:
+            body["reminders"] = {
+                "useDefault": False,
+                "overrides": [{"method": "popup", "minutes": r_minutes}],
+            }
+        else:
+            body["reminders"] = {"useDefault": True}
         event_id = self._editing_event.get("id", "") if self._editing_event else ""
         self.save_requested.emit(cal_id, body, event_id)
 
 
 # ── GoogleCalendarWidget ──────────────────────────────────────────────────────
+
+_C_CAL = "#34C759"   # iOS Green (--c-cal)
+
 
 class GoogleCalendarWidget(BaseWidget):
     def __init__(self):
@@ -1533,7 +2024,8 @@ class GoogleCalendarWidget(BaseWidget):
         self._events: list        = []
         self._event_date_set: set = set()
         today = QDate.currentDate()
-        # 기본: 오늘이 포함된 일요일~토요일 7일 표시
+        # 기본: 주 뷰 (오늘 포함 일~토)
+        self._view_mode: str      = "week"     # "month" | "week" | "day"
         self._sel_start: QDate    = _week_sunday(today)
         self._sel_end:   QDate    = _week_sunday(today).addDays(6)
         self._events_worker       = None
@@ -1559,60 +2051,98 @@ class GoogleCalendarWidget(BaseWidget):
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
-        root.addWidget(self._make_header())
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 22, 28, 22); outer.setSpacing(14)
+
+        # 1) DetailHeader
+        self._header = LeeDetailHeader(
+            title=tr("Google カレンダー"),
+            subtitle=tr("予定の管理 · 月 / 週 / 日"),
+            accent=_C_CAL,
+            icon_qicon=QIcon(":/img/calendar.svg"),
+            badge=None,
+            show_export=False,
+        )
+        self._header.back_clicked.connect(lambda: bus.page_requested.emit(0))
+        outer.addWidget(self._header)
+
+        # 2) 툴바 (← / 今日 / → / 라벨 / 뷰 segment / + 신규 / 갱신)
+        toolbar = QFrame(); toolbar.setObjectName("calToolbar")
+        tl = QHBoxLayout(toolbar); tl.setContentsMargins(14, 10, 14, 10); tl.setSpacing(6)
+        outer.addWidget(toolbar)
+
+        self._btn_prev = LeeButton("◀", variant="secondary", size="sm")
+        self._btn_prev.setFixedWidth(34)
+        self._btn_prev.clicked.connect(lambda: self._navigate(-1))
+        tl.addWidget(self._btn_prev)
+
+        self._btn_today = LeeButton(tr("今日"), variant="secondary", size="sm")
+        self._btn_today.clicked.connect(self._goto_today)
+        tl.addWidget(self._btn_today)
+
+        self._btn_next = LeeButton("▶", variant="secondary", size="sm")
+        self._btn_next.setFixedWidth(34)
+        self._btn_next.clicked.connect(lambda: self._navigate(1))
+        tl.addWidget(self._btn_next)
+
+        self._range_lbl = QLabel("")
+        self._range_lbl.setObjectName("calRangeLbl")
+        tl.addWidget(self._range_lbl)
+        tl.addStretch()
+
+        self._view_seg = LeeSegment(
+            [("month", tr("月")), ("week", tr("週")), ("day", tr("日"))],
+            value="week", accent=_C_CAL,
+        )
+        self._view_seg.value_changed.connect(self._on_view_changed)
+        tl.addWidget(self._view_seg)
+
+        self._status_pill = LeePill("", variant="info")
+        tl.addWidget(self._status_pill)
+        self._status_pill.setVisible(False)
+
+        self._btn_refresh = LeeButton("↻  " + tr("更新"), variant="secondary", size="sm")
+        self._btn_refresh.clicked.connect(self._refresh_events)
+        tl.addWidget(self._btn_refresh)
+
+        self._btn_new = LeeButton("＋  " + tr("新規"), variant="primary", size="sm")
+        self._btn_new.clicked.connect(self._on_new_event)
+        tl.addWidget(self._btn_new)
+
+        # 3) 외곽 카드 + splitter
+        outer_card = QFrame(); outer_card.setObjectName("calOuterCard")
+        oc = QVBoxLayout(outer_card); oc.setContentsMargins(0, 0, 0, 0); oc.setSpacing(0)
+        outer.addWidget(outer_card, 1)
+        self._outer_card = outer_card
 
         splitter = QSplitter(Qt.Horizontal); splitter.setHandleWidth(1)
+        oc.addWidget(splitter, 1)
+
+        # 좌측 패널
         left = self._build_left_panel()
         self._mini_cal.month_changed.connect(self._on_month_changed)
         self._mini_cal.range_selected.connect(self._on_range_selected)
         splitter.addWidget(left)
 
+        # 우측 — 뷰 스택 (month / multi_day / edit panel)
         self._right_stack = QStackedWidget()
-        self._right_stack.addWidget(self._build_event_view())
-        self._right_stack.addWidget(self._build_edit_panel())
+        self._right_stack.addWidget(self._build_event_view())     # idx 0: 월/주/일 뷰 컨테이너
+        self._right_stack.addWidget(self._build_edit_panel())     # idx 1: edit panel
         splitter.addWidget(self._right_stack)
-        splitter.setSizes([230, 500])
+        splitter.setSizes([220, 800])
         splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter, 1)
 
+        # 미인증 오버레이
         self._auth_overlay = self._build_auth_overlay()
-        root.addWidget(self._auth_overlay); self._auth_overlay.hide()
+        outer.addWidget(self._auth_overlay); self._auth_overlay.setVisible(False)
 
-    def _make_header(self) -> QWidget:
-        hdr = QFrame(); hdr.setObjectName("calHdr")
-        hrow = QHBoxLayout(hdr)
-        hrow.setContentsMargins(16, 10, 16, 10); hrow.setSpacing(8)
-
-        icon_lbl  = QLabel("📅"); icon_lbl.setStyleSheet("font-size: 18px;")
-        title_lbl = QLabel(tr("Google カレンダー"))
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
-        self._status_lbl = QLabel()
-        self._status_lbl.setStyleSheet("color: #888; font-size: 12px;")
-
-        self._btn_today = QPushButton(tr("今日")); self._btn_today.setObjectName("todayBtn")
-        self._btn_today.setFixedSize(52, 30); self._btn_today.setCursor(Qt.PointingHandCursor)
-        self._btn_today.clicked.connect(self._goto_today)
-
-        self._btn_refresh = QPushButton(tr("🔄 更新"))
-        self._btn_refresh.setObjectName("secondaryActionBtn"); self._btn_refresh.setFixedHeight(30)
-        self._btn_refresh.setCursor(Qt.PointingHandCursor)
-        self._btn_refresh.clicked.connect(self._refresh_events)
-
-        self._btn_new = QPushButton(f"＋  {tr('新規イベント')}")
-        self._btn_new.setObjectName("primaryActionBtn"); self._btn_new.setFixedHeight(30)
-        self._btn_new.setCursor(Qt.PointingHandCursor); self._btn_new.clicked.connect(self._on_new_event)
-
-        hrow.addWidget(icon_lbl); hrow.addWidget(title_lbl); hrow.addWidget(self._status_lbl)
-        hrow.addStretch(); hrow.addWidget(self._btn_today)
-        hrow.addWidget(self._btn_refresh); hrow.addWidget(self._btn_new)
-        return hdr
+        self._update_range_label()
 
     def _build_left_panel(self) -> QWidget:
-        w = QWidget(); w.setMinimumWidth(210); w.setMaximumWidth(260)
+        w = QFrame(); w.setObjectName("calLeftPane")
+        w.setMinimumWidth(210); w.setMaximumWidth(260)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(8, 8, 8, 8); layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10); layout.setSpacing(8)
 
         self._mini_cal = MiniCalendarWidget(); layout.addWidget(self._mini_cal)
         sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setStyleSheet("color: #333;")
@@ -1632,23 +2162,44 @@ class GoogleCalendarWidget(BaseWidget):
         return w
 
     def _build_event_view(self) -> QWidget:
+        """월/주/일 뷰를 담는 컨테이너 (내부 stack 으로 전환)."""
         w = QWidget(); layout = QVBoxLayout(w)
         layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+
+        self._view_stack = QStackedWidget(w)
+        layout.addWidget(self._view_stack, 1)
+
+        # idx 0: Month View
+        self._month_view = _MonthView()
+        self._month_view.event_clicked.connect(self._on_event_card_clicked)
+        self._month_view.event_dropped.connect(self._on_event_dropped_month)
+        self._month_view.event_copied.connect(self._on_event_copied_month)
+        self._month_view.create_requested.connect(self._on_create_at_time)
+        self._view_stack.addWidget(self._month_view)
+
+        # idx 1: Multi-Day View (week / day 공유)
+        multi_wrap = QWidget()
+        mw = QVBoxLayout(multi_wrap); mw.setContentsMargins(0, 0, 0, 0); mw.setSpacing(0)
 
         self._week_strip = _WeekStrip()
         self._week_strip.set_range(self._sel_start, self._sel_end)
         self._week_strip.date_clicked.connect(self._on_strip_clicked)
-        layout.addWidget(self._week_strip)
+        mw.addWidget(self._week_strip)
 
         strip_sep = QFrame(); strip_sep.setObjectName("stripSep")
-        strip_sep.setFrameShape(QFrame.HLine); layout.addWidget(strip_sep)
+        strip_sep.setFrameShape(QFrame.HLine); mw.addWidget(strip_sep)
 
-        self._multi_day_view = _MultiDayView(w)
+        self._multi_day_view = _MultiDayView(multi_wrap)
         self._multi_day_view.event_clicked.connect(self._on_event_card_clicked)
         self._multi_day_view.event_dropped.connect(self._on_event_dropped_timed)
+        self._multi_day_view.event_copied.connect(self._on_event_copied_timed)
         self._multi_day_view.event_resized.connect(self._on_event_resized_timed)
         self._multi_day_view.create_requested.connect(self._on_create_at_time)
-        layout.addWidget(self._multi_day_view, 1)
+        mw.addWidget(self._multi_day_view, 1)
+        self._view_stack.addWidget(multi_wrap)
+
+        # 초기: 주 뷰
+        self._view_stack.setCurrentIndex(1)
         return w
 
     def _build_edit_panel(self) -> EventEditPanel:
@@ -1658,11 +2209,12 @@ class GoogleCalendarWidget(BaseWidget):
         return panel
 
     def _build_auth_overlay(self) -> QFrame:
-        overlay = QFrame(); layout = QVBoxLayout(overlay); layout.setAlignment(Qt.AlignCenter)
+        overlay = QFrame(); overlay.setObjectName("calAuthOverlay")
+        layout = QVBoxLayout(overlay); layout.setAlignment(Qt.AlignCenter); layout.setSpacing(8)
         lbl = QLabel("🔑  " + tr("Google 認証が必要です"))
-        lbl.setStyleSheet("font-size: 15px; color: #aaa;"); lbl.setAlignment(Qt.AlignCenter)
+        lbl.setObjectName("calAuthLbl"); lbl.setAlignment(Qt.AlignCenter)
         sub = QLabel(tr("設定画面から Google アカウントで認証してください。"))
-        sub.setStyleSheet("font-size: 12px; color: #666;"); sub.setAlignment(Qt.AlignCenter)
+        sub.setObjectName("calAuthSub"); sub.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl); layout.addWidget(sub)
         return overlay
 
@@ -1671,10 +2223,10 @@ class GoogleCalendarWidget(BaseWidget):
     def _check_auth_and_load(self):
         from app.api.google.auth import is_authenticated
         if is_authenticated():
-            self._auth_overlay.hide(); self._refresh_calendars()
+            self._auth_overlay.setVisible(False); self._outer_card.setVisible(True); self._refresh_calendars()
             self._start_auto_timer()
         else:
-            self._auth_overlay.show()
+            self._auth_overlay.setVisible(True); self._outer_card.setVisible(False)
 
     def _start_auto_timer(self):
         interval_min = self.settings.get("calendar_auto_refresh_interval", 15)
@@ -1688,7 +2240,7 @@ class GoogleCalendarWidget(BaseWidget):
 
     def _refresh_calendars(self):
         from app.api.google.calendar import FetchCalendarListWorker
-        self._status_lbl.setText(tr("読込中..."))
+        self._set_status(tr("読込中..."))
         w = FetchCalendarListWorker()
         w.data_fetched.connect(self._on_calendars_fetched)
         w.error.connect(self._on_error); w.finished.connect(w.deleteLater)
@@ -1702,21 +2254,49 @@ class GoogleCalendarWidget(BaseWidget):
 
         if not self._cal_enabled:
             self._events = []; self._event_date_set.clear()
-            self._status_lbl.setText("")
+            self._set_status("")
             self._week_strip.set_event_dates(set())
-            self._multi_day_view.update_view(
-                self._sel_start, self._sel_end, [], self._cal_colors)
+            self._render_view()
             return
 
-        from app.api.google.calendar import FetchEventsWorker, make_time_range
-        self._status_lbl.setText(tr("読込中..."))
+        from app.api.google.calendar import FetchEventsWorker
+        self._set_status(tr("読込中..."))
         self.set_loading(True, self._multi_day_view)
-        time_min, time_max = make_time_range(self._sel_start)
+        time_min, time_max = self._current_time_range()
         w = FetchEventsWorker(list(self._cal_enabled), time_min, time_max)
         w.data_fetched.connect(self._on_events_fetched)
         w.error.connect(self._on_error); w.finished.connect(w.deleteLater)
         w.finished.connect(lambda: setattr(self, '_events_worker', None))
         w.start(); self._events_worker = w; self.track_worker(w)
+
+    def _current_time_range(self) -> tuple[str, str]:
+        """뷰 모드별 ISO 시간 범위 — 월뷰는 표시되는 6주 영역, 주/일뷰는 sel_start~sel_end."""
+        from datetime import date as _date, timedelta
+        if self._view_mode == "month":
+            first = QDate(self._sel_start.year(), self._sel_start.month(), 1)
+            start_col = (first.dayOfWeek() - 1) % 7
+            grid_start = first.addDays(-start_col)
+            grid_end = grid_start.addDays(42)
+            t_min = datetime(grid_start.year(), grid_start.month(), grid_start.day(),
+                             tzinfo=timezone.utc)
+            t_max = datetime(grid_end.year(), grid_end.month(), grid_end.day(),
+                             tzinfo=timezone.utc)
+        else:
+            s, e = self._sel_start, self._sel_end
+            t_min = datetime(s.year(), s.month(), s.day(), tzinfo=timezone.utc)
+            t_max = datetime(e.year(), e.month(), e.day(), tzinfo=timezone.utc) + \
+                    timedelta(days=1)
+        return (
+            t_min.isoformat().replace("+00:00", "Z"),
+            t_max.isoformat().replace("+00:00", "Z"),
+        )
+
+    def _set_status(self, text: str) -> None:
+        if text:
+            self._status_pill.setText(text)
+            self._status_pill.setVisible(True)
+        else:
+            self._status_pill.setVisible(False)
 
     def _save_enabled_calendars(self):
         from app.core.config import load_settings, save_settings
@@ -1786,7 +2366,7 @@ class GoogleCalendarWidget(BaseWidget):
                 logger.debug(f"イベント日付セット構築失敗: {e}")
         self._event_date_set = ev_dates
         cnt = len(events)
-        self._status_lbl.setText(tr("{0}件のイベント").format(cnt) if cnt else tr("イベントなし"))
+        self._set_status(tr("{0} 件").format(cnt) if cnt else "")
         self._mini_cal.set_events(events, self._cal_colors)
         self._week_strip.set_event_dates(ev_dates)
         self._render_view()
@@ -1794,8 +2374,15 @@ class GoogleCalendarWidget(BaseWidget):
     def _render_view(self):
         self._week_strip.set_range(self._sel_start, self._sel_end)
         self._mini_cal.set_range(self._sel_start, self._sel_end)
-        self._multi_day_view.update_view(
-            self._sel_start, self._sel_end, self._events, self._cal_colors)
+        self._update_range_label()
+        if self._view_mode == "month":
+            self._month_view.update_view(
+                self._sel_start.year(), self._sel_start.month(),
+                self._events, self._cal_colors,
+            )
+        else:
+            self._multi_day_view.update_view(
+                self._sel_start, self._sel_end, self._events, self._cal_colors)
 
     def _on_event_card_clicked(self, ev: dict):
         dlg = EventDetailDialog(ev, self._cal_colors, self._calendars,
@@ -1843,19 +2430,89 @@ class GoogleCalendarWidget(BaseWidget):
         self._nav_timer.start()
 
     def _goto_today(self):
-        today      = QDate.currentDate()
-        week_start = _week_sunday(today)
-        week_end   = week_start.addDays(6)
+        today = QDate.currentDate()
         prev = self._sel_start
-        self._sel_start = week_start; self._sel_end = week_end
-        self._mini_cal._sel_start = week_start; self._mini_cal._sel_end = week_end
-        self._mini_cal._current_year  = today.year()
+        if self._view_mode == "month":
+            self._sel_start = QDate(today.year(), today.month(), 1)
+            self._sel_end = QDate(today.year(), today.month(),
+                                   self._sel_start.daysInMonth())
+        elif self._view_mode == "day":
+            self._sel_start = today; self._sel_end = today
+        else:
+            self._sel_start = _week_sunday(today)
+            self._sel_end = self._sel_start.addDays(6)
+        self._mini_cal._sel_start = self._sel_start
+        self._mini_cal._sel_end = self._sel_end
+        self._mini_cal._current_year = today.year()
         self._mini_cal._current_month = today.month()
-        self._mini_cal.update(); self._week_strip.set_range(week_start, week_end)
+        self._mini_cal.update()
+        self._week_strip.set_range(self._sel_start, self._sel_end)
+        self._update_range_label()
         if today.year() != prev.year() or today.month() != prev.month():
             self._refresh_events()
         else:
             self._render_view()
+
+    def _navigate(self, delta: int) -> None:
+        """← / → — 뷰 모드별 네비게이션."""
+        if self._view_mode == "month":
+            new_first = self._sel_start.addMonths(delta)
+            new_first = QDate(new_first.year(), new_first.month(), 1)
+            self._sel_start = new_first
+            self._sel_end = QDate(new_first.year(), new_first.month(), new_first.daysInMonth())
+        elif self._view_mode == "day":
+            self._sel_start = self._sel_start.addDays(delta)
+            self._sel_end = self._sel_start
+        else:
+            new_start = self._sel_start.addDays(delta * 7)
+            self._sel_start = new_start
+            self._sel_end = new_start.addDays(6)
+        self._mini_cal._sel_start = self._sel_start
+        self._mini_cal._sel_end = self._sel_end
+        self._mini_cal._current_year = self._sel_start.year()
+        self._mini_cal._current_month = self._sel_start.month()
+        self._mini_cal.update()
+        self._week_strip.set_range(self._sel_start, self._sel_end)
+        self._update_range_label()
+        self._refresh_events()
+
+    def _on_view_changed(self, key: str) -> None:
+        """LeeSegment 뷰 변경 — month/week/day."""
+        self._view_mode = key
+        today = QDate.currentDate()
+        anchor = self._sel_start if self._sel_start else today
+        if key == "month":
+            self._sel_start = QDate(anchor.year(), anchor.month(), 1)
+            self._sel_end = QDate(anchor.year(), anchor.month(), self._sel_start.daysInMonth())
+            self._view_stack.setCurrentIndex(0)
+        elif key == "day":
+            d = anchor if anchor else today
+            self._sel_start = d; self._sel_end = d
+            self._view_stack.setCurrentIndex(1)
+        else:   # week
+            self._sel_start = _week_sunday(anchor)
+            self._sel_end = self._sel_start.addDays(6)
+            self._view_stack.setCurrentIndex(1)
+        self._mini_cal._sel_start = self._sel_start
+        self._mini_cal._sel_end = self._sel_end
+        self._mini_cal.update()
+        self._week_strip.set_range(self._sel_start, self._sel_end)
+        self._update_range_label()
+        self._refresh_events()
+
+    def _update_range_label(self) -> None:
+        if self._view_mode == "month":
+            txt = f"{self._sel_start.year()}年 {self._sel_start.month()}月"
+        elif self._view_mode == "day":
+            d = self._sel_start
+            txt = f"{d.year()}年 {d.month()}月 {d.day()}日 ({_DAY_NAMES_JP[d.dayOfWeek() - 1]})"
+        else:
+            s, e = self._sel_start, self._sel_end
+            if s.year() == e.year() and s.month() == e.month():
+                txt = f"{s.year()}年 {s.month()}月 {s.day()} – {e.day()}"
+            else:
+                txt = f"{s.year()}/{s.month():02d}/{s.day():02d} – {e.year()}/{e.month():02d}/{e.day():02d}"
+        self._range_lbl.setText(txt)
 
     def _on_cal_toggled(self, cal_id: str, enabled: bool):
         if enabled: self._cal_enabled.add(cal_id)
@@ -1938,6 +2595,111 @@ class GoogleCalendarWidget(BaseWidget):
         w.error.connect(self._on_error)
         w.finished.connect(w.deleteLater); w.start(); self.track_worker(w)
 
+    def _on_event_copied_timed(self, ev: dict, new_date: QDate, new_start_min: int):
+        """Ctrl+드래그 복사 (주/일 뷰) — 시간 영역 드롭 → CreateEvent."""
+        body = self._build_clone_body(ev, new_date, new_start_min)
+        if not body:
+            return
+        cal_id = ev.get("_calendar_id", "primary")
+        from app.api.google.calendar import CreateEventWorker
+        w = CreateEventWorker(cal_id, body)
+        w.success.connect(lambda _e: self._refresh_events())
+        w.error.connect(self._on_error)
+        w.finished.connect(w.deleteLater); w.start(); self.track_worker(w)
+
+    def _on_event_dropped_month(self, ev: dict, new_date: QDate, _new_start_min: int):
+        """월뷰 드롭 — 시간 정보 보존, 날짜만 변경."""
+        body = self._build_move_body_preserve_time(ev, new_date)
+        if not body:
+            return
+        cal_id = ev.get("_calendar_id", "primary")
+        event_id = ev.get("id", "")
+        if not event_id:
+            return
+        from app.api.google.calendar import UpdateEventWorker
+        w = UpdateEventWorker(cal_id, event_id, body)
+        w.success.connect(lambda _e: self._refresh_events())
+        w.error.connect(self._on_error)
+        w.finished.connect(w.deleteLater); w.start(); self.track_worker(w)
+
+    def _on_event_copied_month(self, ev: dict, new_date: QDate, _new_start_min: int):
+        """월뷰 Ctrl+드래그 복사."""
+        body = self._build_move_body_preserve_time(ev, new_date)
+        if not body:
+            return
+        # id 제거 — CreateEventWorker 가 새 ID 부여
+        for k in ("id", "iCalUID", "etag", "htmlLink", "created", "updated",
+                  "creator", "organizer", "_calendar_id"):
+            body.pop(k, None)
+        cal_id = ev.get("_calendar_id", "primary")
+        from app.api.google.calendar import CreateEventWorker
+        w = CreateEventWorker(cal_id, body)
+        w.success.connect(lambda _e: self._refresh_events())
+        w.error.connect(self._on_error)
+        w.finished.connect(w.deleteLater); w.start(); self.track_worker(w)
+
+    def _build_clone_body(self, ev: dict, new_date: QDate, new_start_min: int) -> dict:
+        """Ctrl+드래그 복사용 — 새 시작 시간으로 body 생성, id 제거."""
+        from datetime import timedelta
+        start = ev.get("start", {}); end_d = ev.get("end", {})
+        body = {k: v for k, v in ev.items() if not k.startswith("_")}
+        for k in ("id", "iCalUID", "etag", "htmlLink", "created", "updated",
+                  "creator", "organizer", "recurringEventId"):
+            body.pop(k, None)
+        if "date" in start:
+            old_s = QDate.fromString(start["date"], Qt.ISODate)
+            old_e = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+            delta = old_s.daysTo(new_date)
+            body["start"] = {"date": new_date.toString(Qt.ISODate)}
+            body["end"]   = {"date": old_e.addDays(delta).toString(Qt.ISODate)}
+        else:
+            try:
+                s_dt = datetime.fromisoformat(
+                    start["dateTime"].replace("Z", "+00:00")).astimezone()
+                e_dt = datetime.fromisoformat(
+                    end_d["dateTime"].replace("Z", "+00:00")).astimezone()
+                duration = e_dt - s_dt
+                new_h, new_m = divmod(new_start_min, 60)
+                new_s = s_dt.replace(year=new_date.year(), month=new_date.month(),
+                                     day=new_date.day(), hour=new_h, minute=new_m,
+                                     second=0, microsecond=0)
+                new_e = new_s + duration
+                tz_off = new_s.strftime("%z")
+                tz_str = f"{tz_off[:3]}:{tz_off[3:]}" if tz_off else "+00:00"
+                body["start"] = {"dateTime": new_s.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
+                body["end"]   = {"dateTime": new_e.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
+            except Exception as e:
+                logger.error(f"Clone body calc error: {e}"); return {}
+        return body
+
+    def _build_move_body_preserve_time(self, ev: dict, new_date: QDate) -> dict:
+        """월뷰 드롭용 — 시간은 보존, 날짜만 이동."""
+        start = ev.get("start", {}); end_d = ev.get("end", {})
+        body = {k: v for k, v in ev.items() if not k.startswith("_")}
+        if "date" in start:
+            old_s = QDate.fromString(start["date"], Qt.ISODate)
+            old_e = QDate.fromString(end_d.get("date", start["date"]), Qt.ISODate)
+            delta = old_s.daysTo(new_date)
+            body["start"] = {"date": new_date.toString(Qt.ISODate)}
+            body["end"]   = {"date": old_e.addDays(delta).toString(Qt.ISODate)}
+        else:
+            try:
+                s_dt = datetime.fromisoformat(
+                    start["dateTime"].replace("Z", "+00:00")).astimezone()
+                e_dt = datetime.fromisoformat(
+                    end_d["dateTime"].replace("Z", "+00:00")).astimezone()
+                duration = e_dt - s_dt
+                new_s = s_dt.replace(year=new_date.year(), month=new_date.month(),
+                                     day=new_date.day())
+                new_e = new_s + duration
+                tz_off = new_s.strftime("%z")
+                tz_str = f"{tz_off[:3]}:{tz_off[3:]}" if tz_off else "+00:00"
+                body["start"] = {"dateTime": new_s.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
+                body["end"]   = {"dateTime": new_e.strftime("%Y-%m-%dT%H:%M:%S") + tz_str}
+            except Exception as e:
+                logger.error(f"Move body calc error: {e}"); return {}
+        return body
+
     def _on_event_resized_timed(self, ev: dict, new_s_min: int, new_e_min: int):
         """상단/하단 드래그로 이벤트 시간 변경 (15분 스냅)."""
         start    = ev.get("start", {}); end_d = ev.get("end", {})
@@ -1974,67 +2736,134 @@ class GoogleCalendarWidget(BaseWidget):
 
     def _on_error(self, err: str):
         self.set_loading(False, self._multi_day_view)
-        self._status_lbl.setText(tr("エラー")); logger.error(f"Calendar error: {err}")
+        self._set_status(tr("エラー")); logger.error(f"Calendar error: {err}")
 
     def _on_auth_changed(self, authenticated: bool):
         if authenticated:
-            self._auth_overlay.hide(); self._refresh_calendars()
+            self._auth_overlay.setVisible(False); self._outer_card.setVisible(True); self._refresh_calendars()
             self._start_auto_timer()
         else:
-            self._auth_overlay.show()
+            self._auth_overlay.setVisible(True); self._outer_card.setVisible(False)
             self._auto_timer.stop()
             self.set_loading(False, self._multi_day_view)
-            self._multi_day_view.update_view(self._sel_start, self._sel_end, [], {})
-            self._status_lbl.setText("")
+            self._events = []
+            self._render_view()
+            self._set_status("")
+
+    # ── 設定変更 즉시 반영 (bus.settings_saved → _apply_settings_all → 본 hook) ──
+    def apply_settings_custom(self):
+        """settings 변경 시 호출 — 자동 갱신 주기 / 폴링 주기 재적용."""
+        try:
+            from app.api.google.auth import is_authenticated
+            if not is_authenticated():
+                return
+            interval_min = int(self.settings.get("calendar_auto_refresh_interval", 15))
+            new_ms = max(1, interval_min) * 60 * 1000
+            if self._auto_timer.isActive():
+                self._auto_timer.start(new_ms)   # restart with new interval
+        except Exception as e:
+            logger.debug(f"Calendar apply_settings_custom 실패: {e}")
 
     # ── 테마 ──────────────────────────────────────────────────────────────────
 
     def set_theme(self, is_dark: bool):
         self.is_dark = is_dark
+        self._header.set_theme(is_dark)
+        self._view_seg.set_theme(is_dark)
         self._mini_cal.set_theme(is_dark)
         self._week_strip.set_theme(is_dark)
         self._multi_day_view.set_theme(is_dark)
+        self._month_view.set_theme(is_dark)
         self.apply_theme_custom()
 
     def apply_theme_custom(self):
-        d   = self.is_dark
-        pc  = UIColors.get_panel_colors(d)
-        bg  = pc["bg"]
-        bg2 = "#252526" if d else "#f5f5f5"
-        bd  = pc["border"]
-        txt = pc["text"]
-        accent = UIColors.ACCENT_DARK if d else UIColors.ACCENT_LIGHT
+        d = self.is_dark
+        bg_app        = "#0A0B0F" if d else "#F5F6F8"
+        bg_surface    = "#14161C" if d else "#FFFFFF"
+        bg_surface_2  = "#1B1E26" if d else "#F0F2F5"
+        fg_primary    = "#F2F4F7" if d else "#0B1220"
+        fg_secondary  = "#A8B0BD" if d else "#4A5567"
+        fg_tertiary   = "#6B7280" if d else "#8A93A6"
+        border_subtle = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+        border        = "rgba(255,255,255,0.10)" if d else "rgba(11,18,32,0.10)"
+        accent        = _C_CAL
+
         self.setStyleSheet(f"""
-            QWidget {{ background: {bg}; color: {txt}; }}
-            QFrame#calHdr  {{ background: {bg2}; border-bottom: 1px solid {bd}; }}
-            QFrame#stripSep {{ border: none; border-top: 1px solid {bd}; max-height: 1px; }}
-            QFrame#colSep   {{ border: none; border-left: 1px solid {bd}; max-width: 1px; }}
-            QFrame#colHdrSep {{ border: none; border-top: 1px solid {bd}; max-height: 1px; }}
-            QPushButton#primaryActionBtn {{
-                background: {accent}; color: #fff; border: none;
-                border-radius: 4px; padding: 0 14px; font-weight: bold; }}
-            QPushButton#primaryActionBtn:hover {{ background: {'#1177bb' if d else '#1976d2'}; }}
-            QPushButton#todayBtn {{
-                background: {'#3e3e42' if d else '#e8f0fe'};
-                color: {'#e0e0e0' if d else '#1a73e8'};
-                border: 1px solid {bd};
-                border-radius: 4px; font-weight: bold; }}
-            QPushButton#todayBtn:hover {{ background: {'#505055' if d else '#d2e3fc'}; }}
-            QPushButton#secondaryActionBtn {{
-                background: {'#3e3e42' if d else '#e0e0e0'};
-                color: {txt}; border: none; border-radius: 4px; padding: 0 12px; }}
-            QPushButton#secondaryActionBtn:hover {{ background: {'#505055' if d else '#d0d0d0'}; }}
+            QFrame#calToolbar {{
+                background: {bg_surface};
+                border: 1px solid {border_subtle};
+                border-radius: 14px;
+            }}
+            QLabel#calRangeLbl {{
+                color: {fg_primary}; background: transparent;
+                font-size: 14px; font-weight: 800;
+                padding: 0 12px;
+            }}
+            QFrame#calOuterCard {{
+                background: {bg_surface};
+                border: 1px solid {border_subtle};
+                border-radius: 16px;
+            }}
+            QFrame#calLeftPane {{
+                background: {bg_surface_2};
+                border-top-left-radius: 16px;
+                border-bottom-left-radius: 16px;
+            }}
+            QFrame#calAuthOverlay {{
+                background: {bg_surface};
+                border: 1px solid {border_subtle};
+                border-radius: 16px;
+            }}
+            QLabel#calAuthLbl {{
+                color: {fg_secondary}; background: transparent;
+                font-size: 15px; font-weight: 700;
+            }}
+            QLabel#calAuthSub {{
+                color: {fg_tertiary}; background: transparent;
+                font-size: 12px;
+            }}
+            QFrame#stripSep, QFrame#colHdrSep {{
+                border: none; border-top: 1px solid {border_subtle}; max-height: 1px;
+            }}
+            QFrame#colSep {{
+                border: none; border-left: 1px solid {border_subtle}; max-width: 1px;
+            }}
+
+            /* 월뷰 */
+            QFrame#monthDayHdr {{
+                background: {bg_surface_2};
+                border-bottom: 1px solid {border_subtle};
+            }}
+            QLabel#monthDayHdrLbl {{
+                color: {fg_secondary}; background: transparent;
+                font-size: 11px; font-weight: 800;
+                letter-spacing: 0.04em;
+            }}
+            QLabel#monthDayHdrLbl[dow="sat"] {{ color: #42A5F5; }}
+            QLabel#monthDayHdrLbl[dow="sun"] {{ color: #EF5350; }}
+            QFrame#monthCell {{ background: transparent; border: none; }}
+
+            /* 입력 */
             QLineEdit, QTextEdit, QDateTimeEdit {{
-                background: {'#2d2d2d' if d else '#ffffff'};
-                border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
-            QLineEdit:focus, QTextEdit:focus, QDateTimeEdit:focus {{ border: 1px solid {accent}; }}
+                background: {bg_surface_2}; color: {fg_primary};
+                border: 1px solid {border_subtle}; border-radius: 7px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus, QTextEdit:focus, QDateTimeEdit:focus {{
+                border: 1px solid {accent};
+            }}
             QComboBox {{
-                background: {'#3d3d3d' if d else '#ffffff'};
-                border: 1px solid {bd}; border-radius: 4px; padding: 4px 8px; color: {txt}; }}
+                background: {bg_surface_2}; color: {fg_primary};
+                border: 1px solid {border_subtle}; border-radius: 7px;
+                padding: 4px 8px;
+            }}
             QComboBox:focus {{ border: 1px solid {accent}; }}
-            QCheckBox {{ color: {txt}; spacing: 6px; }}
-            QScrollBar:vertical {{ background: {bg2}; width: 6px; }}
-            QScrollBar::handle:vertical {{ background: {'#555' if d else '#ccc'}; border-radius: 3px; }}
+            QCheckBox {{ color: {fg_primary}; spacing: 6px; }}
+
+            QScrollBar:vertical {{ background: {bg_surface_2}; width: 6px; }}
+            QScrollBar::handle:vertical {{
+                background: {'#555' if d else '#ccc'}; border-radius: 3px;
+            }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
 
@@ -2050,3 +2879,159 @@ class GoogleCalendarWidget(BaseWidget):
         from app.api.google.auth import is_authenticated
         if is_authenticated() and not self._calendars:
             self._refresh_calendars()
+
+
+# ── CalendarCard (대시보드) ──────────────────────────────────────────────────
+
+class CalendarCard(QFrame):
+    """대시보드 — 미니 월 뷰 + 오늘의 이벤트 3개."""
+    open_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("calDashCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self._is_dark = True
+        self._today_events: list = []
+        self._build_ui()
+        self._apply_qss()
+
+    def _build_ui(self):
+        v = QVBoxLayout(self); v.setContentsMargins(18, 16, 18, 16); v.setSpacing(10)
+
+        head = QHBoxLayout(); head.setSpacing(10)
+        head.addWidget(LeeIconTile(icon=QIcon(":/img/calendar.svg"), color=_C_CAL,
+                                    size=40, radius=10))
+        title_box = QVBoxLayout(); title_box.setSpacing(2); title_box.setContentsMargins(0, 0, 0, 0)
+        t = QLabel(tr("カレンダー")); t.setObjectName("calDashTitle")
+        s = QLabel(""); s.setObjectName("calDashSub")
+        title_box.addWidget(t); title_box.addWidget(s)
+        head.addLayout(title_box, 1)
+        self._sub_lbl = s
+        v.addLayout(head)
+
+        # 오늘 이벤트 미리보기
+        self._events_box = QVBoxLayout(); self._events_box.setSpacing(4)
+        v.addLayout(self._events_box)
+
+        self._empty_lbl = QLabel(tr("本日の予定: なし"))
+        self._empty_lbl.setObjectName("calDashEmpty")
+        v.addWidget(self._empty_lbl)
+
+        # 오늘 일자 표시
+        today = QDate.currentDate()
+        self._sub_lbl.setText(
+            f"{today.year()}年 {today.month()}月 {today.day()}日 "
+            f"({_DAY_NAMES_JP[today.dayOfWeek() - 1]})"
+        )
+
+    def set_today_events(self, events: list):
+        """오늘의 이벤트 3개까지 표시."""
+        # 기존 미리보기 제거
+        while self._events_box.count() > 0:
+            it = self._events_box.takeAt(0)
+            if it and it.widget():
+                it.widget().deleteLater()
+        if not events:
+            self._empty_lbl.setVisible(True); return
+        self._empty_lbl.setVisible(False)
+        for ev in events[:3]:
+            start = ev.get("start", {})
+            time_str = ""
+            if "dateTime" in start:
+                try:
+                    s_dt = datetime.fromisoformat(
+                        start["dateTime"].replace("Z", "+00:00")).astimezone()
+                    time_str = s_dt.strftime("%H:%M")
+                except Exception:
+                    pass
+            elif "date" in start:
+                time_str = tr("終日")
+            title = ev.get("summary", tr("(タイトルなし)"))[:24]
+            row = QLabel(f"<b style='color:{_C_CAL}'>{time_str:>5}</b>  {title}")
+            row.setObjectName("calDashRow")
+            row.setTextFormat(Qt.RichText)
+            self._events_box.addWidget(row)
+
+    def refresh(self) -> None:
+        """대시보드 데이터 페치 — 오늘의 이벤트 (자기 primary 캘린더 + saved 활성)."""
+        try:
+            from app.api.google.auth import is_authenticated
+            if not is_authenticated():
+                self.set_today_events([]); return
+            from app.api.google.calendar import FetchCalendarListWorker, FetchEventsWorker
+            from datetime import timedelta as _td
+
+            today = QDate.currentDate()
+            t_min = datetime(today.year(), today.month(), today.day(), tzinfo=timezone.utc)
+            t_max = t_min + _td(days=1)
+            tmin_iso = t_min.isoformat().replace("+00:00", "Z")
+            tmax_iso = t_max.isoformat().replace("+00:00", "Z")
+
+            def _on_cals(cals: list):
+                # primary 만 — settings 의 enabled_ids 가 있으면 그걸 사용
+                from app.core.config import load_settings
+                saved = set(load_settings().get("calendar_enabled_ids", []) or [])
+                ids = [c.get("id", "") for c in cals if c.get("id") in saved] if saved \
+                      else [c.get("id", "") for c in cals if c.get("primary")]
+                if not ids and cals:
+                    ids = [cals[0].get("id", "")]
+                if not ids:
+                    self.set_today_events([]); return
+                self._ev_worker = FetchEventsWorker(ids, tmin_iso, tmax_iso)
+                self._ev_worker.data_fetched.connect(self.set_today_events)
+                self._ev_worker.error.connect(lambda _e: None)
+                self._ev_worker.finished.connect(self._ev_worker.deleteLater)
+                self._ev_worker.start()
+
+            self._cal_worker = FetchCalendarListWorker()
+            self._cal_worker.data_fetched.connect(_on_cals)
+            self._cal_worker.error.connect(lambda _e: None)
+            self._cal_worker.finished.connect(self._cal_worker.deleteLater)
+            self._cal_worker.start()
+        except Exception as e:
+            logger.debug(f"CalendarCard.refresh 실패: {e}")
+
+    def set_theme(self, is_dark: bool):
+        self._is_dark = is_dark
+        self._apply_qss()
+
+    def _apply_qss(self):
+        d = self._is_dark
+        bg = "#14161C" if d else "#FFFFFF"
+        fg_p = "#F2F4F7" if d else "#0B1220"
+        fg_t = "#6B7280" if d else "#8A93A6"
+        bs = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+        self.setStyleSheet(f"""
+            QFrame#calDashCard {{
+                background: {bg}; border: 1px solid {bs};
+                border-left: 4px solid {_C_CAL};
+                border-radius: 14px;
+            }}
+            QFrame#calDashCard:hover {{ border-color: {_C_CAL}; }}
+            QLabel#calDashTitle {{
+                color: {fg_p}; background: transparent;
+                font-size: 14px; font-weight: 800;
+            }}
+            QLabel#calDashSub {{
+                color: {fg_t}; background: transparent; font-size: 11px;
+                font-family: "JetBrains Mono", "Consolas", monospace;
+            }}
+            QLabel#calDashRow {{
+                color: {fg_p}; background: transparent;
+                font-size: 11.5px;
+                font-family: "JetBrains Mono", "Consolas", monospace;
+            }}
+            QLabel#calDashEmpty {{
+                color: {fg_t}; background: transparent; font-size: 11px;
+                font-style: italic;
+            }}
+        """)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.open_requested.emit()
+        super().mouseReleaseEvent(event)
+
+
+__all__ = ["GoogleCalendarWidget", "CalendarCard"]

@@ -30,18 +30,18 @@ _WMO_CATEGORY: dict[int, str] = {
     95: "stormy",   96: "stormy",   99: "stormy",
 }
 _WMO_BG_DARK = {
-    "clear":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3a2e00,stop:1 #252526)",
-    "mostly_clear": "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #302800,stop:1 #252526)",
-    "partly_cloudy":"qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2e2a18,stop:1 #252526)",
-    "cloudy":       "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2a2a2a,stop:1 #252526)",
-    "foggy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #303030,stop:1 #252526)",
-    "drizzle":      "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #0d1e30,stop:1 #252526)",
-    "rainy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #0a1e3a,stop:1 #252526)",
-    "heavy_rain":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #051228,stop:1 #252526)",
-    "light_snow":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1e2a35,stop:1 #252526)",
-    "snowy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1a2530,stop:1 #252526)",
-    "heavy_snow":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #141e2a,stop:1 #252526)",
-    "stormy":       "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1a1030,stop:1 #252526)",
+    "clear":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3a2e00,stop:1 #14161C)",
+    "mostly_clear": "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #302800,stop:1 #14161C)",
+    "partly_cloudy":"qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2e2a18,stop:1 #14161C)",
+    "cloudy":       "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2a2a2a,stop:1 #14161C)",
+    "foggy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #303030,stop:1 #14161C)",
+    "drizzle":      "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #0d1e30,stop:1 #14161C)",
+    "rainy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #0a1e3a,stop:1 #14161C)",
+    "heavy_rain":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #051228,stop:1 #14161C)",
+    "light_snow":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1e2a35,stop:1 #14161C)",
+    "snowy":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1a2530,stop:1 #14161C)",
+    "heavy_snow":   "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #141e2a,stop:1 #14161C)",
+    "stormy":       "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1a1030,stop:1 #14161C)",
 }
 _WMO_BG_LIGHT = {
     "clear":        "qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fffde7,stop:1 #ffffff)",
@@ -61,21 +61,23 @@ _WMO_BG_LIGHT = {
 
 def _high_alert_color(val: float, is_dark: bool,
                       red_thresh: float = 40.0, orange_thresh: float = 20.0) -> str | None:
-    """値が高いほど危険な指標のアラート色 (インバランス・スポット価格等)。"""
+    """値が高いほど危険な指標のアラート色 (インバランス・スポット価格等)。
+    디자인 토큰 c_bad / c_warn 사용 (라이트 모드는 약간 더 진한 변형)."""
     if val >= red_thresh:
-        return "#ff5252" if is_dark else "#d32f2f"
+        return "#FF453A" if is_dark else "#D32F2F"
     if val >= orange_thresh:
-        return "#ffa726" if is_dark else "#f57c00"
+        return "#FF9F0A" if is_dark else "#E65100"
     return None
 
 
 def _low_alert_color(val: float, is_dark: bool,
                      red_thresh: float = 8.0, orange_thresh: float = 10.0) -> str | None:
-    """値が低いほど危険な指標のアラート色 (電力予備率等)。"""
+    """値が低いほど危険な指標のアラート色 (電力予備率等)。
+    디자인 토큰 c_bad / c_warn 사용."""
     if val <= red_thresh:
-        return "#ff5252" if is_dark else "#d32f2f"
+        return "#FF453A" if is_dark else "#D32F2F"
     if val <= orange_thresh:
-        return "#ffa726" if is_dark else "#f57c00"
+        return "#FF9F0A" if is_dark else "#E65100"
     return None
 
 
@@ -92,7 +94,7 @@ class _WeatherIllust(QWidget):
         self._flash    = 0.0
 
         self._timer = QTimer(self)
-        self._timer.setInterval(50)
+        self._timer.setInterval(32)  # CPU 부하 및 튕김 방지를 위해 안정적인 30fps로 조정
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
@@ -105,7 +107,7 @@ class _WeatherIllust(QWidget):
     def _tick(self):
         if not self.isVisible():
             return
-        self._phase = (self._phase + 0.05) % (2 * math.pi)
+        self._phase = (self._phase + 0.015) % (2 * math.pi)
         if self._category == "stormy":
             if _random.random() < 0.04:
                 self._flash = 1.0
@@ -137,9 +139,18 @@ class _WeatherIllust(QWidget):
 
     # ── 共有ヘルパー ─────────────────────────────────────────────────────────
 
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        self._timer.start()
+        super().showEvent(event)
+
     def _cloud(self, p: QPainter, cx: float, cy: float, r: float, color: QColor):
         p.setPen(QPen(Qt.PenStyle.NoPen))
         p.setBrush(QBrush(color))
+        # 5개의 타원을 겹쳐 구름 모양을 만듭니다.
         for dx, dy, rx, ry in [
             ( 0.00,  0.00, 1.00, 0.70),
             (-0.60,  0.10, 0.60, 0.55),
@@ -151,21 +162,22 @@ class _WeatherIllust(QWidget):
 
     def _sun(self, p: QPainter, sx: float, sy: float, r: float,
              n_rays: int = 8, ray_len_fac: float = 0.90, alpha: int = 230):
-        """太陽本体 + 回転光線を描画する汎用ヘルパー。"""
-        ri = r + r * 0.25
-        ro = r + r * ray_len_fac
+        # 태양의 맥박(Pulse) 효과 추가로 살아있는 느낌 부여
+        pulse = 1.0 + 0.05 * math.sin(self._phase * 2)
+        ri = (r + r * 0.25) * pulse
+        ro = (r + r * ray_len_fac) * pulse
         ray_pen = QPen(QColor(255, 200, 50, 160), max(2.0, r * 0.18),
                        Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         p.setPen(ray_pen)
         for i in range(n_rays):
-            a = self._phase + i * (2 * math.pi / n_rays)
+            a = self._phase * 1.5 + i * (2 * math.pi / n_rays)
             p.drawLine(
                 QPointF(sx + ri * math.cos(a), sy + ri * math.sin(a)),
                 QPointF(sx + ro * math.cos(a), sy + ro * math.sin(a)),
             )
         p.setBrush(QBrush(QColor(255, 215, 50, alpha)))
         p.setPen(QPen(QColor(255, 180, 30, 80), 1.5))
-        p.drawEllipse(QPointF(sx, sy), r, r)
+        p.drawEllipse(QPointF(sx, sy), r * pulse, r * pulse)
 
     # ── 天気別描画 ───────────────────────────────────────────────────────────
 
@@ -224,12 +236,17 @@ class _WeatherIllust(QWidget):
         fall = h - cloud_y - r * 0.6
         dlen = h * 0.07 * drop_scale
         dw   = max(1.5, r * 0.07) * drop_scale
-        drop_pen = QPen(QColor(100, 160, 225, drop_alpha), dw,
-                        Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        p.setPen(drop_pen)
         for i in range(n):
             t    = (self._phase * 1.5 + i * (2 * math.pi / n)) % (2 * math.pi)
             prog = t / (2 * math.pi)
+            
+            # 빗방울이 위아래 끝에서 부드럽게 사라지도록 페이드 알파 적용
+            opacity_factor = math.sin(prog * math.pi)
+            current_alpha = int(drop_alpha * opacity_factor)
+            drop_pen = QPen(QColor(100, 160, 225, current_alpha), dw,
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            p.setPen(drop_pen)
+            
             x    = cx + ((i / max(n - 1, 1)) - 0.5) * span
             y    = cloud_y + r * 0.55 + prog * fall
             p.drawLine(QPointF(x, y), QPointF(x - dlen * 0.2, y + dlen))
@@ -262,10 +279,16 @@ class _WeatherIllust(QWidget):
         p.setPen(QPen(Qt.PenStyle.NoPen))
         p.setBrush(QBrush(QColor(205, 225, 248, alpha)))
         for i in range(n):
-            t    = (self._phase * 1.1 + i * (2 * math.pi / n)) % (2 * math.pi)
+            t    = (self._phase * 1.0 + i * (2 * math.pi / n)) % (2 * math.pi)
             prog = t / (2 * math.pi)
+            
+            # 눈송이의 부드러운 페이드 인/아웃 및 자연스러운 흔들림 강화
+            opacity_factor = math.sin(prog * math.pi)
+            current_alpha = int(alpha * opacity_factor)
+            p.setBrush(QBrush(QColor(205, 225, 248, current_alpha)))
+            
             x    = cx + ((i / max(n - 1, 1)) - 0.5) * span \
-                   + math.sin(self._phase * 0.5 + i * 1.4) * (w * 0.025)
+                   + math.sin(self._phase * 2.0 + i * 3) * (w * 0.035)
             y    = cloud_y + r * 0.5 + prog * fall
             p.drawEllipse(QPointF(x, y), fr, fr)
 
@@ -321,7 +344,7 @@ class SummaryCard(QFrame):
         self._hover_offset = 0.0    # ホバーアニメーション用
         self._card_bg_css = ""      # 天気カード用背景グラデーション
         self._illust: _WeatherIllust | None = None
-
+        
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
@@ -399,7 +422,7 @@ class SummaryCard(QFrame):
             self.value_lbl.setText("----")
             self.sub_lbl.setText(tr("データ取得中..."))
 
-            if self._skel_effect is None:
+            if self._skel_anim is None:
                 self._skel_effect = QGraphicsOpacityEffect()
                 self._skel_anim = QPropertyAnimation(self._skel_effect, b"opacity", self)
                 self._skel_anim.setDuration(800)
@@ -414,6 +437,10 @@ class SummaryCard(QFrame):
             self.value_lbl.setGraphicsEffect(self._skel_effect)
             self._skel_anim.start()
         else:
+            if self._fade_out_anim is not None:
+                self._fade_out_anim.stop()
+            if self._fade_in_anim is not None:
+                self._fade_in_anim.stop()
             if self._skel_anim is not None:
                 self._skel_anim.stop()
             # スケルトンエフェクトが現在適用中の時のみ解除
@@ -463,7 +490,7 @@ class SummaryCard(QFrame):
             self.value_lbl.setText(self._anim_format.format(self._anim_target))
 
     def _start_fade_out(self):
-        if self._fade_opacity_effect is None:
+        if self._fade_out_anim is None:
             self._fade_opacity_effect = QGraphicsOpacityEffect()
             self._fade_out_anim = QPropertyAnimation(self._fade_opacity_effect, b"opacity", self)
             self._fade_out_anim.setDuration(180)
@@ -474,8 +501,9 @@ class SummaryCard(QFrame):
             self._fade_in_anim.setEasingCurve(QEasingCurve.OutQuad)
 
         # スケルトンエフェクトが現在適用中なら、setGraphicsEffect() で Qt が削除する前に参照をクリア
-        if self._skel_effect is not None and self.value_lbl.graphicsEffect() is self._skel_effect:
-            self._clear_skel()
+        if self._skel_anim is not None:
+            if self.value_lbl.graphicsEffect() is self._skel_effect:
+                self._clear_skel()
 
         if self.value_lbl.graphicsEffect() is not self._fade_opacity_effect:
             self.value_lbl.setGraphicsEffect(self._fade_opacity_effect)
@@ -606,7 +634,7 @@ class SpotDashCard(QFrame):
         self._date_mode = 'today'
         self._hover_offset = 0.0
         self._val_color: str | None = None
-
+        
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 20, 20, 20)
 
@@ -622,9 +650,9 @@ class SpotDashCard(QFrame):
         for btn in (self.btn_today, self.btn_tomorrow):
             btn.setFixedSize(50, 22)
             btn.setCheckable(True)
-        self.btn_today.setChecked(True)
         self.btn_today.clicked.connect(lambda: self._switch('today'))
         self.btn_tomorrow.clicked.connect(lambda: self._switch('tomorrow'))
+        self.btn_today.setChecked(True)
         hdr.addWidget(self.btn_today)
         hdr.addWidget(self.btn_tomorrow)
         lay.addLayout(hdr)
@@ -669,16 +697,15 @@ class SpotDashCard(QFrame):
     def _apply_style(self):
         tc = "#eeeeee" if self.is_dark else "#333333"
         sc = "#888888"
+        pc = UIColors.get_panel_colors(self.is_dark)
         try:
             self.icon_lbl.setPixmap(get_tinted_pixmap(":/img/spot.svg", self.is_dark))
             self.icon_lbl.setStyleSheet("background: transparent;")
         except Exception:
             self.icon_lbl.setText("⚡")
             self.icon_lbl.setStyleSheet("font-size: 20px; background: transparent;")
-        bg  = "#252526" if self.is_dark else "#ffffff"
-        bdr = "#3e3e42" if self.is_dark else "#dddddd"
         self.setStyleSheet(
-            f"SpotDashCard {{ background-color: {bg}; border: 1px solid {bdr};"
+            f"SpotDashCard {{ background-color: {pc['bg']}; border: 1px solid {pc['border']};"
             f" border-left: 6px solid #FF7043; border-radius: 8px; }}"
         )
         self.title_lbl.setStyleSheet(

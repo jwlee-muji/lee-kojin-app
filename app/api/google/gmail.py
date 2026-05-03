@@ -135,14 +135,19 @@ class FetchLabelsWorker(_BaseGmailWorker):
 
 
 class FetchMailListWorker(_BaseGmailWorker):
-    """라벨별 메일 목록 (헤더 정보만) — 배치 조회."""
+    """라벨별 메일 목록 (헤더 정보만) — 배치 조회.
+
+    Gmail 검색 쿼리 (q) 파라미터를 지원합니다 ("from:foo subject:bar" 등).
+    """
     data_fetched = Signal(list, str)   # (mails, nextPageToken)
 
-    def __init__(self, label_ids: list, max_results: int = 50, page_token: str = ""):
+    def __init__(self, label_ids: list, max_results: int = 50,
+                 page_token: str = "", q: str = ""):
         super().__init__()
         self.label_ids   = label_ids
         self.max_results = max_results
         self.page_token  = page_token
+        self.q           = q
 
     def run(self):
         try:
@@ -154,6 +159,8 @@ class FetchMailListWorker(_BaseGmailWorker):
             )
             if self.page_token:
                 kwargs["pageToken"] = self.page_token
+            if self.q:
+                kwargs["q"] = self.q
 
             result   = _execute_single(svc.users().messages().list(**kwargs))
             messages = result.get("messages", [])
@@ -284,6 +291,61 @@ class MarkAllReadWorker(_BaseGmailWorker):
             self.error.emit(str(e))
 
 
+class BatchModifyWorker(_BaseGmailWorker):
+    """다중 메일 일괄 수정 — read/archive/delete/label 변경 등 범용."""
+    success = Signal(int)   # 처리된 메일 수
+
+    def __init__(self, message_ids: list, *,
+                 add_labels: list | None = None,
+                 remove_labels: list | None = None):
+        super().__init__()
+        self.message_ids = list(message_ids)
+        self.add_labels    = list(add_labels or [])
+        self.remove_labels = list(remove_labels or [])
+
+    def run(self):
+        if not self.message_ids:
+            self.success.emit(0); return
+        try:
+            svc = self._service()
+            body = {"ids": [], "addLabelIds": self.add_labels,
+                    "removeLabelIds": self.remove_labels}
+            for start in range(0, len(self.message_ids), 1000):
+                body["ids"] = self.message_ids[start:start + 1000]
+                svc.users().messages().batchModify(userId="me", body=body).execute()
+            self.success.emit(len(self.message_ids))
+        except Exception as e:
+            logger.error(f"BatchModify error: {e}", exc_info=True)
+            self.error.emit(str(e))
+
+
+class BatchDeleteWorker(_BaseGmailWorker):
+    """다중 메일 휴지통 이동 — TRASH 라벨 추가."""
+    success = Signal(int)
+
+    def __init__(self, message_ids: list):
+        super().__init__()
+        self.message_ids = list(message_ids)
+
+    def run(self):
+        if not self.message_ids:
+            self.success.emit(0); return
+        try:
+            svc = self._service()
+            for start in range(0, len(self.message_ids), 1000):
+                chunk = self.message_ids[start:start + 1000]
+                svc.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": chunk,
+                          "addLabelIds": ["TRASH"],
+                          "removeLabelIds": ["INBOX"]},
+                ).execute()
+            self.success.emit(len(self.message_ids))
+        except Exception as e:
+            logger.error(f"BatchDelete error: {e}", exc_info=True)
+            self.error.emit(str(e))
+
+
 class PollNewMailWorker(_BaseGmailWorker):
     """
     경량 폴링 Worker — 배치로 알람 라벨의 미읽 수 확인.
@@ -386,6 +448,27 @@ def _extract_body(payload: dict) -> tuple:
     return html_body, plain_body
 
 
+def _extract_attachments(payload: dict) -> list[dict]:
+    """MIME 페이로드에서 첨부 파일 메타 (filename, size, mime, part_id) 추출."""
+    out: list[dict] = []
+    def _walk(p: dict):
+        fn = (p.get("filename") or "").strip()
+        body = p.get("body", {}) or {}
+        att_id = body.get("attachmentId")
+        if fn and att_id:
+            out.append({
+                "filename":      fn,
+                "mime":          p.get("mimeType", ""),
+                "size":          body.get("size", 0),
+                "attachment_id": att_id,
+                "part_id":       p.get("partId", ""),
+            })
+        for child in p.get("parts", []) or []:
+            _walk(child)
+    _walk(payload)
+    return out
+
+
 def _parse_full(msg: dict) -> dict:
     base = _parse_metadata(msg)
     payload   = msg.get("payload", {})
@@ -401,4 +484,5 @@ def _parse_full(msg: dict) -> dict:
         html_body = "<p style='color:#888'>(本文なし)</p>"
 
     base["body_html"] = html_body
+    base["attachments"] = _extract_attachments(payload)
     return base

@@ -1,34 +1,64 @@
+"""MainWindow — Phase 4 리뉴얼.
+
+레이아웃:
+    ┌──────────────────────────────────────────────────────┐
+    │  TopBar (48px)                                       │
+    ├────────────┬─────────────────────────────────────────┤
+    │            │                                         │
+    │  Sidebar   │  Stage (FadeStackedWidget)              │
+    │  (240px)   │                                         │
+    │            │                                         │
+    └────────────┴─────────────────────────────────────────┘
+
+- TopBar: 로고 + 검색 (Ctrl+K) + 3 카테고리 필터 탭 (Market/Operation/Tool)
+- Sidebar: 4 그룹 (market / ops / tool / system) — 접기/펴기 + 액티브 인디케이터
+- Stage: 모든 페이지 등록, sidebar.item_clicked → setCurrentIndex
+- closeEvent: QuitConfirmDialog (3 버튼)
+- 트레이/테마/알림/토스트/단축키 모두 보존
+"""
+from __future__ import annotations
+
 import logging
 import sqlite3
-import sys
 from pathlib import Path
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QStackedWidget,
-    QSplitter, QSystemTrayIcon, QMenu, QApplication, QPushButton, QMessageBox, QLabel,
-    QListWidgetItem, QGraphicsOpacityEffect, QFrame,
-)
+from typing import Callable
+
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QPropertyAnimation, QVariantAnimation,
-    QEasingCurve, QSize, QByteArray, QRect, QPoint,
+    Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QByteArray,
+    QRect, QPoint,
 )
-from PySide6.QtGui import QAction, QIcon, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QAction, QIcon, QColor, QKeySequence, QShortcut,
+)
 from PySide6.QtNetwork import QNetworkInformation
+from PySide6.QtWidgets import (
+    QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu,
+    QSizePolicy, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
+)
+
+from app.ui.components import LeeDialog, LeeSidebar, LeeTopBar
+from app.ui.dialogs import QuitConfirmDialog
+
+# ── 위젯 클래스 ─────────────────────────────────────────────────────────
+from app.widgets.dashboard import DashboardWidget
+from app.widgets.jepx_spot import JepxSpotWidget
 from app.widgets.power_reserve import PowerReserveWidget
 from app.widgets.imbalance import ImbalanceWidget
 from app.widgets.jkm import JkmWidget
 from app.widgets.weather import WeatherWidget
 from app.widgets.hjks import HjksWidget
-from app.widgets.log_viewer import LogViewerWidget
-from app.widgets.settings import SettingsWidget
-from app.widgets.dashboard import DashboardWidget
-from app.widgets.bug_report import BugReportWidget
-from app.widgets.ai_chat import AiChatWidget
-from app.widgets.briefing import BriefingWidget
-from app.widgets.text_memo import TextMemoWidget
 from app.widgets.google_calendar import GoogleCalendarWidget
 from app.widgets.gmail import GmailWidget
-from app.widgets.jepx_spot import JepxSpotWidget
-from app.ui.common import FadeStackedWidget, get_tinted_icon, clear_tint_cache
+from app.widgets.text_memo import TextMemoWidget
+from app.widgets.ai_chat import AiChatWidget
+from app.widgets.briefing import BriefingWidget
+from app.widgets.manual import ManualWidget
+from app.widgets.log_viewer import LogViewerWidget
+from app.widgets.bug_report import BugReportWidget
+from app.widgets.settings import SettingsWidget
+
+from app.ui.common import FadeStackedWidget, get_tinted_icon
 from app.ui.theme import UIColors
 from app.core.events import bus
 from app.core.constants import Timers, Animations, Layout, Notifications as NC
@@ -38,221 +68,249 @@ from app.api.database_worker import DataRetentionWorker
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 페이지 정의 — 순서가 곧 content_stack 인덱스 (대시보드 카드의 page_requested
+# 인덱스 1~6 호환을 위해 market 그룹의 첫 7개 위젯 순서를 고정)
+# ──────────────────────────────────────────────────────────────────────
+_ITEM_DEFS: list[tuple[str, str, type, str, str, str]] = [
+    # (key, group_key, factory, label_jp, icon_name, accent_color)
+    # group_key 가 "system" 인 항목은 사이드바 푸터 영역 (그룹 헤더 없이)
+    ("dashboard", "market", DashboardWidget,        "ダッシュボード",     "board",    "#A8B0BD"),
+    ("spot",      "market", JepxSpotWidget,         "スポット市場",        "spot",     "#FF7A45"),
+    ("power",     "market", PowerReserveWidget,     "電力予備率",          "power",    "#5B8DEF"),
+    ("imb",       "market", ImbalanceWidget,        "インバランス",        "won",      "#F25C7A"),
+    ("jkm",       "market", JkmWidget,              "エネルギー指標",      "fire",     "#F4B740"),
+    ("weather",   "market", WeatherWidget,          "全国天気",            "weather",  "#2EC4B6"),
+    ("hjks",      "market", HjksWidget,             "発電稼働状況",        "plant",    "#A78BFA"),
+    ("calendar",  "ops",    GoogleCalendarWidget,   "カレンダー",          "calendar", "#34C759"),
+    ("gmail",     "ops",    GmailWidget,            "Gmail",               "gmail",    "#EA4335"),
+    ("notice",    "tools",  None,                   "通知センター",        "notice",   "#FF9500"),
+    ("memo",      "tools",  TextMemoWidget,         "テキストメモ",        "memo",     "#FFCC00"),
+    ("ai_chat",   "tools",  AiChatWidget,           "AI チャット",         "chat",     "#5856D6"),
+    ("briefing",  "tools",  BriefingWidget,         "AI ブリーフィング",  "brief",     "#5856D6"),
+    ("manual",    "system", ManualWidget,           "マニュアル",          "manual",   "#A8B0BD"),
+    ("log",       "system", LogViewerWidget,        "ログ",                "log",      "#A8B0BD"),
+    ("bug",       "system", BugReportWidget,        "バグ報告",            "bug",      "#A8B0BD"),
+    ("settings",  "system", SettingsWidget,         "設定",                "setting",  "#A8B0BD"),
+]
+
+# 표시되는 일반 그룹 (system 은 별도 푸터 영역)
+_GROUP_DEFS: list[tuple[str, str]] = [
+    ("market", "電力データ"),
+    ("ops",    "Google"),
+    ("tools",  "ツール"),
+]
+
+
 class MainWindow(QMainWindow):
+    """Frameless borderless window — TopBar 가 타이틀바 역할.
+
+    순수 Qt mouseEvent 로 드래그/리사이즈/더블클릭 max/수동 스냅을 모두 처리.
+    Windows 의 WS_THICKFRAME invisible padded border 가 visible edge 보다
+    넓게 resize zone 을 만드는 문제를 피하기 위함.
+    """
+
+    BORDER_PX = 6  # 리사이즈 감지 영역 두께
+
     def __init__(self):
         super().__init__()
         self.is_dark = True
         self._is_quitting = False
-        self._theme_transitioning = False   # 테마 전환 중 중복 클릭 방지
-        self._notifications_tab_index: int | None = None
+        self._theme_transitioning = False
 
-        # row(sidebar) → content_stack index 매핑 (그룹 헤더는 제외)
-        self._row_to_content:  dict[int, int] = {}
-        # content_stack index → sidebar row 역매핑
-        self._content_to_row:  dict[int, int] = {}
-        # sidebar row → icon_name (테마 동기화용)
-        self._row_icons:       dict[int, str]  = {}
-        # content index → factory callable (未生成ウィジェットの遅延生成用)
-        self._widget_factories: dict[int, callable] = {}
-        # 유틸리티 버튼 (하단 스트립) → content index
-        self._util_btns:       list[tuple[QPushButton, int]] = []
-        # 현재 활성 유틸리티 버튼
-        self._active_util_btn: QPushButton | None = None
-        # 사이드바 그룹 (접기/펼치기 상태 포함)
-        # {"header_row": int, "item_rows": list[int], "collapsed": bool, "label": str}
-        self._groups:          list[dict] = []
-
-        self._setup_tray_icon()
+        # key ↔ content_stack 인덱스 매핑
+        self._key_to_idx: dict[str, int] = {}
+        self._idx_to_key: dict[int, str] = {}
+        # 미생성 위젯 팩토리 (지연 생성)
+        self._idx_factories: dict[int, Callable[[], QWidget]] = {}
+        # key → 아이콘 이름 (테마 동기화용)
+        self._key_to_icon: dict[str, str] = {}
 
         from app.core.config import __version__
         self.setWindowTitle(f"LEE 個人アプリ  v{__version__}")
+
+        # ── Frameless ─────────────────────────────────────────────
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
 
         screen = QApplication.primaryScreen().availableGeometry()
         w = max(Layout.WINDOW_MIN_WIDTH,  min(int(screen.width()  * Layout.WINDOW_WIDTH_RATIO),  screen.width()))
         h = max(Layout.WINDOW_MIN_HEIGHT, min(int(screen.height() * Layout.WINDOW_HEIGHT_RATIO), screen.height()))
         self.resize(w, h)
-        # チャイルドウィジェットの最小サイズヒントを上書きし、自由なリサイズを許容する
         self.setMinimumSize(Layout.WINDOW_ABSOLUTE_MIN_W, Layout.WINDOW_ABSOLUTE_MIN_H)
 
+        # 트레이 아이콘 우선 셋업 (다른 곳에서 self.tray_icon 참조)
+        self._setup_tray_icon()
+
+        # 알림 센터 — Phase 5.8 신규 NotificationWidget (사이드바 콘텐츠)
+        from app.widgets.notification import NotificationWidget
+        self.w_notifications = NotificationWidget()
+
+        # ── 메인 레이아웃: VBox(TopBar, HBox(Sidebar, Stage)) ─────
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.main_splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.main_splitter)
+        self.topbar = LeeTopBar()
+        root.addWidget(self.topbar)
 
-        # ── 사이드바 컨테이너 ─────────────────────────────────────────────────
-        sidebar_container = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar_container)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(0)
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
 
-        self.sidebar = QListWidget()
-        # HiDPI 대응: 논리 픽셀 기준으로 아이콘 크기 조정 (Qt6 가 DPI 스케일 자동 적용)
-        _dpr = QApplication.primaryScreen().devicePixelRatio()
-        _icon_px = int(20 * min(_dpr, 2.0)) if _dpr > 1.25 else 20
-        self.sidebar.setIconSize(QSize(_icon_px, _icon_px))
-        self.sidebar.itemClicked.connect(self._on_sidebar_item_clicked)
-        sidebar_layout.addWidget(self.sidebar, 1)
+        self.sidebar = LeeSidebar()
+        self.sidebar.set_icon_provider(lambda name, dark: get_tinted_icon(f":/img/{name}.svg", dark))
 
-        # ── 하단 유틸리티 스트립 (설정 / 로그 / 버그 리포트) ─────────────────
-        util_frame = QFrame()
-        util_frame.setObjectName("utilStrip")
-        util_layout = QHBoxLayout(util_frame)
-        util_layout.setContentsMargins(4, 4, 4, 4)
-        util_layout.setSpacing(2)
-        sidebar_layout.addWidget(util_frame)
-
-        # ── 네트워크 상태 + 테마 버튼 ─────────────────────────────────────────
-        self.network_lbl = QLabel(tr("🟢 オンライン"))
-        self.network_lbl.setAlignment(Qt.AlignCenter)
-        self.network_lbl.setStyleSheet(
-            f"color: {UIColors.ONLINE_COLOR}; font-weight: bold; padding: 5px;"
-        )
-        sidebar_layout.addWidget(self.network_lbl)
-
-        self.theme_btn = QPushButton(tr("☀️ ライトモード"))
-        self.theme_btn.setStyleSheet("margin: 5px; font-weight: bold;")
-        self.theme_btn.clicked.connect(self._toggle_theme)
-        sidebar_layout.addWidget(self.theme_btn)
-
-        # ── ログインユーザー表示 ────────────────────────────────────────────
-        from app.api.google.auth import get_current_user_email
-        _email = get_current_user_email() or ""
-        self.user_lbl = QLabel(_email)
-        self.user_lbl.setAlignment(Qt.AlignCenter)
-        self.user_lbl.setWordWrap(True)
-        self.user_lbl.setStyleSheet(
-            f"color: {UIColors.TEXT_MUTED}; font-size: 10px; padding: 2px 4px;"
-        )
-        sidebar_layout.addWidget(self.user_lbl)
-
-        self.logout_btn = QPushButton(tr("ログアウト"))
-        self.logout_btn.setObjectName("logoutBtn")
-        self.logout_btn.setFixedHeight(34)
-        self.logout_btn.setStyleSheet(
-            f"QPushButton#logoutBtn {{"
-            f"  margin: 2px 10px 8px 10px;"
-            f"  padding: 4px 8px;"
-            f"  color: {UIColors.LOGOUT_COLOR};"
-            f"  background: transparent;"
-            f"  border: 1px solid {UIColors.LOGOUT_COLOR};"
-            f"  border-radius: 4px;"
-            f"  font-size: 12px;"
-            f"}}"
-            f"QPushButton#logoutBtn:hover {{"
-            f"  background: {UIColors.LOGOUT_HOVER_BG};"
-            f"}}"
-        )
-        self.logout_btn.clicked.connect(self._do_logout)
-        sidebar_layout.addWidget(self.logout_btn)
-
-        sidebar_w = max(Layout.SIDEBAR_MIN_WIDTH, min(int(screen.width() * Layout.SIDEBAR_WIDTH_RATIO), Layout.SIDEBAR_MAX_WIDTH))
-        sidebar_container.setMinimumWidth(sidebar_w)
-        self.sidebar_container = sidebar_container   # アニメーション用に保持
-        self.main_splitter.addWidget(sidebar_container)
-
-        # ── 컨텐츠 영역 ──────────────────────────────────────────────────────
         self.content_stack = FadeStackedWidget()
-        self.main_splitter.addWidget(self.content_stack)
-        self.sidebar.currentRowChanged.connect(self._on_sidebar_changed)
+        self.content_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.main_splitter.setSizes([sidebar_w, w - sidebar_w])
-        self.main_splitter.setStretchFactor(0, 0)
-        self.main_splitter.setStretchFactor(1, 1)
+        body_layout.addWidget(self.sidebar)
+        body_layout.addWidget(self.content_stack, 1)
+        root.addWidget(body, 1)
 
-        # ── 알림 센터 (테마 지원 포함) ────────────────────────────────────────
-        self.w_notifications = QListWidget()
-        self.w_notifications.setWordWrap(True)
-        self.w_notifications.itemClicked.connect(self._mark_notification_read)
-        self.w_notifications.itemDoubleClicked.connect(self._remove_notification)
+        # ── 사이드바 그룹 + 아이템 등록 ──────────────────────────
+        self._setup_groups_and_pages()
+
+        # ── 시그널 연결 ──────────────────────────────────────────
+        self.sidebar.item_clicked.connect(self._on_item_clicked)
+        self.sidebar.group_toggled.connect(self._save_group_states)
+        self.topbar.top_tab_changed.connect(self.sidebar.set_active_tab)
+        self.topbar.top_tab_changed.connect(self._on_top_tab_changed)
+        self.topbar.theme_toggle_clicked.connect(self._toggle_theme)
+        self.topbar.user_clicked.connect(self._on_user_pill_clicked)
+        # 윈도우 컨트롤 (frameless 타이틀바)
+        self.topbar.minimize_clicked.connect(self.showMinimized)
+        self.topbar.maximize_toggle_clicked.connect(self._toggle_maximize)
+        self.topbar.close_clicked.connect(self.close)
+
+        # 유저 정보 → TopBar 아바타
+        try:
+            from app.api.google.auth import get_current_user_email
+            _email = get_current_user_email() or ""
+        except Exception:
+            _email = ""
+        if _email:
+            self.topbar.set_user(email=_email)
+        # 초기 테마 글리프 동기화
+        self.topbar.set_theme_glyph(self.is_dark)
+
+        # 알림 센터 DB 초기화 (sidebar item 등록 후 호출 — 라벨 갱신 가능)
         self._init_notification_db()
 
-        # ── Event Bus 구독 ─────────────────────────────────────────────────────
+        # ── Event Bus 구독 ──────────────────────────────────────
         bus.settings_saved.connect(self._apply_settings_all)
         bus.page_requested.connect(self._navigate_to_content)
         bus.gmail_new_mail.connect(self._on_gmail_new_mail)
         bus.toast_requested.connect(self._show_toast)
+        # 알림 변경 시 사이드바 배지 자동 갱신 — burst 대비 debounce
+        from PySide6.QtCore import QTimer as _QTimer
+        self._badge_refresh_timer = _QTimer(self)
+        self._badge_refresh_timer.setSingleShot(True)
+        self._badge_refresh_timer.setInterval(180)
+        self._badge_refresh_timer.timeout.connect(self._update_notification_badge)
+        bus.notifications_changed.connect(self._badge_refresh_timer.start)
 
-        self._toast_label: QLabel | None = None
-        self._toast_anim:  QPropertyAnimation | None = None
-        self._toast_effect: QGraphicsOpacityEffect | None = None
-        self._toast_timer = QTimer(self)
-        self._toast_timer.setSingleShot(True)
-        self._toast_timer.timeout.connect(self._dismiss_toast)
+        # ── 토스트 시스템 — Phase 6 LeeToast 로 단일화 ─────────────────────
+        # 워밍업 / dedupe / 큐 / 우선순위 / 슬라이드 in 모두 ToastManager 가 처리
+        from app.ui.components.toast import LeeToast as _LeeToast
+        _LeeToast.set_host(self)
 
-        # ── 사이드바 페이지 등록 (그룹 헤더 포함) ──────────────────────────────
-        # ウィジェットクラスをファクトリとして渡すことで初回タブ選択時に生成される
-        #  그룹 1: 電力データ
-        self._add_group_header(tr("⚡  電力データ"))
-        self._add_page(DashboardWidget,        tr("ダッシュボード"),    "board")
-        self._add_page(JepxSpotWidget,         tr("スポット市場"),       "spot")
-        self._add_page(PowerReserveWidget,     tr("電力予備率"),        "power")
-        self._add_page(ImbalanceWidget,        tr("インバランス"),      "won")
-        self._add_page(JkmWidget,              tr("JKM LNG 価格"),     "fire")
-        self._add_page(WeatherWidget,          tr("全国天気"),          "weather")
-        self._add_page(HjksWidget,             tr("発電稼働状況"),      "plant")
-        #  그룹 2: Google
-        self._add_group_header(tr("🔵  Google"))
-        self._add_page(GoogleCalendarWidget,   tr("Google カレンダー"), "calendar")
-        self._add_page(GmailWidget,            tr("Gmail"),             "gmail")
-        #  그룹 3: ツール
-        self._add_group_header(tr("🛠  ツール"))
-        self._add_page(self.w_notifications,   tr("通知センター ({0})").format(0), "notice")
-        self._add_page(AiChatWidget,           tr("AI チャット"),       "chat")
-        self._add_page(BriefingWidget,         tr("AI ブリーフィング"), "brief")
-        self._add_page(TextMemoWidget,         tr("テキストメモ"),      "memo")
-
-        # ── 유틸리티 하단 스트립 버튼 (설정 / 로그 / 버그) ─────────────────────
-        log_idx      = self._add_util_page(LogViewerWidget)
-        bug_idx      = self._add_util_page(BugReportWidget)
-        settings_idx = self._add_util_page(SettingsWidget)
-
-        for icon_name, label, idx in [
-            ("log",     tr("ログ"),      log_idx),
-            ("bug",     tr("バグ"),      bug_idx),
-            ("setting", tr("設定"),      settings_idx),
-        ]:
-            btn = QPushButton()
-            btn.setObjectName("utilBtn")
-            btn.setToolTip(label)
-            btn.setCheckable(True)
-            btn.setFixedHeight(32)
-            btn.clicked.connect(lambda _, i=idx, b=btn: self._on_util_btn(i, b))
-            util_layout.addWidget(btn, 1)
-            self._util_btns.append((btn, idx))
-            # 아이콘은 테마 동기화에서 설정됨
-            self._row_icons[-(idx + 1)] = icon_name   # 음수 키로 유틸 아이콘 저장
-
-        # ── 테마 초기화 + 창 배치 ────────────────────────────────────────────
+        # 테마 + 그룹 상태 + 윈도우 위치 복원
         self._sync_theme()
         self._restore_geometry()
         self._restore_group_states()
 
-        # ── 初期ページ: 最初の表示可能サイドバー行を選択してダッシュボードを生成 ──
-        # setCurrentRow → currentRowChanged → _on_sidebar_changed → _ensure_widget_created の順で連鎖する
-        _first_row = next(
-            (r for r in sorted(self._row_to_content.keys())
-             if not self.sidebar.isRowHidden(r)),
-            None,
-        )
-        if _first_row is not None:
-            self.sidebar.setCurrentRow(_first_row)
+        # 초기 페이지: dashboard
+        self._activate_key("dashboard")
 
-        # ── 기동 후 백그라운드 프리페치: 미방문 위젯을 순차 생성해 데이터 취득 시작 ──
+        # 백그라운드 프리페치
         QTimer.singleShot(Timers.PREFETCH_DELAY_MS, self._prefetch_all_widgets)
 
-        # ── 키보드 단축키 (Ctrl+1~6) ──────────────────────────────────────────
+        # 키보드 단축키
+        self._setup_shortcuts()
+
+        # 네트워크 모니터링
+        self._setup_network()
+
+        # 데이터 보존 워커
+        self._setup_retention_worker()
+
+        # 마우스 이벤트 인터셉트 — 자식 위젯 위에서도 edge resize / titlebar drag 동작
+        # (QMainWindow.mousePressEvent 는 자식이 이벤트 흡수하면 호출 안 됨)
+        QApplication.instance().installEventFilter(self)
+        self.setMouseTracking(True)
+
+        # 첫 표시 후 app_ready emit — 위젯들이 fetch 시작 신호로 사용 가능
+        self._app_ready_emitted = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 한 번만 emit — 사용자 위젯 들이 첫 fetch 게이팅에 사용
+        if not self._app_ready_emitted:
+            self._app_ready_emitted = True
+            QTimer.singleShot(50, bus.app_ready.emit)
+
+    # ──────────────────────────────────────────────────────────────
+    # 사이드바 / 페이지 셋업
+    # ──────────────────────────────────────────────────────────────
+    def _setup_groups_and_pages(self) -> None:
+        # 일반 그룹 등록 (system 은 별도)
+        for key, label in _GROUP_DEFS:
+            self.sidebar.add_group(key, label)
+
+        # 아이템 등록 (content_stack 도 동시 빌드)
+        for key, group_key, factory, label, icon_name, color in _ITEM_DEFS:
+            idx = self.content_stack.count()
+
+            if key == "notice":
+                # 알림 센터는 미리 만든 인스턴스 사용
+                self.content_stack.addWidget(self.w_notifications)
+            elif factory is None:
+                self.content_stack.addWidget(QWidget())  # placeholder
+            else:
+                self.content_stack.addWidget(QWidget())  # placeholder
+                self._idx_factories[idx] = factory
+
+            self._key_to_idx[key] = idx
+            self._idx_to_key[idx] = key
+            self._key_to_icon[key] = icon_name
+
+            if group_key == "system":
+                self.sidebar.add_system_item(key, tr(label), icon_name=icon_name, color=color)
+            else:
+                self.sidebar.add_item(group_key, key, tr(label), icon_name=icon_name, color=color)
+
+    def _on_user_pill_clicked(self) -> None:
+        """TopBar 우상단 유저 아바타 pill 클릭 → 메뉴 (로그아웃)."""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        act_logout = menu.addAction(tr("⏻  ログアウト"))
+        chosen = menu.exec(QCursor.pos())
+        if chosen is act_logout:
+            self._do_logout()
+
+    # ──────────────────────────────────────────────────────────────
+    # 단축키 / 네트워크 / 워커
+    # ──────────────────────────────────────────────────────────────
+    def _setup_shortcuts(self) -> None:
+        # Ctrl+K: TopBar 검색 포커스
+        QShortcut(QKeySequence(Qt.CTRL | Qt.Key_K), self).activated.connect(
+            self.topbar.focus_search
+        )
+        # Ctrl+1~6: visible 사이드바 아이템 N번째로 이동
         _KEYS = [Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4, Qt.Key_5, Qt.Key_6]
         for i, key in enumerate(_KEYS):
             sc = QShortcut(QKeySequence(Qt.CTRL | key), self)
             sc.activated.connect(lambda n=i: self._shortcut_navigate(n))
+        # Ctrl+,: 設定
         QShortcut(QKeySequence(Qt.CTRL | Qt.Key_Comma), self).activated.connect(
-            lambda: self._navigate_to_content(settings_idx)
+            lambda: self._activate_key("settings")
         )
 
-        # ── 네트워크 모니터링 초기화 ───────────────────────────────────────────
+    def _setup_network(self) -> None:
         QApplication.instance().is_online = True
         self.net_info = None
         try:
@@ -262,11 +320,10 @@ class MainWindow(QMainWindow):
             logger.warning(f"ネットワーク監視バックエンド初期化失敗 (無視して続行): {e}")
         if self.net_info:
             self.net_info.reachabilityChanged.connect(self._on_reachability_changed)
-            is_online = (self.net_info.reachability()
-                         == QNetworkInformation.Reachability.Online)
+            is_online = (self.net_info.reachability() == QNetworkInformation.Reachability.Online)
             self._update_network_ui(is_online)
 
-        # ── 데이터 보존 백그라운드 작업 ───────────────────────────────────────
+    def _setup_retention_worker(self) -> None:
         try:
             from app.core.config import load_settings as _load
             _s = _load()
@@ -277,97 +334,87 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"DataRetentionWorker 初期化失敗 (無視して続行): {e}")
 
-    # ── 사이드바 헬퍼 ──────────────────────────────────────────────────────────
-
-    def _refresh_header_colors(self, is_dark: bool):
-        color = QColor(UIColors.get_sidebar_header_color(is_dark))
-        for g in self._groups:
-            item = self.sidebar.item(g["header_row"])
-            if item:
-                item.setForeground(color)
-
-    def _add_group_header(self, label: str):
-        """클릭 가능 그룹 헤더 (▼/▶ 접기 토글 지원)."""
-        header_row = self.sidebar.count()
-        item = QListWidgetItem(f"  ▼ {label}")
-        item.setFlags(Qt.ItemIsEnabled)   # 클릭 가능, 선택 불가
-        f = item.font(); f.setBold(True); f.setPointSize(11); item.setFont(f)
-        item.setForeground(QColor(UIColors.get_sidebar_header_color(self.is_dark)))
-        self.sidebar.addItem(item)
-        self._groups.append({
-            "header_row": header_row,
-            "item_rows":  [],
-            "collapsed":  False,
-            "label":      label,
-        })
-
-    def _add_page(self, widget_or_factory, label: str, icon_name: str = ""):
-        """ウィジェット (またはファクトリ) を content_stack とサイドバーに登録する。
-        widget_or_factory が QWidget インスタンスの場合は即時追加。
-        クラス (callable) の場合はプレースホルダーを置いて遅延生成する。"""
-        content_idx = self.content_stack.count()
-
-        if isinstance(widget_or_factory, QWidget):
-            # 直接インスタンス (w_notifications 等)
-            self.content_stack.addWidget(widget_or_factory)
-            widget_ref = widget_or_factory
-        else:
-            # ファクトリクラス → プレースホルダーで遅延生成
-            self.content_stack.addWidget(QWidget())
-            self._widget_factories[content_idx] = widget_or_factory
-            widget_ref = None
-
-        sidebar_row = self.sidebar.count()
-        item = QListWidgetItem(f"  {label}")
-        if icon_name:
-            item.setIcon(get_tinted_icon(f":/img/{icon_name}.svg", self.is_dark))
-        self.sidebar.addItem(item)
-
-        self._row_to_content[sidebar_row] = content_idx
-        self._content_to_row[content_idx] = sidebar_row
-        if icon_name:
-            self._row_icons[sidebar_row] = icon_name
-
-        if widget_ref is self.w_notifications:
-            self._notifications_tab_index = sidebar_row
-
-        # 마지막 그룹에 아이템 row 등록
-        if self._groups:
-            self._groups[-1]["item_rows"].append(sidebar_row)
-
-    def _add_util_page(self, factory: callable) -> int:
-        """ユーティリティウィジェット (ログ・バグ・設定) を遅延生成でスタックに追加し、
-        そのコンテンツインデックスを返す。"""
-        content_idx = self.content_stack.count()
-        self.content_stack.addWidget(QWidget())   # プレースホルダー
-        self._widget_factories[content_idx] = factory
-        return content_idx
-
-    def _ensure_widget_created(self, content_idx: int):
-        """指定インデックスのウィジェットが未生成ならファクトリで生成し
-        プレースホルダーと交換する。シグナルを一時ブロックして余計なアニメーションを抑制する。"""
-        if content_idx not in self._widget_factories:
+    # ──────────────────────────────────────────────────────────────
+    # 페이지 네비게이션
+    # ──────────────────────────────────────────────────────────────
+    def _activate_key(self, key: str) -> None:
+        """Sidebar 활성 + Stage 전환 + 위젯 lazy create."""
+        idx = self._key_to_idx.get(key)
+        if idx is None:
             return
-        factory = self._widget_factories.pop(content_idx)
+        # 접힌 그룹에 있다면 펼치기
+        for group_key, g in self.sidebar._groups.items():
+            for item_key, _btn in g["items"]:
+                if item_key == key and g["collapsed"]:
+                    self.sidebar.set_group_collapsed(group_key, False, emit=True)
+                    break
+        self._ensure_widget_created(idx)
+        self.content_stack.setCurrentIndex(idx)
+        self.sidebar.set_active(key)
+
+    def _on_item_clicked(self, key: str) -> None:
+        idx = self._key_to_idx.get(key)
+        if idx is None:
+            return
+        self._ensure_widget_created(idx)
+        self.content_stack.setCurrentIndex(idx)
+        # 사이드바 아이템 클릭은 페이지 이동만. Top 탭 / 그룹 필터는 변경하지 않음
+        # (사용자가 Top 탭을 직접 클릭한 경우에만 필터링)
+
+    def _on_top_tab_changed(self, tab_key: str) -> None:
+        """Top 탭 직접 클릭 시 그룹 첫 아이템으로 이동.
+        빈 문자열 = 필터 해제 — 페이지 이동 없이 사이드바만 모두 표시."""
+        if not tab_key:
+            return  # 필터 해제만, 현재 페이지 유지
+        if tab_key == "market":
+            self._activate_key("dashboard")
+            return
+        first_key = next(
+            (k for k, g, *_ in _ITEM_DEFS if g == tab_key),
+            None,
+        )
+        if first_key is not None:
+            self._activate_key(first_key)
+
+    def _navigate_to_content(self, content_idx: int) -> None:
+        """bus.page_requested(int) 핸들러 — 대시보드 카드 호환 (idx 1~6)."""
+        key = self._idx_to_key.get(int(content_idx))
+        if key is not None:
+            self._activate_key(key)
+
+    def _shortcut_navigate(self, n: int) -> None:
+        """Ctrl+N → visible 아이템 N번째."""
+        keys = self.sidebar.visible_item_keys()
+        if 0 <= n < len(keys):
+            self._activate_key(keys[n])
+
+    def _ensure_widget_created(self, idx: int) -> None:
+        if idx not in self._idx_factories:
+            return
+        factory = self._idx_factories.pop(idx)
         widget = factory()
-        widget.set_theme(self.is_dark)
-        # スワップ中は currentChanged を発火させない
+        if hasattr(widget, "set_theme"):
+            widget.set_theme(self.is_dark)
         self.content_stack.blockSignals(True)
-        placeholder = self.content_stack.widget(content_idx)
-        self.content_stack.insertWidget(content_idx, widget)
+        placeholder = self.content_stack.widget(idx)
+        self.content_stack.insertWidget(idx, widget)
         self.content_stack.removeWidget(placeholder)
         self.content_stack.blockSignals(False)
+        # QDateEdit/QDateTimeEdit popup 을 디자인 시스템 톤으로 통일
+        try:
+            from app.ui.components.mini_calendar import install_on_date_edits
+            install_on_date_edits(widget)
+        except Exception:
+            pass
 
-    def _prefetch_all_widgets(self):
-        """起動後に未生成のウィジェットを順次生成してデータ取得を開始させる。
-        1 ウィジェットを生成するごとに PREFETCH_INTERVAL_MS 待機し UI スレッドを圧迫しない。"""
-        pending = sorted(self._widget_factories.keys())
+    def _prefetch_all_widgets(self) -> None:
+        pending = sorted(self._idx_factories.keys())
 
-        def _step(remaining: list):
+        def _step(remaining: list[int]) -> None:
             if not remaining:
                 return
             idx = remaining[0]
-            if idx in self._widget_factories:
+            if idx in self._idx_factories:
                 self._ensure_widget_created(idx)
             if len(remaining) > 1:
                 QTimer.singleShot(Timers.PREFETCH_INTERVAL_MS, lambda r=remaining[1:]: _step(r))
@@ -375,312 +422,85 @@ class MainWindow(QMainWindow):
         if pending:
             _step(pending)
 
-    def _on_sidebar_item_clicked(self, item: QListWidgetItem):
-        """그룹 헤더 클릭 → 접기/펼치기 토글."""
-        row = self.sidebar.row(item)
-        for group in self._groups:
-            if group["header_row"] == row:
-                self._toggle_group(group)
-                return
-
-    def _toggle_group(self, group: dict):
-        """그룹 접기/펼치기."""
-        group["collapsed"] = not group["collapsed"]
-        collapsed = group["collapsed"]
-        for row in group["item_rows"]:
-            self.sidebar.setRowHidden(row, collapsed)
-        # 헤더 ▼/▶ 갱신
-        indicator = "▶" if collapsed else "▼"
-        self.sidebar.item(group["header_row"]).setText(
-            f"  {indicator} {group['label']}"
-        )
-        # 현재 선택 row가 숨겨진 경우 → 첫 번째 보이는 페이지로 이동
-        if collapsed:
-            current_row = self.sidebar.currentRow()
-            if current_row in group["item_rows"]:
-                first_visible = next(
-                    (r for g in self._groups
-                     for r in g["item_rows"]
-                     if not g["collapsed"]),
-                    None,
-                )
-                if first_visible is not None:
-                    self.sidebar.setCurrentRow(first_visible)
-        self._save_group_states()
-
-    def _save_group_states(self):
-        """그룹 접힘 상태를 설정 파일에 저장."""
+    # ──────────────────────────────────────────────────────────────
+    # 그룹 접힘 상태 영속화
+    # ──────────────────────────────────────────────────────────────
+    def _save_group_states(self, *_args) -> None:
         from app.core.config import load_settings, save_settings
         s = load_settings()
-        s["sidebar_collapsed"] = {
-            str(g["header_row"]): g["collapsed"] for g in self._groups
-        }
+        # key 형식이 변경됐으므로 새 키 명으로 저장
+        s["sidebar_collapsed_v2"] = self.sidebar.collapsed_states()
         save_settings(s)
 
-    def _restore_group_states(self):
-        """저장된 그룹 접힘 상태 복원."""
+    def _restore_group_states(self) -> None:
         from app.core.config import load_settings
-        states = load_settings().get("sidebar_collapsed", {})
-        for g in self._groups:
-            if states.get(str(g["header_row"]), False):
-                g["collapsed"] = True
-                for row in g["item_rows"]:
-                    self.sidebar.setRowHidden(row, True)
-                self.sidebar.item(g["header_row"]).setText(
-                    f"  ▶ {g['label']}"
-                )
+        states = load_settings().get("sidebar_collapsed_v2", {})
+        if states:
+            self.sidebar.restore_collapsed_states(states)
 
-    def _on_sidebar_changed(self, row: int):
-        """사이드바 선택 변경 → 그룹 헤더이면 무시, 아니면 해당 페이지로 이동."""
-        if row < 0 or row not in self._row_to_content:
-            return
-        content_idx = self._row_to_content[row]
-        self._ensure_widget_created(content_idx)
-        self.content_stack.setCurrentIndex(content_idx)
-        # 유틸 버튼 선택 해제
-        self._set_util_active(None)
-
-    def _on_util_btn(self, content_idx: int, btn: QPushButton):
-        """하단 유틸리티 버튼 클릭 → 해당 페이지로 이동, 사이드바 선택 해제."""
-        self.sidebar.blockSignals(True)
-        self.sidebar.clearSelection()
-        self.sidebar.setCurrentRow(-1)
-        self.sidebar.blockSignals(False)
-        self._ensure_widget_created(content_idx)
-        self.content_stack.setCurrentIndex(content_idx)
-        self._set_util_active(btn)
-
-    def _set_util_active(self, btn: QPushButton | None):
-        """유틸 버튼의 활성 상태 시각화."""
-        for b, _ in self._util_btns:
-            b.setChecked(b is btn)
-        self._active_util_btn = btn
-
-    def _navigate_to_content(self, content_idx: int):
-        """content_stack 인덱스로 직접 네비게이션 (이벤트 버스 page_requested 수신)."""
-        self._ensure_widget_created(content_idx)
-        if content_idx in self._content_to_row:
-            row = self._content_to_row[content_idx]
-            # 접힌 그룹에 있으면 자동 펼침
-            for group in self._groups:
-                if group["collapsed"] and row in group["item_rows"]:
-                    self._toggle_group(group)
-                    break
-            self.sidebar.setCurrentRow(row)
-        else:
-            # 유틸 아이템
-            self.content_stack.setCurrentIndex(content_idx)
-            for btn, idx in self._util_btns:
-                if idx == content_idx:
-                    self._set_util_active(btn)
-                    break
-
-    def _shortcut_navigate(self, n: int):
-        """Ctrl+1~6 → 보이는 페이지 순서로 이동."""
-        rows = sorted(
-            r for r in self._row_to_content
-            if not self.sidebar.isRowHidden(r)
-        )
-        if n < len(rows):
-            self.sidebar.setCurrentRow(rows[n])
-
-    # ── 알림 센터 ──────────────────────────────────────────────────────────────
-
-    def _init_notification_db(self):
-        from app.core.config import APP_DIR
-        self._notif_db: Path = APP_DIR / "notifications.db"
-        try:
-            with sqlite3.connect(self._notif_db) as con:
-                con.execute("""
-                    CREATE TABLE IF NOT EXISTS notifications (
-                        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                        title     TEXT,
-                        message   TEXT,
-                        timestamp TEXT,
-                        is_read   INTEGER DEFAULT 0
-                    )
-                """)
-                # 保存期間 (NC.DB_RETENTION_DAYS 日) を超えた通知を自動削除
-                con.execute(
-                    f"DELETE FROM notifications "
-                    f"WHERE date(timestamp) < date('now', '-{NC.DB_RETENTION_DAYS} days')"
-                )
-            self._load_notifications_from_db()
-        except sqlite3.Error as e:
-            logger.error(f"通知DB初期化失敗: {e}")
-
-    def _load_notifications_from_db(self):
-        try:
-            with sqlite3.connect(self._notif_db) as con:
-                rows = con.execute(
-                    "SELECT id, title, message, timestamp, is_read "
-                    "FROM notifications ORDER BY id DESC"
-                ).fetchall()
-        except sqlite3.Error as e:
-            logger.error(f"通知DB読込失敗: {e}")
-            return
-        for row_id, title, message, timestamp, is_read in rows:
-            item = QListWidgetItem(f"[{timestamp}] {title}\n{message}")
-            f = item.font()
-            f.setBold(not is_read)
-            item.setFont(f)
-            item.setData(Qt.UserRole,     bool(is_read))
-            item.setData(Qt.UserRole + 1, row_id)
-            if is_read:
-                item.setForeground(QColor(UIColors.TEXT_MUTED))
-            self.w_notifications.addItem(item)
-
-    def add_notification(self, title: str, message: str):
-        from datetime import datetime
-        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with sqlite3.connect(self._notif_db) as con:
-                cur = con.execute(
-                    "INSERT INTO notifications (title, message, timestamp) VALUES (?, ?, ?)",
-                    (title, message, time_str),
-                )
-                row_id = cur.lastrowid
-        except sqlite3.Error as e:
-            logger.error(f"通知DB保存失敗: {e}")
-            row_id = None
-        item = QListWidgetItem(f"[{time_str}] {title}\n{message}")
-        f = item.font(); f.setBold(True); item.setFont(f)
-        item.setData(Qt.UserRole,     False)
-        item.setData(Qt.UserRole + 1, row_id)
-        self.w_notifications.insertItem(0, item)
+    # ──────────────────────────────────────────────────────────────
+    # 알림 센터
+    # ──────────────────────────────────────────────────────────────
+    def _init_notification_db(self) -> None:
+        """Phase 5.8: NotificationWidget 으로 모든 처리 위임. 초기 동기화만 수행."""
+        from app.widgets.notification import ensure_notification_db
+        ensure_notification_db()
         self._update_notification_badge()
 
-    def _mark_notification_read(self, item: QListWidgetItem):
-        if not item.data(Qt.UserRole):
-            item.setData(Qt.UserRole, True)
-            f = item.font(); f.setBold(False); item.setFont(f)
-            item.setForeground(QColor(UIColors.TEXT_MUTED))
-            self._update_notification_badge()
-            row_id = item.data(Qt.UserRole + 1)
-            if row_id is not None:
-                try:
-                    with sqlite3.connect(self._notif_db) as con:
-                        con.execute("UPDATE notifications SET is_read=1 WHERE id=?", (row_id,))
-                except sqlite3.Error as e:
-                    logger.error(f"通知既読更新失敗: {e}")
+    def add_notification(self, title: str, message: str, level: str = "info") -> None:
+        """외부 (gmail 등) 에서 호출. bus.notifications_changed 가 자동으로 갱신."""
+        from app.widgets.notification import add_notification as _add
+        _add(title, message, level)
 
-    def _remove_notification(self, item: QListWidgetItem):
-        row_id = item.data(Qt.UserRole + 1)
-        if row_id is not None:
-            try:
-                with sqlite3.connect(self._notif_db) as con:
-                    con.execute("DELETE FROM notifications WHERE id=?", (row_id,))
-            except sqlite3.Error as e:
-                logger.error(f"通知DB削除失敗: {e}")
-        self.w_notifications.takeItem(self.w_notifications.row(item))
-        self._update_notification_badge()
+    def _update_notification_badge(self) -> None:
+        from app.widgets.notification import count_unread
+        unread = count_unread()
+        suffix = f" ({unread})" if unread else ""
+        self.sidebar.update_item_label("notice", tr("通知センター") + suffix)
 
-    def _update_notification_badge(self):
-        unread = sum(
-            1 for i in range(self.w_notifications.count())
-            if not self.w_notifications.item(i).data(Qt.UserRole)
-        )
-        if self._notifications_tab_index is not None:
-            row = self._notifications_tab_index
-            if row < self.sidebar.count():
-                self.sidebar.item(row).setText(
-                    f"  {tr('通知センター ({0})').format(unread)}"
-                )
-
-    # ── Gmail 새 메일 ──────────────────────────────────────────────────────────
-
-    def _on_gmail_new_mail(self, label_name: str, unread_count: int):
-        """Gmail 新着メール → 通知センター + トレイ通知."""
+    # ──────────────────────────────────────────────────────────────
+    # Gmail 새 메일
+    # ──────────────────────────────────────────────────────────────
+    def _on_gmail_new_mail(self, label_name: str, unread_count: int) -> None:
         title = tr("📧 新着メール ({0}件) - {1}").format(unread_count, label_name)
         self.add_notification("Gmail", title)
-        if hasattr(self, "tray_icon") and self.tray_icon.isVisible():
+        # 트레이 balloon — 메인 윈도우가 숨겨진 경우에만 (앱 보이면 알림센터에서 확인 가능)
+        # + 최소 30 초 간격 — burst 시 Windows 네이티브 알림 폭주/깜빡임 방지
+        if (hasattr(self, "tray_icon") and self.tray_icon.isVisible()
+                and self.isHidden() and self._can_show_tray_balloon()):
             self.tray_icon.showMessage(
                 "Gmail", title, QSystemTrayIcon.Information, 4000,
             )
 
-    # ── トースト通知 ──────────────────────────────────────────────────────────
+    def _can_show_tray_balloon(self) -> bool:
+        """트레이 balloon 발화 가능 여부 — 마지막 발화로부터 N 초 지났는지."""
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, "_last_tray_balloon_t", 0.0)
+        if now - last < 30.0:    # 30 초 cooldown
+            return False
+        self._last_tray_balloon_t = now
+        return True
 
-    _TOAST_COLORS = {
-        "info":    ("#1565c0", "#fff"),
-        "success": ("#2e7d32", "#fff"),
-        "warning": ("#e65100", "#fff"),
-        "error":   ("#b71c1c", "#fff"),
-    }
+    # ──────────────────────────────────────────────────────────────
+    # 토스트 통지 (기존 로직 유지)
+    # ──────────────────────────────────────────────────────────────
+    def _show_toast(self, message: str, level: str = "info") -> None:
+        """레거시 wrapper — LeeToast 직접 호출로 forward.
 
-    def _show_toast(self, message: str, level: str = "info"):
-        """フローティングトースト通知をウィンドウ下部中央に表示する。"""
-        self._toast_timer.stop()
-        if self._toast_label is not None:
-            try:
-                self._toast_label.deleteLater()
-            except RuntimeError:
-                pass
-            self._toast_label = None
+        외부 호출 호환을 위해 시그니처 유지 (신규 코드는 LeeToast.show() 권장).
+        ToastManager 가 내부적으로 워밍업/dedupe/큐 모두 처리.
+        """
+        from app.ui.components.toast import LeeToast
+        LeeToast.show(message, kind=level)
 
-        bg, fg = self._TOAST_COLORS.get(level, self._TOAST_COLORS["info"])
+    # 레거시 토스트 메서드들은 LeeToast 시스템 (components/toast.py) 으로 단일화됨.
+    # 워밍업 / dedupe / 큐 / 우선순위는 모두 ToastManager 가 처리.
 
-        lbl = QLabel(message, self)
-        lbl.setWordWrap(True)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(
-            f"background: {bg}; color: {fg};"
-            "border-radius: 8px; padding: 10px 20px; font-size: 13px;"
-        )
-        lbl.adjustSize()
-
-        # 最大幅: ウィンドウ幅の 60%
-        max_w = max(200, int(self.width() * 0.6))
-        if lbl.width() > max_w:
-            lbl.setFixedWidth(max_w)
-            lbl.adjustSize()
-
-        x = (self.width() - lbl.width()) // 2
-        y = self.height() - lbl.height() - 40
-        lbl.setGeometry(QRect(x, y, lbl.width(), lbl.height()))
-        lbl.raise_()
-        lbl.show()
-        self._toast_label = lbl
-
-        effect = QGraphicsOpacityEffect(lbl)
-        lbl.setGraphicsEffect(effect)
-        self._toast_effect = effect
-
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(Animations.THEME_FADE_MS)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.OutQuad)
-        anim.start()
-        self._toast_anim = anim
-
-        self._toast_timer.start(Timers.TOAST_VISIBLE_MS)
-
-    def _dismiss_toast(self):
-        if self._toast_label is None:
-            return
-        lbl = self._toast_label
-
-        anim = QPropertyAnimation(self._toast_effect, b"opacity", self)
-        anim.setDuration(Animations.THEME_FADE_MS)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.InQuad)
-
-        def _cleanup():
-            try:
-                lbl.deleteLater()
-            except RuntimeError:
-                pass
-            if self._toast_label is lbl:
-                self._toast_label = None
-
-        anim.finished.connect(_cleanup)
-        anim.start()
-        self._toast_anim = anim
-
-    # ── 테마 ───────────────────────────────────────────────────────────────────
-
-    def _toggle_theme(self):
+    # ──────────────────────────────────────────────────────────────
+    # 테마
+    # ──────────────────────────────────────────────────────────────
+    def _toggle_theme(self) -> None:
         if self._theme_transitioning:
             return
         self._theme_transitioning = True
@@ -700,16 +520,10 @@ class MainWindow(QMainWindow):
         self._theme_overlay.show(); self._theme_overlay.raise_()
 
         self.is_dark = not self.is_dark
-        # キャッシュキーに is_dark が含まれるため、テーマ切替時のクリアは不要。
-        # 旧テーマのアイコンはキャッシュに残り、再切替時に再利用される。
-        app = QApplication.instance()
-        from app.core.config import get_theme_qss
-        from app.ui.theme import get_global_qss
-        mode = "dark" if self.is_dark else "light"
-        app.setStyleSheet(get_theme_qss(mode) + "\n" + get_global_qss(mode))
-        self.theme_btn.setText(
-            tr("☀️ ライトモード") if self.is_dark else tr("🌙 ダークモード"))
-        self._sync_theme()
+        from app.ui.theme import ThemeManager
+        # 1) 글로벌 QSS 만 즉시 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
+        ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        self.topbar.set_theme_glyph(self.is_dark)
 
         self._theme_effect = QGraphicsOpacityEffect(self._theme_overlay)
         self._theme_overlay.setGraphicsEffect(self._theme_effect)
@@ -718,61 +532,24 @@ class MainWindow(QMainWindow):
         self._theme_anim.setStartValue(1.0); self._theme_anim.setEndValue(0.0)
         self._theme_anim.setEasingCurve(QEasingCurve.OutQuad)
         self._theme_anim.finished.connect(self._theme_overlay.deleteLater)
+        # 2) 무거운 per-widget set_theme 는 fade-out 완료 후에 (transition 중 stutter 방지)
+        self._theme_anim.finished.connect(self._sync_theme)
         self._theme_anim.finished.connect(lambda: setattr(self, "_theme_transitioning", False))
         self._theme_anim.start()
 
-    def _sync_theme(self):
+    def _sync_theme(self) -> None:
         d = self.is_dark
-        # 컨텐츠 위젯 테마 동기화
         for i in range(self.content_stack.count()):
             w = self.content_stack.widget(i)
             if hasattr(w, "set_theme"):
                 w.set_theme(d)
-        # 알림 센터 (BaseWidget 아닌 QListWidget)
         self.w_notifications.setStyleSheet(UIColors.get_notification_list_style(d))
-        # 사이드바 아이콘 갱신
-        for row, icon_name in self._row_icons.items():
-            if row >= 0 and row < self.sidebar.count():
-                self.sidebar.item(row).setIcon(
-                    get_tinted_icon(f":/img/{icon_name}.svg", d))
-        # 유틸 버튼 아이콘 갱신
-        for btn, idx in self._util_btns:
-            key = -(idx + 1)
-            icon_name = self._row_icons.get(key, "")
-            if icon_name:
-                btn.setIcon(get_tinted_icon(f":/img/{icon_name}.svg", d))
-        # 유틸 스트립 스타일
-        self._apply_util_strip_style(d)
-        # 그룹 헤더 색 갱신
-        self._refresh_header_colors(d)
+        self.sidebar.set_theme(d)
 
-    def _apply_util_strip_style(self, is_dark: bool):
-        c = UIColors.get_util_strip_colors(is_dark)
-        self.findChild(QFrame, "utilStrip").setStyleSheet(f"""
-            QFrame#utilStrip {{
-                background: {c['bg']};
-                border-top: 1px solid {c['border']};
-            }}
-            QPushButton#utilBtn {{
-                background: transparent;
-                border: none;
-                border-radius: 4px;
-                color: {c['text']};
-                font-size: 11px;
-                padding: 2px 4px;
-            }}
-            QPushButton#utilBtn:hover {{
-                background: {c['hover_bg']};
-            }}
-            QPushButton#utilBtn:checked {{
-                background: {c['active']};
-                color: #ffffff;
-            }}
-        """)
-
-    # ── 설정 반영 ──────────────────────────────────────────────────────────────
-
-    def _apply_settings_all(self):
+    # ──────────────────────────────────────────────────────────────
+    # 설정 반영 / 네트워크 / 위치
+    # ──────────────────────────────────────────────────────────────
+    def _apply_settings_all(self) -> None:
         current = self.content_stack.currentWidget()
         for i in range(self.content_stack.count()):
             w = self.content_stack.widget(i)
@@ -783,29 +560,17 @@ class MainWindow(QMainWindow):
             else:
                 w._settings_dirty = True
 
-    # ── 네트워크 ──────────────────────────────────────────────────────────────
+    def _on_reachability_changed(self, reachability) -> None:
+        self._update_network_ui(reachability == QNetworkInformation.Reachability.Online)
 
-    def _on_reachability_changed(self, reachability):
-        self._update_network_ui(
-            reachability == QNetworkInformation.Reachability.Online)
-
-    def _update_network_ui(self, is_online: bool):
+    def _update_network_ui(self, is_online: bool) -> None:
         QApplication.instance().is_online = is_online
-        if is_online:
-            self.network_lbl.setText(tr("🟢 オンライン"))
-            self.network_lbl.setStyleSheet(
-                f"color: {UIColors.ONLINE_COLOR}; font-weight: bold; padding: 5px;"
-            )
-        else:
-            self.network_lbl.setText(tr("🔴 オフライン"))
-            self.network_lbl.setStyleSheet(
-                f"color: {UIColors.OFFLINE_COLOR}; font-weight: bold; padding: 5px;"
-            )
+        # TopBar 우상단 온라인 pill 갱신
+        self.topbar.set_online(is_online)
+        if not is_online:
             logger.warning("ネットワーク接続が切断されました。自動更新を一時停止します。")
 
-    # ── 창 위치/크기 저장·복원 ────────────────────────────────────────────────
-
-    def _restore_geometry(self):
+    def _restore_geometry(self) -> None:
         from app.core.config import load_settings
         geo = load_settings().get("window_geometry")
         if geo:
@@ -816,20 +581,18 @@ class MainWindow(QMainWindow):
                 pass
         self._center_window()
 
-    def _save_geometry(self):
+    def _save_geometry(self) -> None:
         from app.core.config import load_settings, save_settings
         s = load_settings()
         s["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         save_settings(s)
 
-    def _center_window(self):
+    def _center_window(self) -> None:
         geo = QApplication.primaryScreen().availableGeometry()
         self.move((geo.width() - self.width()) // 2,
                   (geo.height() - self.height()) // 2)
 
-    def _ensure_on_screen(self):
-        """保存済みジオメトリが現在のスクリーンに収まるよう補正する。
-        サイズが画面を超える場合は画面比率 (78%/82%) で再計算する。"""
+    def _ensure_on_screen(self) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
         g = self.geometry()
         if g.width() > screen.width() or g.height() > screen.height():
@@ -842,9 +605,10 @@ class MainWindow(QMainWindow):
         if (cw, ch, cx, cy) != (g.width(), g.height(), g.x(), g.y()):
             self.setGeometry(cx, cy, cw, ch)
 
-    # ── 트레이 / 종료 ─────────────────────────────────────────────────────────
-
-    def _setup_tray_icon(self):
+    # ──────────────────────────────────────────────────────────────
+    # 트레이 / 종료
+    # ──────────────────────────────────────────────────────────────
+    def _setup_tray_icon(self) -> None:
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QApplication.instance().windowIcon())
         self.tray_icon.setToolTip(tr("LEE電力モニター - バックグラウンド実行中"))
@@ -858,34 +622,31 @@ class MainWindow(QMainWindow):
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
 
-    def _on_tray_activated(self, reason):
+    def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_normal()
 
-    def _show_normal(self):
+    def _show_normal(self) -> None:
         self.showNormal(); self.activateWindow()
 
-    def _quit_app(self):
+    def _quit_app(self) -> None:
         self._is_quitting = True
+        try:
+            QApplication.instance().removeEventFilter(self)
+        except Exception:
+            pass
         self._save_geometry()
         bus.app_quitting.emit()
         QApplication.instance().quit()
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         if self._is_quitting:
             event.accept(); return
-        msg = QMessageBox(self)
-        msg.setWindowTitle(tr("終了の確認"))
-        msg.setText(tr(
-            "アプリケーションを完全に終了しますか？\n"
-            "それともトレイ（バックグラウンド）に最小化しますか？"))
-        btn_tray   = msg.addButton(tr("トレイに最小化"), QMessageBox.ActionRole)
-        btn_quit   = msg.addButton(tr("完全に終了"),     QMessageBox.DestructiveRole)
-        msg.addButton(tr("キャンセル"),    QMessageBox.RejectRole)
-        msg.exec()
-        if msg.clickedButton() is btn_quit:
+        dlg = QuitConfirmDialog(self)
+        dlg.exec()
+        if dlg.choice == QuitConfirmDialog.Quit:
             self._quit_app(); event.accept()
-        elif msg.clickedButton() is btn_tray:
+        elif dlg.choice == QuitConfirmDialog.Tray:
             self._save_geometry(); event.ignore(); self.hide()
             self.tray_icon.showMessage(
                 tr("LEE電力モニター"),
@@ -894,7 +655,210 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
-    def _safe_stop_retention(self):
+    # ──────────────────────────────────────────────────────────────
+    # Frameless window chrome — 순수 Qt 기반 드래그/리사이즈/스냅
+    # ──────────────────────────────────────────────────────────────
+    # WS_THICKFRAME 의 invisible padded border 가 visible edge 보다 넓게
+    # resize zone 을 만드는 문제를 피하기 위해 Windows native 프레임을
+    # 비활성한 채 Qt 만으로 처리. Aero Snap 은 drag 종료 시점에 화면 가장자리
+    # 거리 기반으로 수동 구현.
+
+    _DRAG_NONE = 0
+    _DRAG_MOVE = 1   # 타이틀바 드래그로 윈도우 이동
+    _RESIZE_LEFT         = 0x01
+    _RESIZE_RIGHT        = 0x02
+    _RESIZE_TOP          = 0x04
+    _RESIZE_BOTTOM       = 0x08
+    _RESIZE_TOPLEFT      = _RESIZE_TOP | _RESIZE_LEFT
+    _RESIZE_TOPRIGHT     = _RESIZE_TOP | _RESIZE_RIGHT
+    _RESIZE_BOTTOMLEFT   = _RESIZE_BOTTOM | _RESIZE_LEFT
+    _RESIZE_BOTTOMRIGHT  = _RESIZE_BOTTOM | _RESIZE_RIGHT
+    _SNAP_PX = 16  # drag 종료 시 화면 edge 까지의 거리 임계값
+
+    def _toggle_maximize(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def changeEvent(self, event) -> None:
+        # 윈도우 상태 변경 시 max 버튼 툴팁 갱신
+        from PySide6.QtCore import QEvent as _QEvent
+        if event.type() == _QEvent.WindowStateChange:
+            if hasattr(self, "topbar"):
+                self.topbar.set_maximized(self.isMaximized())
+        super().changeEvent(event)
+
+    # ── 마우스 이벤트: 드래그 / 리사이즈 / 더블클릭 max 토글 ───────
+    def _edge_at(self, local_pos: QPoint) -> int:
+        """local_pos 가 윈도우 가장자리 영역이면 _RESIZE_* 비트 마스크, 아니면 0."""
+        if self.isMaximized():
+            return 0
+        b = self.BORDER_PX
+        x, y = local_pos.x(), local_pos.y()
+        w, h = self.width(), self.height()
+        edge = 0
+        if x < b:           edge |= self._RESIZE_LEFT
+        elif x >= w - b:    edge |= self._RESIZE_RIGHT
+        if y < b:           edge |= self._RESIZE_TOP
+        elif y >= h - b:    edge |= self._RESIZE_BOTTOM
+        return edge
+
+    def _cursor_for_edge(self, edge: int):
+        if edge in (self._RESIZE_TOPLEFT, self._RESIZE_BOTTOMRIGHT):
+            return Qt.SizeFDiagCursor
+        if edge in (self._RESIZE_TOPRIGHT, self._RESIZE_BOTTOMLEFT):
+            return Qt.SizeBDiagCursor
+        if edge in (self._RESIZE_LEFT, self._RESIZE_RIGHT):
+            return Qt.SizeHorCursor
+        if edge in (self._RESIZE_TOP, self._RESIZE_BOTTOM):
+            return Qt.SizeVerCursor
+        return Qt.ArrowCursor
+
+    # 마우스 이벤트는 QApplication 레벨 eventFilter 로 처리.
+    # QMainWindow 의 mousePressEvent 는 centralWidget 의 자식들이 이벤트를
+    # 흡수하면 호출되지 않으므로, 자식 위젯의 마우스 이벤트도 가로채려면
+    # app.installEventFilter(self) 가 필요하다.
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent as _QEvent
+        # 우리 윈도우 안의 위젯 이벤트만 처리
+        if not isinstance(obj, QWidget) or obj.window() is not self:
+            return super().eventFilter(obj, event)
+
+        et = event.type()
+
+        # ── 1) MouseButtonPress: edge 면 resize 시작, 타이틀바 빈 영역이면 drag ──
+        if et == _QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            global_pos = event.globalPosition().toPoint()
+            local = self.mapFromGlobal(global_pos)
+            edge = self._edge_at(local)
+            if edge:
+                self._drag_state = self._DRAG_NONE
+                self._resize_edge = edge
+                self._drag_start_global = global_pos
+                self._drag_start_geo = self.geometry()
+                return True  # consume — 자식 위젯이 받지 않게
+            # 타이틀바 드래그?
+            if hasattr(self, "topbar") and 0 <= local.y() < self.topbar.height():
+                tb_local = self.topbar.mapFromGlobal(global_pos)
+                if self.topbar.is_drag_zone(tb_local):
+                    self._drag_state = self._DRAG_MOVE
+                    self._resize_edge = 0
+                    self._drag_start_global = global_pos
+                    self._drag_start_geo = self.geometry()
+                    self._drag_start_was_max = self.isMaximized()
+                    return True
+            return super().eventFilter(obj, event)
+
+        # ── 2) MouseMove: 진행 중인 drag/resize 처리 + idle 시 edge cursor ──
+        if et == _QEvent.MouseMove:
+            global_pos = event.globalPosition().toPoint()
+            if getattr(self, "_drag_state", 0) == self._DRAG_MOVE:
+                self._do_drag_move(global_pos)
+                return True
+            if getattr(self, "_resize_edge", 0):
+                self._apply_resize(global_pos)
+                return True
+            # idle: edge 위면 cursor 변경 (인터랙티브 자식 위는 무시)
+            if not (event.buttons() & Qt.LeftButton):
+                local = self.mapFromGlobal(global_pos)
+                edge = self._edge_at(local)
+                if edge:
+                    if self.cursor().shape() != self._cursor_for_edge(edge):
+                        self.setCursor(self._cursor_for_edge(edge))
+                else:
+                    if self.cursor().shape() != Qt.ArrowCursor:
+                        self.unsetCursor()
+            return super().eventFilter(obj, event)
+
+        # ── 3) MouseButtonRelease: drag 종료 → 수동 스냅 ──
+        if et == _QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if getattr(self, "_drag_state", 0) == self._DRAG_MOVE:
+                self._maybe_snap(event.globalPosition().toPoint())
+                self._drag_state = self._DRAG_NONE
+                return True
+            if getattr(self, "_resize_edge", 0):
+                self._resize_edge = 0
+                return True
+            return super().eventFilter(obj, event)
+
+        # ── 4) MouseButtonDblClick: 타이틀바 빈 영역 더블클릭 → max 토글 ──
+        if et == _QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+            global_pos = event.globalPosition().toPoint()
+            local = self.mapFromGlobal(global_pos)
+            if hasattr(self, "topbar") and 0 <= local.y() < self.topbar.height():
+                tb_local = self.topbar.mapFromGlobal(global_pos)
+                if self.topbar.is_drag_zone(tb_local):
+                    self._toggle_maximize()
+                    return True
+
+        return super().eventFilter(obj, event)
+
+    def _do_drag_move(self, global_pos: QPoint) -> None:
+        """진행 중인 타이틀바 드래그 — 윈도우 이동 + 최대화 상태 복원."""
+        delta = global_pos - self._drag_start_global
+        # 최대화 상태에서 드래그 시작 시 → 복원하면서 마우스 위치 비례 이동
+        if getattr(self, "_drag_start_was_max", False):
+            self.showNormal()
+            ratio = (self._drag_start_global.x() - self._drag_start_geo.left()) / max(1, self._drag_start_geo.width())
+            new_left = global_pos.x() - int(self.width() * ratio)
+            self.move(new_left, global_pos.y() - 10)
+            self._drag_start_global = global_pos
+            self._drag_start_geo = self.geometry()
+            self._drag_start_was_max = False
+            return
+        self.move(self._drag_start_geo.topLeft() + delta)
+
+    def _apply_resize(self, global_pos: QPoint) -> None:
+        """현재 마우스 글로벌 위치로 윈도우 geometry 재계산 + 적용."""
+        edge = self._resize_edge
+        delta = global_pos - self._drag_start_global
+        geo = QRect(self._drag_start_geo)
+        min_w = self.minimumWidth() or 200
+        min_h = self.minimumHeight() or 200
+
+        if edge & self._RESIZE_LEFT:
+            new_left = geo.left() + delta.x()
+            new_left = min(new_left, geo.right() - min_w + 1)
+            geo.setLeft(new_left)
+        if edge & self._RESIZE_RIGHT:
+            new_right = geo.right() + delta.x()
+            new_right = max(new_right, geo.left() + min_w - 1)
+            geo.setRight(new_right)
+        if edge & self._RESIZE_TOP:
+            new_top = geo.top() + delta.y()
+            new_top = min(new_top, geo.bottom() - min_h + 1)
+            geo.setTop(new_top)
+        if edge & self._RESIZE_BOTTOM:
+            new_bottom = geo.bottom() + delta.y()
+            new_bottom = max(new_bottom, geo.top() + min_h - 1)
+            geo.setBottom(new_bottom)
+        self.setGeometry(geo)
+
+    def _maybe_snap(self, global_pos: QPoint) -> None:
+        """드래그 종료 위치가 화면 가장자리 근처면 스냅."""
+        screen = QApplication.screenAt(global_pos) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        snap = self._SNAP_PX
+        # 상단 → 최대화
+        if global_pos.y() <= avail.top() + snap:
+            self.showMaximized()
+            return
+        # 좌측 → 화면 좌측 절반
+        if global_pos.x() <= avail.left() + snap:
+            half = QRect(avail.left(), avail.top(), avail.width() // 2, avail.height())
+            self.setGeometry(half)
+            return
+        # 우측 → 화면 우측 절반
+        if global_pos.x() >= avail.right() - snap:
+            half = QRect(avail.left() + avail.width() // 2, avail.top(),
+                         avail.width() - avail.width() // 2, avail.height())
+            self.setGeometry(half)
+            return
+
+    def _safe_stop_retention(self) -> None:
         try:
             if hasattr(self, "_retention_worker") and self._retention_worker.isRunning():
                 self._retention_worker.quit()
@@ -902,52 +866,105 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass
 
-    # ── ログアウト ─────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────
+    # ログアウト
+    # ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _build_user_card(email: str) -> QFrame:
+        """로그아웃 다이얼로그용 사용자 카드 (아바타 22px + email mono)."""
+        box = QFrame()
+        box.setObjectName("userInfoCard")
+        h = QHBoxLayout(box)
+        h.setContentsMargins(10, 8, 10, 8)
+        h.setSpacing(10)
 
-    def _do_logout(self):
-        """Google 認証を解除してログイン画面に戻る。"""
-        reply = QMessageBox(self)
-        reply.setWindowTitle(tr("ログアウト"))
-        reply.setText(tr("ログアウトしますか？\nGoogle アカウントの認証は解除されます。"))
-        btn_yes = reply.addButton(tr("ログアウト"), QMessageBox.DestructiveRole)
-        reply.addButton(tr("キャンセル"), QMessageBox.RejectRole)
-        reply.exec()
-        if reply.clickedButton() is not btn_yes:
+        # 아바타 (이메일 첫 글자)
+        initial = (email[:1] or "?").upper()
+        avatar = QLabel(initial)
+        avatar.setObjectName("userInfoAvatar")
+        avatar.setFixedSize(22, 22)
+        avatar.setAlignment(Qt.AlignCenter)
+        h.addWidget(avatar)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(0)
+        # 이메일 앞부분 (@ 앞) → 이름 자리
+        name = email.split("@", 1)[0] if "@" in email else email
+        name_lbl = QLabel(name)
+        name_lbl.setObjectName("userInfoName")
+        email_lbl = QLabel(email)
+        email_lbl.setObjectName("userInfoEmail")
+        text_box.addWidget(name_lbl)
+        text_box.addWidget(email_lbl)
+        h.addLayout(text_box, 1)
+
+        box.setStyleSheet("""
+            QFrame#userInfoCard {
+                background: #1B1E26;
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 8px;
+            }
+            QLabel#userInfoAvatar {
+                background: #FF7A45;
+                color: #ffffff;
+                border-radius: 11px;
+                font-size: 10px;
+                font-weight: 800;
+            }
+            QLabel#userInfoName {
+                color: #F2F4F7;
+                font-size: 11px;
+                font-weight: 700;
+                background: transparent;
+            }
+            QLabel#userInfoEmail {
+                font-family: "JetBrains Mono", "Consolas", monospace;
+                color: #6B7280;
+                font-size: 10px;
+                background: transparent;
+            }
+        """)
+        return box
+
+    def _do_logout(self) -> None:
+        from app.core.config import get_session_email
+        email = get_session_email() or ""
+
+        # 디자인 모킹업: warning 아이콘 + 메시지 + 사용자 카드 (아바타 + name + email)
+        dlg = LeeDialog(tr("ログアウト"), kind="warning", parent=self)
+        dlg.set_message(tr(
+            "ログアウトしますか？\n"
+            "Google アカウントの認証は解除されます。\n"
+            "次回ログイン時に再度サインインが必要です。"
+        ))
+        if email:
+            dlg.add_body_widget(self._build_user_card(email))
+        dlg.add_button(tr("キャンセル"), "secondary", role="reject")
+        dlg.add_button(tr("ログアウト"), "destructive", role="accept")
+        from PySide6.QtWidgets import QDialog as _QDialog
+        if dlg.exec() != _QDialog.Accepted:
             return
-
-        # ワーカーを停止
         bus.app_quitting.emit()
-
-        # Google 認証を解除
         try:
             from app.api.google.auth import revoke_credentials
             revoke_credentials()
         except Exception:
             pass
-
-        # ジオメトリを保存してウィンドウを閉じる
         self._save_geometry()
         self._is_quitting = True
-
-        # ログアウトシグナルを emit してから閉じる
         bus.user_logged_out.emit()
         QTimer.singleShot(50, self.close)
 
-    # ── アセンブルアニメーション ───────────────────────────────────────────
-
-    def show_with_animation(self):
-        """ログイン成功後のアセンブルアニメーションつき表示。
-        ウィンドウ全体が下から浮かび上がりながら、サイドバーがスライド展開し、
-        コンテンツがディレイでフェードインする高級感のある演出。"""
+    # ──────────────────────────────────────────────────────────────
+    # 표시 애니메이션
+    # ──────────────────────────────────────────────────────────────
+    def show_with_animation(self) -> None:
         self.setWindowOpacity(0.0)
-        
-        # OSフォーカス奪取対策: ウィンドウ状態をアクティブに
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
         self.show()
         self.raise_()
         self.activateWindow()
 
-        # UIが確実に描画された状態で最大化を解除し、画面外にはみ出ないよう補正
         if self.isMaximized() or self.isFullScreen():
             self.showNormal()
         self._ensure_on_screen()
@@ -957,27 +974,17 @@ class MainWindow(QMainWindow):
         self.move(start_pos)
 
         self._anim_win_op = QPropertyAnimation(self, b"windowOpacity")
-        self._anim_win_op.setStartValue(0.0)
-        self._anim_win_op.setEndValue(1.0)
+        self._anim_win_op.setStartValue(0.0); self._anim_win_op.setEndValue(1.0)
         self._anim_win_op.setDuration(Animations.WINDOW_SHOW_MS)
         self._anim_win_op.setEasingCurve(QEasingCurve.OutCubic)
 
         self._anim_win_pos = QPropertyAnimation(self, b"pos")
-        self._anim_win_pos.setStartValue(start_pos)
-        self._anim_win_pos.setEndValue(target_pos)
+        self._anim_win_pos.setStartValue(start_pos); self._anim_win_pos.setEndValue(target_pos)
         self._anim_win_pos.setDuration(Animations.WINDOW_SLIDE_MS)
         self._anim_win_pos.setEasingCurve(QEasingCurve.OutCubic)
 
-        # カクつき（Jank）の最大の原因であった、重いスプリッターの毎フレームリサイズ処理を排除
-        total_w = self.width()
-        target_sidebar_w = self.main_splitter.sizes()[0] if sum(self.main_splitter.sizes()) > 0 else 185
-        self.main_splitter.setSizes([target_sidebar_w, total_w - target_sidebar_w])
-
-        # ★重要★
-        # UIの初回描画(レイアウト計算など)でメインスレッドがブロックされるため、
-        # 描画が落ち着くまで少し(100ms)待ってからアニメーションを開始する
         def _start_anims():
             self._anim_win_op.start()
             self._anim_win_pos.start()
-            
+
         QTimer.singleShot(Animations.STARTUP_ANIM_DELAY_MS, _start_anims)

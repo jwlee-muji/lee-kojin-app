@@ -1,4 +1,10 @@
 <!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/fonts">
+    <file alias="Pretendard-Regular.otf">resources/fonts/Pretendard-Regular.otf</file>
+    <file alias="Pretendard-SemiBold.otf">resources/fonts/Pretendard-SemiBold.otf</file>
+    <file alias="Pretendard-Bold.otf">resources/fonts/Pretendard-Bold.otf</file>
+    <file alias="JetBrainsMono-Regular.ttf">resources/fonts/JetBrainsMono-Regular.ttf</file>
+</qresource>
 <qresource>
     <file>img/icon.png</file>
     <file>img/icon.ico</file>
@@ -18,6 +24,7 @@
     <file>img/gmail.svg</file>
     <file>img/spot.svg</file>
     <file>img/brief.svg</file>
+    <file>img/manual.svg</file>
     <file>img/weather/sunny.svg</file>
     <file>img/weather/mostly_sunny.svg</file>
     <file>img/weather/partly_cloudy.svg</file>

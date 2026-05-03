@@ -35,9 +35,16 @@ def current_fiscal_year() -> int:
     return fiscal_year_of(date.today())
 
 
+_JEPX_SPOT_FIRST_YEAR = 2016   # JEPX スポット CSV が公開されている最古年度
+
+
 def _years_to_download() -> list[int]:
-    """ダウンロード対象の暦年リスト (2005〜当年)。"""
-    return list(range(2005, datetime.now().year + 1))
+    """ダウンロード対象の暦年リスト (2016〜当年)。
+
+    JEPX スポット CSV は 2016 年が最古。それ以前を要求すると 404 が連発し
+    sleep 0.3s × N の無駄なネットワーク待機が発生するため範囲を絞る。
+    """
+    return list(range(_JEPX_SPOT_FIRST_YEAR, datetime.now().year + 1))
 
 
 # ── DB スキーマ ────────────────────────────────────────────────────────────────

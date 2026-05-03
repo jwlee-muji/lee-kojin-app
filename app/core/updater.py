@@ -20,8 +20,8 @@ from threading import Thread
 from pathlib import Path
 from typing import Optional
 from packaging.version import Version
-from PySide6.QtCore import QThread, Signal, Qt, QObject
-from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
+from PySide6.QtCore import QThread, Signal, QObject, QTimer
+from PySide6.QtWidgets import QApplication, QDialog
 from app.core.config import __version__
 
 logger = logging.getLogger(__name__)
@@ -190,6 +190,17 @@ class UpdateManager(QObject):
         self._check_worker    = None
         self._download_worker = None
         self._progress_dialog = None
+        self._last_url        = ""   # 재시도용
+        self._last_sha256_url = ""
+
+        # Dev simulation 상태
+        self._dev_simulating  = False
+        self._sim_timer       = None
+        self._sim_progress    = 0
+
+    def _parent_window(self):
+        """현재 활성 윈도우를 다이얼로그 부모로 사용 (없으면 None)."""
+        return QApplication.activeWindow()
 
     def start_check(self):
         self._check_worker = UpdateCheckWorker()
@@ -198,27 +209,22 @@ class UpdateManager(QObject):
         self._check_worker.start()
 
     def _on_update_found(self, info: dict):
-        reply = QMessageBox.question(
-            None,
-            "アップデートのお知らせ",
-            f"新しいバージョン v{info['version']} が利用可能です。\n"
-            f"（現在: v{__version__}）\n\n"
-            "今すぐ更新しますか？\n"
-            "（ダウンロード後、インストーラーが自動実行されアプリが再起動します）",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        from app.ui.dialogs import UpdateAvailableDialog
+        dlg = UpdateAvailableDialog(__version__, info['version'], parent=self._parent_window())
+        if dlg.exec() == QDialog.Accepted:
             self._start_download(info['url'], info.get('sha256_url', ''))
 
     def _start_download(self, url: str, sha256_url: str = ""):
-        self._progress_dialog = QProgressDialog("準備中...", None, 0, 100)
-        self._progress_dialog.setWindowTitle("アップデートをダウンロード中")
-        self._progress_dialog.setWindowModality(Qt.ApplicationModal)
-        self._progress_dialog.setMinimumDuration(0)
-        self._progress_dialog.setMinimumWidth(380)
-        self._progress_dialog.setValue(0)
+        self._last_url        = url
+        self._last_sha256_url = sha256_url
+
+        from app.ui.dialogs import UpdateProgressDialog
+        self._progress_dialog = UpdateProgressDialog(parent=self._parent_window())
         self._progress_dialog.show()
+
+        if self._dev_simulating:
+            self._start_simulated_download()
+            return
 
         self._download_worker = DownloadWorker(url, sha256_url)
         self._download_worker.progress.connect(self._on_progress)
@@ -230,24 +236,24 @@ class UpdateManager(QObject):
     def _on_progress(self, downloaded: int, total: int):
         if not self._progress_dialog:
             return
-        mb = downloaded / 1024 / 1024
-        if total > 0:
-            self._progress_dialog.setValue(int(downloaded / total * 100))
-            self._progress_dialog.setLabelText(
-                f"ダウンロード中... {mb:.1f} MB / {total / 1024 / 1024:.1f} MB"
-            )
-        else:
-            self._progress_dialog.setLabelText(f"ダウンロード中... {mb:.1f} MB")
+        downloaded_mb = downloaded / 1024 / 1024
+        total_mb      = total / 1024 / 1024 if total > 0 else 0.0
+        self._progress_dialog.update_progress(downloaded_mb, total_mb)
 
     def _on_download_finished(self, installer_path: str):
         if self._progress_dialog:
-            self._progress_dialog.close()
-        QMessageBox.information(
-            None,
-            "アップデート準備完了",
-            "ダウンロードが完了しました。\n"
-            "インストーラーを起動します。アプリは自動的に再起動されます。"
-        )
+            # progress 다이얼로그는 closeEvent 를 무시하므로 deleteLater
+            self._progress_dialog.deleteLater()
+            self._progress_dialog = None
+
+        from app.ui.dialogs import UpdateReadyDialog
+        UpdateReadyDialog(parent=self._parent_window()).exec()
+
+        if self._dev_simulating:
+            logger.info("[DEV] アップデートシミュレーション完了 (apply_update スキップ)")
+            self._dev_simulating = False
+            return
+
         apply_update(Path(installer_path))
         for widget in QApplication.topLevelWidgets():
             if hasattr(widget, '_is_quitting'):
@@ -256,5 +262,64 @@ class UpdateManager(QObject):
 
     def _on_download_error(self, err: str):
         if self._progress_dialog:
-            self._progress_dialog.close()
-        QMessageBox.warning(None, "ダウンロードエラー", f"ダウンロードに失敗しました:\n{err}")
+            self._progress_dialog.deleteLater()
+            self._progress_dialog = None
+
+        from app.ui.dialogs import DownloadErrorDialog
+        dlg = DownloadErrorDialog(err, details="", parent=self._parent_window())
+        dlg.retry.connect(self._on_retry_download)
+        dlg.exec()
+
+    def _on_retry_download(self):
+        """DownloadErrorDialog 의 retry signal 핸들러."""
+        if self._last_url:
+            logger.info("ダウンロードを再試行します")
+            self._start_download(self._last_url, self._last_sha256_url)
+
+    # ── Dev: 가짜 업데이트 흐름 시뮬레이션 ────────────────────────────────
+    def simulate_update_flow(self):
+        """Ctrl+Shift+U: 실제 GitHub 통신 없이 다이얼로그 흐름을 시뮬레이션 (dev 전용).
+
+        가짜 버전 정보로 _on_update_found 부터 흐름을 시작.
+        Yes 선택 시 가짜 다운로드 진행률 → 완료 → ReadyDialog 까지.
+        실제 apply_update / sys.exit 은 호출하지 않음.
+        """
+        if self._dev_simulating:
+            logger.warning("[DEV] 既に シミュレーション 実行中")
+            return
+        logger.info("[DEV] アップデートシミュレーション開始")
+        self._dev_simulating = True
+        fake_info = {
+            "version":    "9.9.9",
+            "url":        "https://example.invalid/fake/LEE_Setup.exe",
+            "sha256_url": "",
+        }
+        self._on_update_found(fake_info)
+        # 사용자가 後で 선택하면 _on_update_found 만 실행되고 끝
+        # Yes 선택 시 _start_download 가 호출되며 _start_simulated_download 로 분기됨
+        if not self._progress_dialog:
+            # Yes 안 누르고 닫음
+            self._dev_simulating = False
+
+    def _start_simulated_download(self):
+        """가짜 다운로드: QTimer 로 50ms 마다 2% 씩 진행."""
+        self._sim_progress = 0
+        self._sim_timer = QTimer(self)
+        self._sim_timer.timeout.connect(self._tick_simulated_progress)
+        self._sim_timer.start(50)
+
+    def _tick_simulated_progress(self):
+        if not self._progress_dialog:
+            self._sim_timer.stop()
+            return
+        self._sim_progress += 2
+        # 가짜 18 MB 다운로드
+        done_mb  = self._sim_progress * 0.18
+        total_mb = 18.0
+        self._progress_dialog.update_progress(done_mb, total_mb)
+
+        if self._sim_progress >= 100:
+            self._sim_timer.stop()
+            self._sim_timer.deleteLater()
+            self._sim_timer = None
+            self._on_download_finished("")  # fake path
