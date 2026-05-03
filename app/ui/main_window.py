@@ -245,6 +245,13 @@ class MainWindow(QMainWindow):
         # 첫 표시 후 app_ready emit — 위젯들이 fetch 시작 신호로 사용 가능
         self._app_ready_emitted = False
 
+        # P1-8 — 마스터 1 분 timer (bus.tick_minute) — 여러 위젯이 자체 1분
+        # timer 를 만들지 않도록 단일 emit 소스 제공
+        self._tick_minute_timer = QTimer(self)
+        self._tick_minute_timer.setInterval(60 * 1000)
+        self._tick_minute_timer.timeout.connect(bus.tick_minute.emit)
+        self._tick_minute_timer.start()
+
     def showEvent(self, event):
         super().showEvent(event)
         # 한 번만 emit — 사용자 위젯 들이 첫 fetch 게이팅에 사용

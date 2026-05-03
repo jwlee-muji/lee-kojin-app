@@ -65,5 +65,10 @@ class GlobalEventBus(QObject):
     # toast_requested: (message: str, level: str)  level = "info"|"success"|"warning"|"error"
     toast_requested     = Signal(str, str)
 
+    # ── 周期タイマー (P1-8 — refresh storm 抑制用マスター timer) ─────────────
+    # MainWindow 가 60 초마다 emit. 위젯들이 1 분 주기 polling 을 직접 만드는
+    # 대신 이 시그널을 구독. (현재는 인프라만 — 위젯별 마이그레이션 점진)
+    tick_minute = Signal()
+
 
 bus = GlobalEventBus()

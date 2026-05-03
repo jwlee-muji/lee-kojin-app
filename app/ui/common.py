@@ -262,7 +262,31 @@ class BaseWidget(QWidget):
         self._active_workers: list = []
         self._skel_effect: Optional[QGraphicsOpacityEffect] = None
         self._skel_anim: Optional[QPropertyAnimation] = None
+        # P1-8 — auto-pause timers when widget is hidden
+        # 위젯이 hidden 상태 (다른 탭으로 이동) 일 때 timer 멈춰서 refresh storm 억제
+        self._auto_pause_timers: list[QTimer] = []
         bus.app_quitting.connect(self._safe_terminate_workers)
+
+    def register_auto_pause_timer(self, timer: QTimer) -> None:
+        """타이머를 hide/show 라이프사이클에 묶어 자동 정지/재개시킨다.
+
+        위젯이 보이지 않을 때 polling 같은 주기 작업을 멈추기 위해 사용.
+        """
+        if timer not in self._auto_pause_timers:
+            self._auto_pause_timers.append(timer)
+
+    def hideEvent(self, event):
+        """위젯 hidden 시 등록된 timer 정지 — refresh storm 방지 (P1-8)."""
+        for t in self._auto_pause_timers:
+            try:
+                if t.isActive():
+                    t.setProperty("_was_active", True)
+                    t.stop()
+                else:
+                    t.setProperty("_was_active", False)
+            except RuntimeError:
+                pass
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         """ウィジェット破棄時にシグナル接続を安全に解除してメモリ漏れを防ぎます。"""
@@ -335,6 +359,14 @@ class BaseWidget(QWidget):
         super().showEvent(event)
         if getattr(self, '_settings_dirty', False):
             self.apply_settings()
+        # P1-8 — hideEvent 에서 멈춘 timer 들 재개
+        for t in self._auto_pause_timers:
+            try:
+                if t.property("_was_active"):
+                    t.start()
+                    t.setProperty("_was_active", False)
+            except RuntimeError:
+                pass
 
     def set_theme(self, is_dark: bool):
         self.is_dark = is_dark
