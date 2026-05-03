@@ -33,6 +33,18 @@ class DashboardDataService(QObject):
 
     def __init__(self):
         super().__init__()
+        # P1-11 — fetch 마다 ThreadPoolExecutor 를 새로 만들면
+        # 스레드 생성/소멸 비용이 누적되므로 인스턴스 1 개를 재사용한다.
+        # max_workers=4 — fetch_type "all" 시 동시 실행되는 4 개 task 분량.
+        self._executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="dash-svc"
+        )
+
+    def __del__(self):
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     def fetch_data(self, fetch_type):
         tasks = []
@@ -50,11 +62,10 @@ class DashboardDataService(QObject):
         if len(tasks) == 1:
             tasks[0]()
         else:
-            with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-                futures = [executor.submit(t) for t in tasks]
-                for f in as_completed(futures):
-                    if exc := f.exception():
-                        logger.error(f"並行DBフェッチ中にエラー: {exc}", exc_info=True)
+            futures = [self._executor.submit(t) for t in tasks]
+            for f in as_completed(futures):
+                if exc := f.exception():
+                    logger.error(f"並行DBフェッチ中にエラー: {exc}", exc_info=True)
 
     def _fetch_imbalance(self):
         try:
