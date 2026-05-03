@@ -65,6 +65,8 @@ class LeeCard(QFrame):
             self.setProperty("accent", accent_color)
         if interactive:
             self.setCursor(Qt.PointingHandCursor)
+            # P1-18 — 키보드 Tab 네비게이션 지원
+            self.setFocusPolicy(Qt.StrongFocus)
 
         # QSS box-shadow 미지원 → QGraphicsDropShadowEffect
         self._shadow: Optional[QGraphicsDropShadowEffect] = None
@@ -142,6 +144,11 @@ QFrame#leeCard {{
 }}
 QFrame#leeCard[interactive="true"]:hover {{
     border-color: {border};
+}}
+/* P1-18 — 키보드 포커스 시 accent 색 outline (스크린리더/Tab 네비게이션) */
+QFrame#leeCard[interactive="true"]:focus {{
+    border: 2px solid {accent};
+    outline: none;
 }}
 
 /* 좌측 4px 인디케이터 액센트 바 */

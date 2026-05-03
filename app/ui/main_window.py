@@ -316,6 +316,61 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.CTRL | Qt.Key_Comma), self).activated.connect(
             lambda: self._activate_key("settings")
         )
+        # P1-18 — 키보드 단축키 추가
+        # Ctrl+R: 현재 페이지 refresh
+        QShortcut(QKeySequence(Qt.CTRL | Qt.Key_R), self).activated.connect(
+            self._shortcut_refresh
+        )
+        # Ctrl+B: 사이드바 토글
+        QShortcut(QKeySequence(Qt.CTRL | Qt.Key_B), self).activated.connect(
+            self._toggle_sidebar
+        )
+        # F11: 풀스크린 토글
+        QShortcut(QKeySequence(Qt.Key_F11), self).activated.connect(
+            self._toggle_fullscreen
+        )
+
+    def _shortcut_refresh(self) -> None:
+        """현재 활성 페이지의 refresh 핸들러 호출. 위젯마다 이름이 달라
+        흔한 패턴을 순서대로 시도 (refresh / _refresh / fetch_data).
+        실패 시 _btn_refresh / _btn_fetch / _btn_update 클릭 fallback."""
+        w = self.content_stack.currentWidget()
+        if w is None:
+            return
+        for attr in ("refresh", "_refresh", "fetch_data", "_refresh_data"):
+            fn = getattr(w, attr, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    logger.warning(
+                        f"_shortcut_refresh: {type(w).__name__}.{attr}() 실패",
+                        exc_info=True,
+                    )
+                return
+        for btn_attr in ("_btn_refresh", "_btn_fetch", "_btn_update"):
+            btn = getattr(w, btn_attr, None)
+            if btn is not None and hasattr(btn, "click"):
+                try:
+                    btn.click()
+                except Exception:
+                    logger.warning(
+                        f"_shortcut_refresh: {btn_attr}.click() 실패",
+                        exc_info=True,
+                    )
+                return
+
+    def _toggle_sidebar(self) -> None:
+        """Ctrl+B — 사이드바 가시성 토글 (콘텐츠 영역 확장용)."""
+        if hasattr(self, "sidebar"):
+            self.sidebar.setVisible(not self.sidebar.isVisible())
+
+    def _toggle_fullscreen(self) -> None:
+        """F11 — 풀스크린 토글."""
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
     def _setup_network(self) -> None:
         QApplication.instance().is_online = True
