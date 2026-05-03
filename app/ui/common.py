@@ -1,3 +1,4 @@
+import logging
 from PySide6.QtWidgets import QTableWidget, QApplication, QWidget, QStackedWidget, QGraphicsOpacityEffect, QLabel
 from PySide6.QtGui import QKeySequence, QPixmap, QPainter, QColor, QIcon, QPen
 from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Qt, QPoint
@@ -8,6 +9,8 @@ from app.ui.theme import UIColors, Typography
 from typing import Optional
 from app.core.events import bus
 from app.core.i18n import tr
+
+logger = logging.getLogger(__name__)
 
 # PyQtGraph 렌더링 퀄리티 글로벌 향상
 pg.setConfigOptions(antialias=True)
@@ -289,7 +292,13 @@ class BaseWidget(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event):
-        """ウィジェット破棄時にシグナル接続を安全に解除してメモリ漏れを防ぎます。"""
+        """ウィジェット破棄時に워커 종료 + シグナル接続 해제로 메모리 누수 방지.
+
+        P1-17 — 위젯 단독 close 시에도 등록된 QThread 워커들을 정리.
+        앱 종료 시 hang 방지 (앱 종료는 bus.app_quitting 별도 처리).
+        """
+        # 워커 안전 종료 (quit + wait(2000) → 미응답 시 terminate)
+        self._safe_terminate_workers()
         try:
             bus.app_quitting.disconnect(self._safe_terminate_workers)
         except (RuntimeError, TypeError):
@@ -306,20 +315,31 @@ class BaseWidget(QWidget):
         if worker in self._active_workers:
             self._active_workers.remove(worker)
 
-    def _safe_terminate_workers(self):
-        """앱 종료 시 실행 중인 스레드를 안전하게 종료합니다.
-        quit() + wait() 후에도 실행 중이면 terminate() 로 강제 종료하여 좀비 스레드를 방지합니다."""
+    def _safe_terminate_workers(self) -> None:
+        """등록된 QThread 워커를 안전 종료. quit + wait(2000) → terminate fallback.
+
+        P1-17 — 사용자 명시 timeout 2 초. 그래도 응답 없으면 terminate +
+        wait(500) 으로 좀비 스레드 방지.
+        """
         import shiboken6
         for worker in self._active_workers:
             try:
-                if shiboken6.isValid(worker):
-                    if worker.isRunning():
-                        worker.quit()
-                        if not worker.wait(1000):
-                            worker.terminate()
-                            worker.wait()
+                if not shiboken6.isValid(worker):
+                    continue
+                if worker.isRunning():
+                    worker.quit()
+                    if not worker.wait(2000):
+                        logger.warning(
+                            f"QThread worker {type(worker).__name__} did not"
+                            f" quit in 2s — terminating",
+                        )
+                        worker.terminate()
+                        worker.wait(500)
             except Exception as e:
-                pass
+                logger.warning(
+                    f"worker termination failed for {type(worker).__name__}: {e}",
+                    exc_info=True,
+                )
         self._active_workers.clear()
 
     def _copy_graph(self, target_widget=None):
