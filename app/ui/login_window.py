@@ -272,11 +272,16 @@ class LoginWindow(QMainWindow):
         self._center()
 
     # ── PaintEvent: 배경 그라데이션 + 글로우 + 그리드 + vignette ─────────────
-    def paintEvent(self, event):
-        p = QPainter(self)
+    # 정적 배경 (5 그라디언트 + grid) 은 QPixmap 으로 캐싱 → 매 paint 마다 재계산 X
+    # 리사이즈 시에만 _bg_cache 재생성. 윈도우 드래그 / repaint 시 CPU 절감.
+    def _build_bg_pixmap(self, size) -> QPixmap:
+        """현재 size 에 맞는 정적 배경 QPixmap 을 생성."""
+        w, h = size.width(), size.height()
+        pm = QPixmap(size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect()
-        w, h = rect.width(), rect.height()
+        rect = pm.rect()
 
         # 1. Base radial (앵커: 우상단)
         base = QRadialGradient(w, 0, w * 1.4)
@@ -311,6 +316,23 @@ class LoginWindow(QMainWindow):
         vig.setColorAt(0.6, QColor(0, 0, 0, 0))
         vig.setColorAt(1,   QColor(0, 0, 0, int(255 * 0.25)))
         p.fillRect(rect, QBrush(vig))
+        p.end()
+        return pm
+
+    def paintEvent(self, event):
+        # 캐시 hit/miss
+        size = self.size()
+        cache_key = getattr(self, "_bg_cache_key", None)
+        if cache_key != (size.width(), size.height()):
+            self._bg_cache = self._build_bg_pixmap(size)
+            self._bg_cache_key = (size.width(), size.height())
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._bg_cache)
+
+    def resizeEvent(self, event):
+        # 사이즈 변경 시 캐시 무효화 (다음 paintEvent 에서 재생성)
+        self._bg_cache_key = None
+        super().resizeEvent(event)
 
     # ── 드래그 이동 ────────────────────────────────────────────────────────
     def mousePressEvent(self, event: QMouseEvent) -> None:
