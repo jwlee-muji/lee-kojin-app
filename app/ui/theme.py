@@ -316,6 +316,11 @@ class ThemeManager(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_theme = "dark"
+        # P1-12 — QSS 문자열 캐시 (테마별)
+        # 키: theme_name ("dark"/"light") → 빌드된 full_qss str
+        self._global_qss_cache: dict[str, str] = {}
+        # 위젯별 _apply_qss(tokens) 결과 캐시 (테마, widget_key) → str
+        self._widget_qss_cache: dict[tuple[str, str], str] = {}
 
     def set_theme(self, theme: str) -> None:
         self._current_theme = theme
@@ -323,17 +328,50 @@ class ThemeManager(QObject):
         from app.core.config import get_theme_qss
         from app.ui.components import components_qss
         from app.ui.dialogs import dialogs_qss
-        tokens = TOKENS_DARK if theme == "dark" else TOKENS_LIGHT
-        full_qss = "\n".join([
-            get_theme_qss(theme),
-            get_global_qss(theme),
-            components_qss(tokens),
-            dialogs_qss(tokens),
-        ])
+
+        # 캐시 hit/miss
+        full_qss = self._global_qss_cache.get(theme)
+        if full_qss is None:
+            tokens = TOKENS_DARK if theme == "dark" else TOKENS_LIGHT
+            full_qss = "\n".join([
+                get_theme_qss(theme),
+                get_global_qss(theme),
+                components_qss(tokens),
+                dialogs_qss(tokens),
+            ])
+            self._global_qss_cache[theme] = full_qss
         app = QApplication.instance()
         if app:
             app.setStyleSheet(full_qss)
         self.theme_changed.emit(theme)
+
+    def qss_for(self, widget_key: str, builder) -> str:
+        """위젯별 QSS 를 (theme, widget_key) 키로 캐싱하여 반환.
+
+        Parameters
+        ----------
+        widget_key : str
+            위젯 식별자 (보통 클래스명 또는 instance 별 고유 키)
+        builder : Callable[[dict], str]
+            tokens dict 를 받아 QSS 문자열을 생성하는 함수.
+            동일 tokens 에서 동일 결과를 보장해야 함 (pure function).
+
+        Usage:
+            qss = ThemeManager.instance().qss_for(
+                "GmailWidget", _build_gmail_qss)
+            self.setStyleSheet(qss)
+        """
+        key = (self._current_theme, widget_key)
+        cached = self._widget_qss_cache.get(key)
+        if cached is None:
+            cached = builder(self.tokens)
+            self._widget_qss_cache[key] = cached
+        return cached
+
+    def invalidate_qss_cache(self) -> None:
+        """토큰 정의 변경 시 호출하여 모든 QSS 캐시 무효화."""
+        self._global_qss_cache.clear()
+        self._widget_qss_cache.clear()
 
     @property
     def current_theme(self) -> str:
