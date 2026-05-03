@@ -224,10 +224,12 @@ class LabelEditDialog(LeeDialog):
             self._list.item(i).setCheckState(state)
 
     def _apply_local_qss(self) -> None:
-        bg = "#1B1E26"
-        bs = "rgba(255,255,255,0.06)"
-        fg = "#F2F4F7"
-        accent_bg = "rgba(234,67,53,0.18)"
+        from app.ui.theme import ThemeManager
+        t = ThemeManager.instance().tokens
+        bg = t["bg_surface_2"]
+        bs = t["border_subtle"]
+        fg = t["fg_primary"]
+        accent_bg = "rgba(234,67,53,0.18)"   # c_mail (#EA4335) 18% — 라벨 강조 의도 색
         self.setStyleSheet(self.styleSheet() + f"""
             QListWidget#gmailLabelEditList {{
                 background: {bg}; color: {fg};
@@ -419,8 +421,8 @@ class LabelListPanel(QWidget):
         else:
             item.setText(0, f"{name}{alarm}")
             f = item.font(0); f.setBold(False); item.setFont(0, f)
-            fg = "#F2F4F7" if self._is_dark else "#0B1220"
-            item.setForeground(0, QBrush(QColor(fg)))
+            from app.ui.theme import ThemeManager
+            item.setForeground(0, QBrush(QColor(ThemeManager.instance().tokens["fg_primary"])))
 
     def _on_selection_changed(self) -> None:
         items = self._tree.selectedItems()
@@ -586,7 +588,9 @@ class _MailItemWidget(QFrame):
                 continue
             lbl = self._label_lookup.get(lid)
             name = _label_display_name(lbl) if lbl else lid
-            color = (lbl or {}).get("color", {}).get("backgroundColor") or "#5856D6"
+            from app.ui.theme import ThemeManager
+            color = (lbl or {}).get("color", {}).get("backgroundColor") \
+                or ThemeManager.instance().tokens["c_ai"]
             chip = QLabel(name)
             chip.setObjectName("gmailLabelChip")
             chip.setStyleSheet(self._chip_qss(color))
@@ -1083,7 +1087,8 @@ class GmailCard(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self._is_dark = True
         self._build_ui()
-        self._apply_qss()
+        from app.ui.theme import ThemeManager
+        self._apply_qss(ThemeManager.instance().tokens)
 
     def _build_ui(self) -> None:
         v = QVBoxLayout(self); v.setContentsMargins(18, 16, 18, 16); v.setSpacing(10)
@@ -1159,33 +1164,30 @@ class GmailCard(QFrame):
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
-        self._apply_qss()
+        from app.ui.theme import ThemeManager
+        self._apply_qss(ThemeManager.instance().tokens)
 
-    def _apply_qss(self) -> None:
-        d = self._is_dark
-        bg = "#14161C" if d else "#FFFFFF"
-        fg_p = "#F2F4F7" if d else "#0B1220"
-        fg_t = "#6B7280" if d else "#8A93A6"
-        bs = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
+    def _apply_qss(self, tokens: dict) -> None:
+        """대시보드 카드 (Gmail) 스타일을 디자인 토큰으로 적용."""
         self.setStyleSheet(f"""
             QFrame#gmailDashCard {{
-                background: {bg}; border: 1px solid {bs};
+                background: {tokens['bg_surface']}; border: 1px solid {tokens['border_subtle']};
                 border-left: 4px solid {_C_MAIL};
                 border-radius: 14px;
             }}
             QFrame#gmailDashCard:hover {{ border-color: {_C_MAIL}; }}
             QLabel#gmailDashTitle {{
-                color: {fg_p}; background: transparent;
+                color: {tokens['fg_primary']}; background: transparent;
                 font-size: 14px; font-weight: 800;
             }}
             QLabel#gmailDashSub {{
-                color: {fg_t}; background: transparent; font-size: 11px;
+                color: {tokens['fg_tertiary']}; background: transparent; font-size: 11px;
             }}
             QLabel#gmailDashRow {{
-                color: {fg_p}; background: transparent; font-size: 11px;
+                color: {tokens['fg_primary']}; background: transparent; font-size: 11px;
             }}
             QLabel#gmailDashEmpty {{
-                color: {fg_t}; background: transparent; font-size: 11px;
+                color: {tokens['fg_tertiary']}; background: transparent; font-size: 11px;
                 font-family: "JetBrains Mono", "Consolas", monospace;
             }}
         """)
@@ -1313,55 +1315,55 @@ class GmailWidget(BaseWidget):
 
     # ── 테마 ─────────────────────────────────────────────────
     def apply_theme_custom(self) -> None:
+        from app.ui.theme import ThemeManager
+        tokens = ThemeManager.instance().tokens
         self._header.set_theme(self.is_dark)
         self._label_panel.set_theme(self.is_dark)
         self._preview_panel.set_theme(self.is_dark)
-        self._apply_qss()
+        self._apply_qss(tokens)
 
-    def _apply_qss(self) -> None:
-        d = self.is_dark
-        bg_app        = "#0A0B0F" if d else "#F5F6F8"
-        bg_surface    = "#14161C" if d else "#FFFFFF"
-        bg_surface_2  = "#1B1E26" if d else "#F0F2F5"
-        bg_alt        = "#161922" if d else "#F7F8FA"
-        fg_primary    = "#F2F4F7" if d else "#0B1220"
-        fg_secondary  = "#A8B0BD" if d else "#4A5567"
-        fg_tertiary   = "#6B7280" if d else "#8A93A6"
-        border_subtle = "rgba(255,255,255,0.04)" if d else "rgba(11,18,32,0.06)"  # 글로벌 TOKENS 정합
-        border        = "rgba(255,255,255,0.10)" if d else "rgba(11,18,32,0.10)"
-        sel_bg        = "rgba(234,67,53,0.14)" if d else "rgba(234,67,53,0.10)"
-        accent_bg     = "rgba(234,67,53,0.18)" if d else "rgba(234,67,53,0.10)"
+    def _apply_qss(self, tokens: dict) -> None:
+        """디자인 토큰 dict 기반으로 Gmail 위젯 전체 QSS 를 적용.
+
+        라벨 패널 / 메일 리스트 / 미리보기 / 미인증 오버레이를 일관되게.
+        c_mail (#EA4335) 는 Gmail 브랜드 액센트로 유지.
+        """
+        # hover variant 는 토큰에 없는 미묘한 톤이 아니라 bg_surface_2 로 통합
+        hover_bg = tokens["bg_surface_2"]
+        # c_mail (#EA4335 = 234,67,53) 의 selection / accent rgba 변형
+        sel_bg    = "rgba(234,67,53,0.14)"
+        accent_bg = "rgba(234,67,53,0.18)"
 
         self.setStyleSheet(f"""
             QFrame#gmailOuterCard {{
-                background: {bg_surface};
-                border: 1px solid {border_subtle};
+                background: {tokens['bg_surface']};
+                border: 1px solid {tokens['border_subtle']};
                 border-radius: 16px;
             }}
             QSplitter::handle {{ background: transparent; }}
 
             /* ── 라벨 패널 ── */
             QFrame#gmailLabelHdr {{
-                background: {bg_surface_2};
-                border-bottom: 1px solid {border_subtle};
+                background: {tokens['bg_surface_2']};
+                border-bottom: 1px solid {tokens['border_subtle']};
                 border-top-left-radius: 16px;
             }}
             QLabel#gmailLabelTitle {{
-                color: {fg_secondary}; background: transparent;
+                color: {tokens['fg_secondary']}; background: transparent;
                 font-size: 11px; font-weight: 800;
                 letter-spacing: 0.06em;
             }}
             QPushButton#gmailMiniBtn {{
-                background: {bg_surface}; color: {fg_secondary};
-                border: 1px solid {border_subtle}; border-radius: 7px;
+                background: {tokens['bg_surface']}; color: {tokens['fg_secondary']};
+                border: 1px solid {tokens['border_subtle']}; border-radius: 7px;
                 font-size: 13px;
             }}
             QPushButton#gmailMiniBtn:hover {{
-                background: {bg_alt}; color: {fg_primary};
+                background: {hover_bg}; color: {tokens['fg_primary']};
             }}
             QTreeWidget#gmailLabelTree {{
-                background: {bg_surface_2};
-                color: {fg_primary};
+                background: {tokens['bg_surface_2']};
+                color: {tokens['fg_primary']};
                 border: none; outline: 0;
                 font-size: 12px;
             }}
@@ -1370,97 +1372,97 @@ class GmailWidget(BaseWidget):
             }}
             QTreeWidget#gmailLabelTree::item:selected {{
                 background: {accent_bg};
-                color: {fg_primary};
+                color: {tokens['fg_primary']};
             }}
             QTreeWidget#gmailLabelTree::item:hover:!selected {{
-                background: {bg_alt};
+                background: {hover_bg};
             }}
             QTreeWidget#gmailLabelTree::branch {{ background: transparent; }}
 
             /* ── 메일 리스트 패널 ── */
             QFrame#gmailSearchWrap {{
-                background: {bg_surface};
-                border-bottom: 1px solid {border_subtle};
+                background: {tokens['bg_surface']};
+                border-bottom: 1px solid {tokens['border_subtle']};
             }}
             QLineEdit#gmailSearch {{
-                background: {bg_surface_2}; color: {fg_primary};
-                border: 1px solid {border_subtle}; border-radius: 8px;
+                background: {tokens['bg_surface_2']}; color: {tokens['fg_primary']};
+                border: 1px solid {tokens['border_subtle']}; border-radius: 8px;
                 padding: 0 12px; font-size: 12px;
             }}
             QLineEdit#gmailSearch:focus {{ border: 1px solid {_C_MAIL}; }}
             QFrame#gmailBulkBar {{
                 background: {accent_bg};
-                border-bottom: 1px solid {border_subtle};
+                border-bottom: 1px solid {tokens['border_subtle']};
             }}
             QLabel#gmailBulkCount {{
                 color: {_C_MAIL}; background: transparent;
                 font-size: 11.5px; font-weight: 800;
             }}
             QFrame#gmailMailHdr {{
-                background: {bg_surface};
-                border-bottom: 1px solid {border_subtle};
+                background: {tokens['bg_surface']};
+                border-bottom: 1px solid {tokens['border_subtle']};
             }}
             QLabel#gmailMailHdrLbl {{
-                color: {fg_primary}; background: transparent;
+                color: {tokens['fg_primary']}; background: transparent;
                 font-size: 13px; font-weight: 800;
             }}
             QListWidget#gmailMailList {{
-                background: {bg_surface};
+                background: {tokens['bg_surface']};
                 border: none; outline: 0;
             }}
             QListWidget#gmailMailList::item {{
-                border-bottom: 1px solid {border_subtle};
+                border-bottom: 1px solid {tokens['border_subtle']};
                 padding: 0;
             }}
             QListWidget#gmailMailList::item:selected {{
                 background: {sel_bg};
             }}
             QListWidget#gmailMailList::item:hover:!selected {{
-                background: {bg_alt};
+                background: {hover_bg};
             }}
             QFrame#gmailMailRow {{ background: transparent; }}
             QLabel#gmailSender[unread="true"] {{
-                color: {fg_primary}; background: transparent;
+                color: {tokens['fg_primary']}; background: transparent;
                 font-size: 12.5px; font-weight: 800;
             }}
             QLabel#gmailSender[unread="false"] {{
-                color: {fg_secondary}; background: transparent;
+                color: {tokens['fg_secondary']}; background: transparent;
                 font-size: 12.5px; font-weight: 500;
             }}
             QLabel#gmailDate {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 10.5px;
                 font-family: "JetBrains Mono", "Consolas", monospace;
             }}
             QPushButton#gmailStar[starred="true"] {{
-                color: #F4B400; background: transparent;
+                color: {tokens['c_jkm']}; background: transparent;
                 border: none; font-size: 14px;
             }}
             QPushButton#gmailStar[starred="false"] {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 border: none; font-size: 14px;
             }}
-            QPushButton#gmailStar:hover {{ color: #F4B400; }}
+            QPushButton#gmailStar:hover {{ color: {tokens['c_jkm']}; }}
             QLabel#gmailSubject[unread="true"] {{
-                color: {fg_primary}; background: transparent;
+                color: {tokens['fg_primary']}; background: transparent;
                 font-size: 12px; font-weight: 700;
             }}
             QLabel#gmailSubject[unread="false"] {{
-                color: {fg_secondary}; background: transparent;
+                color: {tokens['fg_secondary']}; background: transparent;
                 font-size: 12px;
             }}
             QLabel#gmailSnippet {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 10.5px;
             }}
             QLabel#gmailChipMore {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 9px; font-weight: 700;
             }}
             QCheckBox#gmailMailCheck {{ background: transparent; }}
             QCheckBox#gmailMailCheck::indicator {{
                 width: 14px; height: 14px;
-                border: 1.5px solid {fg_tertiary}; border-radius: 3px;
+                border: 1.5px solid {tokens['fg_tertiary']}; border-radius: 3px;
                 background: transparent;
             }}
             QCheckBox#gmailMailCheck::indicator:checked {{
@@ -1469,62 +1471,62 @@ class GmailWidget(BaseWidget):
             }}
 
             QLabel#gmailEmpty {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 12px;
             }}
 
             /* ── 미리보기 패널 ── */
             QFrame#gmailPreviewHdr {{
-                background: {bg_surface_2};
-                border-bottom: 1px solid {border_subtle};
+                background: {tokens['bg_surface_2']};
+                border-bottom: 1px solid {tokens['border_subtle']};
                 border-top-right-radius: 16px;
             }}
             QLabel#gmailPreviewSubj {{
-                color: {fg_primary}; background: transparent;
+                color: {tokens['fg_primary']}; background: transparent;
                 font-size: 17px; font-weight: 800;
             }}
             QLabel#gmailPreviewFrom {{
-                color: {fg_secondary}; background: transparent;
+                color: {tokens['fg_secondary']}; background: transparent;
                 font-size: 12px;
             }}
             QLabel#gmailPreviewDate {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 11px;
                 font-family: "JetBrains Mono", "Consolas", monospace;
             }}
             QFrame#gmailAttachWrap {{ background: transparent; }}
             QFrame#gmailPreviewActions {{
-                background: {bg_surface_2};
-                border-top: 1px solid {border_subtle};
+                background: {tokens['bg_surface_2']};
+                border-top: 1px solid {tokens['border_subtle']};
                 border-bottom-right-radius: 16px;
             }}
             QFrame#gmailPreviewBrowserWrap {{
-                background: {bg_surface};
+                background: {tokens['bg_surface']};
                 border: none;
             }}
             QTextBrowser#gmailPreviewBrowser {{
                 background: #FFFFFF;
                 color: #202124;
-                border: 1px solid {border_subtle};
+                border: 1px solid {tokens['border_subtle']};
                 border-radius: 12px;
             }}
             QLabel#gmailPreviewEmpty {{
-                color: {fg_tertiary}; background: {bg_surface};
+                color: {tokens['fg_tertiary']}; background: {tokens['bg_surface']};
                 font-size: 13px;
             }}
 
             /* ── 미인증 오버레이 ── */
             QFrame#gmailAuthOverlay {{
-                background: {bg_surface};
-                border: 1px solid {border_subtle};
+                background: {tokens['bg_surface']};
+                border: 1px solid {tokens['border_subtle']};
                 border-radius: 16px;
             }}
             QLabel#gmailAuthLbl {{
-                color: {fg_secondary}; background: transparent;
+                color: {tokens['fg_secondary']}; background: transparent;
                 font-size: 15px; font-weight: 700;
             }}
             QLabel#gmailAuthSub {{
-                color: {fg_tertiary}; background: transparent;
+                color: {tokens['fg_tertiary']}; background: transparent;
                 font-size: 12px;
             }}
         """)

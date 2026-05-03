@@ -339,6 +339,15 @@ class ThemeManager(QObject):
     def current_theme(self) -> str:
         return self._current_theme
 
+    @property
+    def tokens(self) -> dict:
+        """현재 테마의 디자인 토큰 dict 를 반환.
+
+        위젯 ``_apply_qss(tokens)`` 형태에서 인라인 분기 대신 사용.
+        다크/라이트 토글 시 자동 갱신됨.
+        """
+        return TOKENS_DARK if self._current_theme == "dark" else TOKENS_LIGHT
+
     def is_dark(self) -> bool:
         return self._current_theme == "dark"
 
