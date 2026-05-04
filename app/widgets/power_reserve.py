@@ -756,6 +756,16 @@ class PowerReserveWidget(BaseWidget):
     # 렌더링 (PivotTable + Bars + BigChart + KPI + DetailHeader)
     # ──────────────────────────────────────────────────────────
     def _render(self, headers: list[str], rows: list[list[str]]) -> None:
+        # 성능 — 갱신 동안 paint 일시 정지 (batch update)
+        # pivot/bars/chart 다중 setItem/setData 가 매번 paint 트리거 하던 것을
+        # 한 번에 묶어 Qt repaint 1 회로 압축. 데이터 갱신 시 lag 감소.
+        self.setUpdatesEnabled(False)
+        try:
+            self._render_inner(headers, rows)
+        finally:
+            self.setUpdatesEnabled(True)
+
+    def _render_inner(self, headers: list[str], rows: list[list[str]]) -> None:
         low_th  = float(self.settings.get("reserve_low",  _DEFAULT_LOW))
         warn_th = float(self.settings.get("reserve_warn", _DEFAULT_WARN))
 

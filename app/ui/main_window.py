@@ -586,6 +586,9 @@ class MainWindow(QMainWindow):
 
         # 진행 indicator — overlay 의 CHILD 로 (overlay pixmap 위에 paint 보장,
         # opacity fade 시 spinner 도 함께 사라짐)
+        # spinner 회전은 setStyleSheet (동기 main thread block) 동안 멈춤이 Qt 한계.
+        # 그래서 정적 라벨 ("テーマ切替中") 도 함께 표시하여 회전 정지 시에도
+        # 사용자가 "처리 중" 명확히 인지하게 함.
         try:
             from app.ui.components import LeeRingSpinner
             from app.ui.theme import TOKENS_DARK
@@ -593,12 +596,29 @@ class MainWindow(QMainWindow):
                 size=56, color=TOKENS_DARK["accent"], parent=self._theme_overlay,
             )
             sx = (self.width() - 56) // 2
-            sy = (self.height() - 56) // 2
+            sy = (self.height() - 56) // 2 - 14
             self._theme_spinner.move(sx, sy)
             self._theme_spinner.show()
+
+            # 정적 안내 라벨
+            self._theme_busy_lbl = QLabel(self._theme_overlay)
+            self._theme_busy_lbl.setText(tr("テーマを切り替えています..."))
+            self._theme_busy_lbl.setStyleSheet(
+                "QLabel { color: white; background: rgba(0,0,0,0.55); "
+                "border-radius: 12px; padding: 8px 16px; "
+                "font-size: 12px; font-weight: 700; }"
+            )
+            self._theme_busy_lbl.adjustSize()
+            lw = self._theme_busy_lbl.width()
+            lx = (self.width() - lw) // 2
+            ly = sy + 56 + 12
+            self._theme_busy_lbl.move(lx, ly)
+            self._theme_busy_lbl.show()
             self._theme_spinner.raise_()
+            self._theme_busy_lbl.raise_()
         except Exception:
             self._theme_spinner = None
+            self._theme_busy_lbl = None
 
         # ★ 중요 — 무거운 ThemeManager.set_theme 호출 직전에 paint 강제
         # 이걸 안 하면 overlay/spinner 가 paint 되기 전에 set_theme 가 main thread 를
@@ -627,14 +647,15 @@ class MainWindow(QMainWindow):
         self._theme_anim.start()
 
     def _teardown_theme_spinner(self) -> None:
-        """테마 전환 spinner 정리."""
-        sp = getattr(self, "_theme_spinner", None)
-        if sp is not None:
-            try:
-                sp.deleteLater()
-            except RuntimeError:
-                pass
-            self._theme_spinner = None
+        """테마 전환 spinner + 안내 라벨 정리."""
+        for attr in ("_theme_spinner", "_theme_busy_lbl"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.deleteLater()
+                except RuntimeError:
+                    pass
+                setattr(self, attr, None)
 
     def _sync_theme(self) -> None:
         """테마 변경 시 위젯들의 set_theme 적용.

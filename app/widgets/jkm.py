@@ -919,17 +919,22 @@ class JkmWidget(BaseWidget):
             return []
 
     def _render_all(self) -> None:
-        self._render_chart()
-        self._update_kpis()
-        ind = self._ind_by_id.get(self._active_id, {})
-        period_label = next((l for k, l in _PERIODS if k == self._period), self._period)
-        self._chart_frame.set_subtitle(
-            f"{ind.get('label', self._active_id)} · {period_label} · {len(self._dates)} {tr('ポイント')}"
-        )
-        self._chart_frame.set_title(tr("{0} 推移").format(ind.get("label", "")))
-        # Header badge — 최신 값 + 단위
-        if self._closes:
-            self._header.set_badge(f"{ind.get('label','')} {self._closes[-1]:.2f}")
+        # 성능 — 차트/KPI/Header badge 갱신을 batch 로 묶어 paint 1 회
+        self.setUpdatesEnabled(False)
+        try:
+            self._render_chart()
+            self._update_kpis()
+            ind = self._ind_by_id.get(self._active_id, {})
+            period_label = next((l for k, l in _PERIODS if k == self._period), self._period)
+            self._chart_frame.set_subtitle(
+                f"{ind.get('label', self._active_id)} · {period_label} · {len(self._dates)} {tr('ポイント')}"
+            )
+            self._chart_frame.set_title(tr("{0} 推移").format(ind.get("label", "")))
+            # Header badge — 최신 값 + 단위
+            if self._closes:
+                self._header.set_badge(f"{ind.get('label','')} {self._closes[-1]:.2f}")
+        finally:
+            self.setUpdatesEnabled(True)
 
     def _render_chart(self) -> None:
         self._chart.clear_curves()

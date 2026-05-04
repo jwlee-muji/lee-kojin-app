@@ -1561,27 +1561,32 @@ class HjksWidget(BaseWidget):
     # 렌더링
     # ──────────────────────────────────────────────────────────
     def _render(self) -> None:
-        # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
-        if self._rows and getattr(self, "_chart_skel", None) is not None:
-            self._chart_skel.stop()
-        # Chart
-        self._chart.set_data(self._rows, self._sel_methods, self._sel_regions)
-        self._render_kpi()
-        self._render_region_panel()
-        # Header badge
-        n_days = len(self._rows)
-        self._header.set_badge(
-            f"{len(self._sel_regions)}/{len(HJKS_REGIONS)} エリア · "
-            f"{len(self._sel_methods)}/{len(HJKS_METHODS)} 電源 · {n_days}日"
-        )
-        # Chart subtitle (range)
-        if self._rows:
-            d0 = self._rows[0]["date"]; d1 = self._rows[-1]["date"]
-            self._chart_frame.set_subtitle(
-                tr("{0} 〜 {1} · 電源種別の累積 (各日 出力)").format(d0, d1)
+        # 성능 — chart/KPI/region panel/badge 갱신 batch (paint 1 회)
+        self.setUpdatesEnabled(False)
+        try:
+            # 데이터 도착 시 skeleton 숨기기 (재사용 가능 — refresh 시 다시 .start())
+            if self._rows and getattr(self, "_chart_skel", None) is not None:
+                self._chart_skel.stop()
+            # Chart
+            self._chart.set_data(self._rows, self._sel_methods, self._sel_regions)
+            self._render_kpi()
+            self._render_region_panel()
+            # Header badge
+            n_days = len(self._rows)
+            self._header.set_badge(
+                f"{len(self._sel_regions)}/{len(HJKS_REGIONS)} エリア · "
+                f"{len(self._sel_methods)}/{len(HJKS_METHODS)} 電源 · {n_days}日"
             )
-        else:
-            self._chart_frame.set_subtitle(tr("データなし"))
+            # Chart subtitle (range)
+            if self._rows:
+                d0 = self._rows[0]["date"]; d1 = self._rows[-1]["date"]
+                self._chart_frame.set_subtitle(
+                    tr("{0} 〜 {1} · 電源種別の累積 (各日 出力)").format(d0, d1)
+                )
+            else:
+                self._chart_frame.set_subtitle(tr("データなし"))
+        finally:
+            self.setUpdatesEnabled(True)
 
     def _render_kpi(self) -> None:
         if not self._rows:
