@@ -50,7 +50,7 @@ from app.core.events import bus
 from app.core.i18n import tr
 from app.ui.common import BaseWidget
 from app.ui.components import (
-    LeeButton, LeeCard, LeeDialog, LeePill,
+    LeeButton, LeeCard, LeeDialog,
     LeeIconTile, LeeKPI, LeeDetailHeader, LeeChartFrame,
     LeeBigChart, LeePivotTable, LeeReserveBars, LeeDateInput,
     LeeCountValue,

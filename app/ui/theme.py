@@ -176,20 +176,6 @@ QCheckBox#settingsCheckbox {{
 }}
 QCheckBox#settingsCheckbox:hover {{ background-color: {bg_surface_2}; }}
 
-/* ── SummaryCard (dynamic property) ───────────────────────────────────── */
-SummaryCard[theme="dark"] {{
-    background-color: {bg_surface};
-    border: 1px solid {border_subtle};
-    border-radius: 8px;
-}}
-SummaryCard[theme="dark"]:hover {{ background-color: {bg_surface_3}; }}
-SummaryCard[theme="light"] {{
-    background-color: {bg_surface};
-    border: 1px solid {border};
-    border-radius: 8px;
-}}
-SummaryCard[theme="light"]:hover {{ background-color: {bg_surface_2}; }}
-
 /* ── QScrollBar ────────────────────────────────────────────────────────── */
 QScrollBar:vertical {{
     background: {bg_app};
