@@ -246,6 +246,12 @@ class LogTableModel(QAbstractTableModel):
         self._records: list[LogRecord] = []
         self._visible_idx: list[int] = []
         self._is_dark = True
+        # 글로벌 setStyleSheet cascade 시 hidden LogViewer 의 model.data() 가
+        # 5+ 초간 polling 되어 테마 토글 freeze 의 30% 이상을 차지하던 문제 회피.
+        # 위젯 hidden 시 set_active(False) 호출하면 rowCount=0 → Qt cascade 가
+        # data() 를 호출하지 않음. 다시 show 시 set_active(True) 로 복원.
+        # 초기값 False — 위젯이 처음 생성될 때는 hidden 상태이므로.
+        self._active = False
 
     # ── 데이터 설정 / 필터 ─────────────────────────────────────
     def set_records(self, records: list[LogRecord]) -> None:
@@ -288,15 +294,32 @@ class LogTableModel(QAbstractTableModel):
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
-        if self._records:
+        # 비활성 (hidden) 상태면 dataChanged emit 생략 — 어차피 view 가 paint
+        # 안 하고 다음 set_active(True) 에서 endResetModel 이 view 를 새로 그림
+        if self._records and self._active:
             top = self.index(0, 0)
             bot = self.index(self.rowCount() - 1, self.columnCount() - 1)
             self.dataChanged.emit(top, bot, [Qt.ForegroundRole, Qt.BackgroundRole])
+
+    def set_active(self, active: bool) -> None:
+        """위젯 visible 상태 동기화 — hidden 동안 rowCount=0 으로 cascade 차단.
+
+        Qt 의 setStyleSheet 글로벌 cascade 가 모든 QTableView (hidden 포함) 의
+        model 을 polling 하는 문제 회피. hidden→active=False 시 rowCount() 가
+        0 을 반환하여 data() 호출이 발생하지 않음 → 테마 토글 5+ 초 회수.
+        """
+        if active == self._active:
+            return
+        self.beginResetModel()
+        self._active = active
+        self.endResetModel()
 
     # ── Qt overrides ───────────────────────────────────────────
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
             return 0
+        if not self._active:
+            return 0   # hidden 상태 — Qt cascade 가 data() 안 부르도록
         return len(self._visible_idx)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
@@ -874,6 +897,11 @@ class LogViewerWidget(BaseWidget):
     # ── 라이프사이클 ─────────────────────────────────────────
     def showEvent(self, event):
         super().showEvent(event)
+        # hidden 동안 비활성이었던 model 재활성 — rowCount 정상 복원
+        try:
+            self._model.set_active(True)
+        except Exception:
+            pass
         # 표시될 때 selection 시그널 재연결 (model 이 reset 되면 selectionModel 이 교체될 수 있음)
         sm = self.table.selectionModel()
         if sm:
@@ -882,6 +910,15 @@ class LogViewerWidget(BaseWidget):
             except (RuntimeError, TypeError):
                 pass
             sm.selectionChanged.connect(lambda *_: self._on_selection_changed())
+
+    def hideEvent(self, event):
+        # 다른 페이지로 이동 시 model 비활성 — 글로벌 setStyleSheet cascade 시
+        # data() polling 으로 인한 5+ 초 freeze 차단 (테마 토글 30% 이상 회수)
+        try:
+            self._model.set_active(False)
+        except Exception:
+            pass
+        super().hideEvent(event)
 
 
 # ──────────────────────────────────────────────────────────────────────

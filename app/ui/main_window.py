@@ -478,7 +478,21 @@ class MainWindow(QMainWindow):
             return
         factory = self._idx_factories.pop(idx)
         widget = factory()
-        if hasattr(widget, "set_theme"):
+        # 위젯 생성 직후 즉시 apply_theme_custom 호출 — 첫 nav 시 200~500ms freeze
+        # 회피 (BaseWidget.set_theme 는 hidden 시 _pending_theme 마킹만 → 첫
+        # showEvent 가 무거운 setStyleSheet 부담을 떠안음). 생성은 prefetch 중
+        # background 로 진행되므로 사용자 인지 freeze 없이 비용을 분산.
+        if hasattr(widget, "apply_theme_custom"):
+            try:
+                widget.is_dark = self.is_dark
+                widget._pending_theme = None
+                widget.apply_theme_custom()
+            except Exception:
+                try:
+                    widget.set_theme(self.is_dark)
+                except Exception:
+                    pass
+        elif hasattr(widget, "set_theme"):
             widget.set_theme(self.is_dark)
         self.content_stack.blockSignals(True)
         placeholder = self.content_stack.widget(idx)
@@ -654,8 +668,23 @@ class MainWindow(QMainWindow):
         from app.ui.theme import ThemeManager
         from app.core.profiler import measure_block
         # 1) 글로벌 QSS 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
-        with measure_block("theme_toggle.global_qss", slow_ms=150):
-            ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        # 글로벌 eventFilter 임시 제거 — Qt 의 setStyleSheet cascade 중에 polish /
+        # StyleChange / palette 등 수많은 이벤트가 fire 되어 Python eventFilter 가
+        # 매번 호출되며 1.9 초 가량 소비. transition 중엔 마우스 drag/resize 도
+        # 사실상 발생하지 않으므로 안전.
+        _app = QApplication.instance()
+        try:
+            _app.removeEventFilter(self)
+        except Exception:
+            pass
+        try:
+            with measure_block("theme_toggle.global_qss", slow_ms=150):
+                ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        finally:
+            try:
+                _app.installEventFilter(self)
+            except Exception:
+                pass
         # 다음 실행 시 복원 — settings.theme 영구 저장
         try:
             from app.core.config import save_settings, load_settings
