@@ -95,6 +95,13 @@ class FetchLabelsWorker(_BaseGmailWorker):
     data_fetched = Signal(list)
 
     def run(self):
+        # cache 크기 폭증 방지 — 세션당 1회 오래된 행 evict (Labels fetch 는
+        # 기동/주기적 새로고침 경로라 자연스러운 hook)
+        try:
+            from app.api.google.gmail_cache import evict_old
+            evict_old()
+        except Exception:
+            pass
         try:
             svc = self._service()
             result = _execute_single(svc.users().labels().list(userId="me"))
@@ -151,6 +158,9 @@ class FetchMailListWorker(_BaseGmailWorker):
 
     def run(self):
         try:
+            from app.api.google.gmail_cache import (
+                get_cached_metadata, cache_metadata,
+            )
             svc = self._service()
             kwargs = dict(
                 userId="me",
@@ -170,29 +180,44 @@ class FetchMailListWorker(_BaseGmailWorker):
                 self.data_fetched.emit([], next_token)
                 return
 
-            # 배치로 메타데이터 일괄 조회
-            # message id 는 hex 문자열 — 배치 ID로 안전
-            mails_dict: dict[str, dict] = {}
+            # 1. 우선 cache 에서 metadata 조회 — 대부분 hit 시 batch fetch 가
+            #    1~수 건으로 축소되어 round-trip 시간 대폭 감소.
+            ids = [m["id"] for m in messages]
+            mails_dict: dict[str, dict] = dict(get_cached_metadata(ids))
+            missing = [mid for mid in ids if mid not in mails_dict]
 
-            def _cb(request_id, response, exception):
-                if exception is None and response:
-                    mails_dict[request_id] = _parse_metadata(response)
-                else:
-                    logger.warning(f"Mail metadata failed [{request_id}]: {exception}")
+            # 2. cache miss ID 만 server fetch (전부 hit 면 network 0)
+            if missing:
+                def _cb(request_id, response, exception):
+                    if exception is None and response:
+                        mails_dict[request_id] = _parse_metadata(response)
+                    else:
+                        logger.warning(
+                            f"Mail metadata failed [{request_id}]: {exception}"
+                        )
 
-            req_map = {
-                msg["id"]: svc.users().messages().get(
-                    userId="me",
-                    id=msg["id"],
-                    format="metadata",
-                    metadataHeaders=["From", "Subject", "Date"],
-                )
-                for msg in messages
-            }
-            _execute_batch_chunks(svc, req_map, _cb)
+                req_map = {
+                    mid: svc.users().messages().get(
+                        userId="me",
+                        id=mid,
+                        format="metadata",
+                        metadataHeaders=["From", "Subject", "Date"],
+                    )
+                    for mid in missing
+                }
+                _execute_batch_chunks(svc, req_map, _cb)
 
-            # 원래 순서 보전
-            mails = [mails_dict[msg["id"]] for msg in messages if msg["id"] in mails_dict]
+                # 3. 새로 받은 metadata 만 cache 적재 (cache hit 행은 그대로 유지)
+                fresh = [mails_dict[mid] for mid in missing if mid in mails_dict]
+                if fresh:
+                    cache_metadata(fresh)
+
+            # 4. 원래 순서 보전 + 누락 (fetch 실패) 제외
+            mails = [mails_dict[mid] for mid in ids if mid in mails_dict]
+            logger.info(
+                f"FetchMailList: total={len(ids)} cache_hit={len(ids) - len(missing)} "
+                f"fetched={len(missing)}"
+            )
             self.data_fetched.emit(mails, next_token)
         except Exception as e:
             logger.error(f"FetchMailList error: {e}", exc_info=True)
@@ -209,6 +234,22 @@ class FetchMailDetailWorker(_BaseGmailWorker):
 
     def run(self):
         try:
+            from app.api.google.gmail_cache import (
+                get_cached_body, cache_body, get_cached_metadata,
+            )
+            # 1. 본문 cache hit 시 즉시 emit (network 0) — 같은 메일 재오픈 시 instant
+            cached = get_cached_body(self.message_id)
+            if cached:
+                meta = get_cached_metadata([self.message_id]).get(self.message_id, {})
+                self.data_fetched.emit({
+                    **meta,
+                    "id":          self.message_id,
+                    "body_html":   cached["body_html"],
+                    "attachments": cached["attachments"],
+                })
+                return
+
+            # 2. cache miss — server fetch + cache 적재
             svc = self._service()
             detail = svc.users().messages().get(
                 userId="me",
@@ -216,6 +257,11 @@ class FetchMailDetailWorker(_BaseGmailWorker):
                 format="full",
             ).execute()
             mail = _parse_full(detail)
+            cache_body(
+                self.message_id,
+                mail.get("body_html", ""),
+                mail.get("attachments", []),
+            )
             self.data_fetched.emit(mail)
         except Exception as e:
             logger.error(f"FetchMailDetail error: {e}", exc_info=True)
@@ -238,6 +284,14 @@ class MarkReadWorker(_BaseGmailWorker):
                 id=self.message_id,
                 body={"removeLabelIds": ["UNREAD"]},
             ).execute()
+            # cache 동기화 — stale unread 표시 방지
+            try:
+                from app.api.google.gmail_cache import update_metadata_flags
+                update_metadata_flags(
+                    self.message_id, is_unread=False, remove_labels=["UNREAD"],
+                )
+            except Exception:
+                pass
             self.success.emit(self.message_id)
         except Exception as e:
             logger.error(f"MarkRead error: {e}", exc_info=True)
@@ -313,6 +367,22 @@ class BatchModifyWorker(_BaseGmailWorker):
             for start in range(0, len(self.message_ids), 1000):
                 body["ids"] = self.message_ids[start:start + 1000]
                 svc.users().messages().batchModify(userId="me", body=body).execute()
+            # cache 동기화 — UNREAD/STARRED 변경 시 flags 까지 정확히 갱신
+            try:
+                from app.api.google.gmail_cache import update_metadata_flags
+                is_unread = None
+                is_starred = None
+                if "UNREAD" in self.add_labels: is_unread = True
+                if "UNREAD" in self.remove_labels: is_unread = False
+                if "STARRED" in self.add_labels: is_starred = True
+                if "STARRED" in self.remove_labels: is_starred = False
+                for mid in self.message_ids:
+                    update_metadata_flags(
+                        mid, is_unread=is_unread, is_starred=is_starred,
+                        add_labels=self.add_labels, remove_labels=self.remove_labels,
+                    )
+            except Exception:
+                pass
             self.success.emit(len(self.message_ids))
         except Exception as e:
             logger.error(f"BatchModify error: {e}", exc_info=True)

@@ -600,11 +600,21 @@ class _MailItemWidget(QFrame):
     @staticmethod
     def _chip_qss(color: str) -> str:
         # 라벨 색상의 alpha 톤 배경 + 진한 텍스트
+        # 색상 hex → r,g,b 추출하여 같은 hue 의 반투명 bg + 풀 hue border 로
+        # 다크/라이트 양쪽에서 모두 가독되는 chip
+        try:
+            c = color.lstrip("#")
+            if len(c) == 6:
+                r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+            else:
+                r, g, b = 120, 120, 200
+        except Exception:
+            r, g, b = 120, 120, 200
         return (
             f"QLabel#gmailLabelChip {{"
-            f" background: rgba(120,120,200,0.18); color: {color};"
-            f" border: 1px solid rgba(120,120,200,0.35); border-radius: 999px;"
-            f" padding: 1px 8px; font-size: 9px; font-weight: 800; }}"
+            f" background: rgba({r},{g},{b},0.30); color: {color};"
+            f" border: 1px solid rgba({r},{g},{b},0.55); border-radius: 999px;"
+            f" padding: 1px 8px; font-size: 9.5px; font-weight: 800; }}"
         )
 
     def set_checked(self, checked: bool) -> None:
@@ -990,6 +1000,50 @@ class MailPreviewPanel(QWidget):
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
+        # 표시 중 메일이 있으면 본문 CSS 도 즉시 갱신 (테마 색 적용)
+        if self._current is not None and self._browser_wrap.isVisible():
+            body = self._current.get("body_html", "")
+            if body:
+                self._browser.setHtml(self._build_body_css() + body)
+
+    def _build_body_css(self) -> str:
+        """본문 HTML 에 inject 할 CSS — 테마 따라 색 토큰 변경.
+
+        메일 발신자가 색 지정 안 한 텍스트가 다크 모드에서도 가독되도록 화이트
+        톤으로 강제 (`color !important`). 인라인 스타일 / 발신자 지정 색은 그대로.
+        링크 색만 별도로 다크/라이트 친화 톤.
+        """
+        if self._is_dark:
+            text_c = "#E8EAED"
+            bg_c   = "#1B1E26"
+            link_c = "#8AB4F8"
+            quote_c = "#A8B0BD"
+        else:
+            text_c = "#202124"
+            bg_c   = "#FFFFFF"
+            link_c = "#1A73E8"
+            quote_c = "#5F6368"
+        return (
+            "<style>"
+            "html, body {"
+            "  font-family: Arial, Helvetica, sans-serif;"
+            "  font-size: 14px; line-height: 1.55;"
+            f"  color: {text_c};"
+            f"  background: {bg_c} !important;"
+            "  margin: 0; padding: 16px 22px;"
+            "}"
+            f"a {{ color: {link_c}; text-decoration: none; }}"
+            "a:hover { text-decoration: underline; }"
+            "img { max-width: 100% !important; height: auto !important; display: inline-block; }"
+            "* { word-wrap: break-word; overflow-wrap: break-word; box-sizing: border-box; }"
+            "pre, code { white-space: pre-wrap; word-wrap: break-word;"
+            "  font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 12.5px; }"
+            "table { border-collapse: collapse; max-width: 100% !important; }"
+            "td, th { word-wrap: break-word; max-width: 100%; }"
+            f"blockquote {{ border-left: 3px solid {quote_c}; padding-left: 12px;"
+            f"  color: {quote_c}; margin: 8px 0; }}"
+            "</style>"
+        )
 
     # ── 외부 API ─────────────────────────────────────────────
     def show_loading(self) -> None:
@@ -1030,31 +1084,16 @@ class MailPreviewPanel(QWidget):
         else:
             self._attach_wrap.setVisible(False)
 
-        # 본문
+        # 본문 — 테마 인식 CSS 주입 (다크/라이트 자동 색)
         body = mail.get("body_html", "")
         if body:
-            css = (
-                "<style>"
-                "html, body {"
-                "  font-family: Arial, Helvetica, sans-serif;"
-                "  font-size: 14px;"
-                "  color: #202124;"
-                "  background: #ffffff !important;"
-                "  margin: 0; padding: 14px 20px;"
-                "}"
-                "a { color: #1a73e8; text-decoration: none; }"
-                "a:hover { text-decoration: underline; }"
-                "img { max-width: 100% !important; height: auto !important; display: inline-block; }"
-                "* { word-wrap: break-word; overflow-wrap: break-word; box-sizing: border-box; }"
-                "pre, code { white-space: pre-wrap; word-wrap: break-word;"
-                "  font-family: 'Courier New', 'DejaVu Sans Mono', monospace; font-size: 12px; }"
-                "table { border-collapse: collapse; max-width: 100% !important; }"
-                "td, th { word-wrap: break-word; max-width: 100%; }"
-                "</style>"
-            )
-            self._browser.setHtml(css + body)
+            self._browser.setHtml(self._build_body_css() + body)
         else:
-            self._browser.setHtml(f"<p style='color:#888'>{tr('(本文なし)')}</p>")
+            empty_c = "#A8B0BD" if self._is_dark else "#5F6368"
+            self._browser.setHtml(
+                f"<p style='color:{empty_c}; font-family: sans-serif; padding: 16px;'>"
+                f"{tr('(本文なし)')}</p>"
+            )
 
         self._empty_lbl.hide()
         self._hdr_wrap.show(); self._browser_wrap.show(); self._actions.show()
@@ -1430,8 +1469,8 @@ class GmailWidget(BaseWidget):
                 font-size: 12.5px; font-weight: 500;
             }}
             QLabel#gmailDate {{
-                color: {tokens['fg_tertiary']}; background: transparent;
-                font-size: 10.5px;
+                color: {tokens['fg_secondary']}; background: transparent;
+                font-size: 11px; font-weight: 500;
                 font-family: "JetBrains Mono", "Consolas", monospace;
             }}
             QPushButton#gmailStar[starred="true"] {{
@@ -1452,8 +1491,8 @@ class GmailWidget(BaseWidget):
                 font-size: 12px;
             }}
             QLabel#gmailSnippet {{
-                color: {tokens['fg_tertiary']}; background: transparent;
-                font-size: 10.5px;
+                color: {tokens['fg_secondary']}; background: transparent;
+                font-size: 11px;
             }}
             QLabel#gmailChipMore {{
                 color: {tokens['fg_tertiary']}; background: transparent;
@@ -1505,8 +1544,8 @@ class GmailWidget(BaseWidget):
                 border: none;
             }}
             QTextBrowser#gmailPreviewBrowser {{
-                background: #FFFFFF;
-                color: #202124;
+                background: {tokens['bg_surface_2']};
+                color: {tokens['fg_primary']};
                 border: 1px solid {tokens['border_subtle']};
                 border-radius: 12px;
             }}
