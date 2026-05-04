@@ -34,13 +34,14 @@ pyinstaller ^
   --windowed ^
   --name "LEE電力モニター" ^
   --icon "img/icon.ico" ^
+  --add-data "app;app" ^
   --add-data "app/ui/themes;app/ui/themes" ^
   --collect-all yfinance ^
   --collect-all google_auth_oauthlib ^
   --collect-all googleapiclient ^
   --collect-all numpy ^
   --collect-all requests ^
-  --collect-submodules "app.widgets" ^
+  --collect-submodules "app" ^
   --hidden-import "pyqtgraph" ^
   --hidden-import "packaging.version" ^
   --hidden-import "bs4" ^
