@@ -49,27 +49,33 @@ PivotMode = Literal["spot", "imb", "reserve"]
 
 
 def price_color(value: Optional[float], mode: PivotMode = "spot") -> Optional[tuple[str, str]]:
-    """value → (bg, fg) tuple. None 이면 기본색."""
+    """value → (bg_strong, accent) tuple. None 이면 기본색.
+
+    bg_strong: 셀 배경색 — 강조 의미 그대로 표현 (alpha 0.40~0.65)
+    accent:    legend 테두리/지표용 짙은 hue (셀 텍스트 색상으로는 사용하지 않음)
+
+    셀 텍스트 색상은 호출자에서 theme primary (neutral) 로 적용 — 강조는 배경으로만.
+    """
     if value is None:
         return None
     if mode == "spot":
-        if value < 5:   return ("rgba(52,168,83,0.18)",  "#0b8043")
-        if value < 10:  return ("rgba(251,188,5,0.16)",  "#a87100")
-        if value < 15:  return ("rgba(255,109,0,0.18)",  "#bf4f00")
-        if value < 25:  return ("rgba(234,67,53,0.18)",  "#c5221f")
-        return                ("rgba(213,0,0,0.25)",     "#9b0000")
+        if value < 5:   return ("rgba(52,168,83,0.50)",  "#0b8043")
+        if value < 10:  return ("rgba(251,188,5,0.45)",  "#a87100")
+        if value < 15:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
+        if value < 25:  return ("rgba(234,67,53,0.55)",  "#c5221f")
+        return                ("rgba(213,0,0,0.65)",     "#9b0000")
     if mode == "imb":
-        if value < 0:   return ("rgba(52,168,83,0.16)",  "#0b8043")
-        if value < 8:   return ("rgba(251,188,5,0.14)",  "#a87100")
-        if value < 16:  return ("rgba(255,109,0,0.18)",  "#bf4f00")
-        return                ("rgba(234,67,53,0.22)",   "#c5221f")
+        if value < 0:   return ("rgba(52,168,83,0.50)",  "#0b8043")
+        if value < 8:   return ("rgba(251,188,5,0.45)",  "#a87100")
+        if value < 16:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
+        return                ("rgba(234,67,53,0.60)",   "#c5221f")
     if mode == "reserve":
         # 낮을수록 위험
-        if value < 3:   return ("rgba(213,0,0,0.25)",    "#9b0000")
-        if value < 8:   return ("rgba(234,67,53,0.18)",  "#c5221f")
-        if value < 15:  return ("rgba(255,109,0,0.18)",  "#bf4f00")
-        if value < 25:  return ("rgba(251,188,5,0.14)",  "#a87100")
-        return                ("rgba(52,168,83,0.18)",   "#0b8043")
+        if value < 3:   return ("rgba(213,0,0,0.65)",    "#9b0000")
+        if value < 8:   return ("rgba(234,67,53,0.55)",  "#c5221f")
+        if value < 15:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
+        if value < 25:  return ("rgba(251,188,5,0.45)",  "#a87100")
+        return                ("rgba(52,168,83,0.50)",   "#0b8043")
     return None
 
 
@@ -446,7 +452,8 @@ class LeePivotTable(QFrame):
         if self._table.horizontalHeaderItem(0) is not None:
             self._table.horizontalHeaderItem(0).setText(self._row_header_label)
 
-        # 데이터 셀 채우기
+        # 데이터 셀 채우기 — 강조는 셀 배경색으로만, 텍스트는 중립 (theme primary)
+        cell_fg = QColor("#FFFFFF" if self._is_dark else "#0B1220")
         for ri, row_data in enumerate(rows):
             for ci, cell in enumerate(row_data):
                 item = QTableWidgetItem(str(cell))
@@ -461,7 +468,7 @@ class LeePivotTable(QFrame):
                     if c is not None:
                         bg_qc = self._rgba_to_qcolor(c[0])
                         item.setBackground(QBrush(bg_qc))
-                        item.setForeground(QColor(c[1]))
+                        item.setForeground(cell_fg)
                         f = item.font(); f.setBold(True); item.setFont(f)
                 self._table.setItem(ri, ci, item)
 
@@ -480,6 +487,7 @@ class LeePivotTable(QFrame):
         대부분 차단. paint 1 회로 묶기 위해 setUpdatesEnabled batch.
         """
         time_fg = QColor("#A8B0BD" if self._is_dark else "#4A5567")
+        cell_fg = QColor("#FFFFFF" if self._is_dark else "#0B1220")
         viewport = self._table.viewport()
         viewport.setUpdatesEnabled(False)
         try:
@@ -503,12 +511,12 @@ class LeePivotTable(QFrame):
                         if c is not None:
                             bg_qc = self._rgba_to_qcolor(c[0])
                             item.setBackground(QBrush(bg_qc))
-                            item.setForeground(QColor(c[1]))
+                            item.setForeground(cell_fg)
                             f = item.font(); f.setBold(True); item.setFont(f)
                         else:
                             # 이전 색 잔존 방지
                             item.setBackground(QBrush(QColor(0, 0, 0, 0)))
-                            item.setForeground(QColor("#F2F4F7" if self._is_dark else "#0B1220"))
+                            item.setForeground(cell_fg)
         finally:
             viewport.setUpdatesEnabled(True)
 
@@ -526,6 +534,7 @@ class LeePivotTable(QFrame):
         대량 setItem 의 cascade 비용 (수백 회) 을 피해 lag 가 크게 감소.
         """
         time_fg = QColor("#A8B0BD" if self._is_dark else "#4A5567")
+        cell_fg = QColor("#FFFFFF" if self._is_dark else "#0B1220")
         for ri, row_data in enumerate(self._rows):
             for ci, cell in enumerate(row_data):
                 item = self._table.item(ri, ci)
@@ -539,7 +548,9 @@ class LeePivotTable(QFrame):
                     if c is not None:
                         bg_qc = self._rgba_to_qcolor(c[0])
                         item.setBackground(QBrush(bg_qc))
-                        item.setForeground(QColor(c[1]))
+                        item.setForeground(cell_fg)
+                    else:
+                        item.setForeground(cell_fg)
 
     # ── 내부 ─────────────────────────────────────────────────
     def _parse_value(self, cell: str) -> Optional[float]:

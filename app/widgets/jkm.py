@@ -586,6 +586,14 @@ class JkmWidget(BaseWidget):
         )
         self._chart_frame.set_content(self._chart)
         self._chart_frame.setMinimumHeight(420)
+        # ビュー初期化 — 차트 프레임 상단 actions 영역 (copy/expand 옆)
+        self._btn_reset_view = QPushButton("↻")
+        self._btn_reset_view.setObjectName("chartIconBtn")
+        self._btn_reset_view.setToolTip(tr("ビュー初期化"))
+        self._btn_reset_view.setCursor(Qt.PointingHandCursor)
+        self._btn_reset_view.setFixedSize(32, 32)
+        self._btn_reset_view.clicked.connect(lambda: self._chart.fit_view())
+        self._chart_frame.add_action(self._btn_reset_view)
         root.addWidget(self._chart_frame)
         # 첫 fetch 동안 차트 영역에 shimmer skeleton
         from app.ui.components.skeleton import install_skeleton_overlay
@@ -670,9 +678,7 @@ class JkmWidget(BaseWidget):
         self._btn_csv.clicked.connect(self._export_csv)
         h.addWidget(self._btn_csv)
 
-        self._btn_reset_view = LeeButton(tr("ビュー"), variant="ghost", size="sm")
-        self._btn_reset_view.clicked.connect(lambda: self._chart.fit_view())
-        h.addWidget(self._btn_reset_view)
+        # ビュー初期化 버튼은 chart frame 상단 actions 로 이동됨
 
         self._filter_bar = bar
         self._apply_filter_qss()
