@@ -568,17 +568,8 @@ class PowerReserveWidget(BaseWidget):
         self._date_input.date_changed.connect(self.fetch_data)
         h.addWidget(self._date_input)
 
-        # 세퍼레이터
-        sep = QFrame()
-        sep.setObjectName("prFilterSep")
-        sep.setFixedSize(1, 22)
-        h.addWidget(sep)
-
-        # threshold pills
-        h.addWidget(LeePill(tr("⚠ 危険 〜3%"),  variant="danger"))
-        h.addWidget(LeePill(tr("注意 3〜8%"),   variant="warn"))
-        h.addWidget(LeePill(tr("通常 8〜15%"),  variant="info"))
-        h.addWidget(LeePill(tr("安定 15%+"),    variant="success"))
+        # 구 범례 (危険/注意/通常/安定 4 pill) 삭제 — PivotTable 상단 범례가
+        # 새 신호등 3 단계 (≤8/8〜10/≥10) 와 일치하므로 중복.
 
         h.addStretch()
 

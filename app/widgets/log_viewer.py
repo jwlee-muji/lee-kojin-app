@@ -472,13 +472,18 @@ class LogViewerWidget(BaseWidget):
         bg_app        = "#0A0B0F" if d else "#F5F6F8"
         bg_surface    = "#14161C" if d else "#FFFFFF"
         bg_surface_2  = "#1B1E26" if d else "#F0F2F5"
-        bg_alt        = "#161922" if d else "#F7F8FA"
+        # 다크 모드 행 구분색 — 이전 #161922 (hue 살짝 푸른 쪽으로 shift) 가
+        # 자극적이라는 피드백 → bg_surface 와 동일 hue, 약간만 밝게 조정.
+        bg_alt        = "#171920" if d else "#F7F8FA"
         fg_primary    = "#F2F4F7" if d else "#0B1220"
         fg_secondary  = "#A8B0BD" if d else "#4A5567"
         fg_tertiary   = "#6B7280" if d else "#8A93A6"
         border_subtle = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
         border        = "rgba(255,255,255,0.10)" if d else "rgba(11,18,32,0.10)"
-        sel_bg        = "rgba(168,176,189,0.14)" if d else "rgba(168,176,189,0.10)"
+        # 선택 하이라이트 — 불투명 솔리드. 이전엔 rgba alpha 가 alternate row
+        # 와 일반 row 위에서 다르게 blending 되어 "행마다 색이 다른 하이라이트"
+        # / "잔존 하이라이트" 로 보이는 버그 발생.
+        sel_bg        = "#2C313D" if d else "#DDE3EC"
 
         self.setStyleSheet(f"""
             QFrame#logToolbar {{
@@ -549,6 +554,9 @@ class LogViewerWidget(BaseWidget):
             str(p): p.stat().st_size for p in _ordered_log_files(self._log_file)
         }
         self._apply_filters()
+        # 기본 스크롤은 최신 로그 (하단) 로 — 모델 reset 직후엔 view 가 아직
+        # row 위치를 잡지 못하므로 다음 event loop 에서 호출
+        QTimer.singleShot(0, self.table.scrollToBottom)
 
     def _apply_filters(self) -> None:
         records = self._model.all_records()

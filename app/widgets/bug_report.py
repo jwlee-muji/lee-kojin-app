@@ -559,7 +559,8 @@ class _BugAdminPage(QWidget):
         super().__init__(parent)
         self._is_dark = True
         self._reports: list[dict] = []
-        self._selected_id: Optional[str] = None       # Gmail message_id
+        self._selected_id: Optional[str] = None       # Gmail message_id 또는 Sheet request_id
+        self._selected_source: str = "gmail"          # "gmail" | "sheet" — 상태 갱신 dispatch
         self._filter_kind = ""        # "" | "bug" | "access"
         self._filter_status = ""
         self._filter_category = ""
@@ -1010,6 +1011,7 @@ class _BugAdminPage(QWidget):
         rows = self._table.selectionModel().selectedRows()
         if not rows:
             self._selected_id = None
+            self._selected_source = "gmail"
             self._empty_lbl.setVisible(True)
             self._body_widget.setVisible(False)
             return
@@ -1017,6 +1019,8 @@ class _BugAdminPage(QWidget):
         if idx >= len(self._reports): return
         r = self._reports[idx]
         self._selected_id = r["id"]
+        # source 따라 status 갱신/삭제 백엔드 분기 (gmail SQLite vs sheet F열)
+        self._selected_source = r.get("source", "gmail")
         self._render_detail(r)
 
     def _render_detail(self, r: dict) -> None:
@@ -1057,8 +1061,9 @@ class _BugAdminPage(QWidget):
     def _on_apply_status(self) -> None:
         if not self._selected_id: return
         new_status = self._d_status_combo.currentData()
-        # 로컬 상태 오버레이 — 즉시 동기 SQLite 업데이트
-        mail_set_status(self._selected_id, new_status)
+        # source 따라 분기 — gmail = 로컬 SQLite, sheet = AccessRequests F열
+        mail_set_status(self._selected_id, new_status,
+                        source=getattr(self, "_selected_source", "gmail"))
         bus.toast_requested.emit(tr("✅ ステータスを更新しました"), "success")
         self._reload()
 
@@ -1067,10 +1072,11 @@ class _BugAdminPage(QWidget):
         short = str(self._selected_id)[-8:]
         if not LeeDialog.confirm(
             tr("削除の確認"),
-            tr("レポート #{0} を削除しますか?\n(Gmail 上のメールはそのまま残ります)").format(short),
+            tr("レポート #{0} を削除しますか?").format(short),
             ok_text=tr("削除"), destructive=True, parent=self,
         ): return
-        mail_set_deleted(self._selected_id)
+        mail_set_deleted(self._selected_id,
+                         source=getattr(self, "_selected_source", "gmail"))
         self._selected_id = None
         self._empty_lbl.setVisible(True)
         self._body_widget.setVisible(False)
@@ -1083,26 +1089,31 @@ class _BugAdminPage(QWidget):
         row = idx.row()
         if row >= len(self._reports): return
         r = self._reports[row]
+        src = r.get("source", "gmail")
         menu = QMenu(self)
         for k, meta in _STATUSES.items():
             act = QAction(tr("状態: {0}").format(meta["label"]), menu)
-            act.triggered.connect(lambda _=False, sk=k, rid=r["id"]:
-                                  (mail_set_status(rid, sk), self._reload()))
+            act.triggered.connect(
+                lambda _=False, sk=k, rid=r["id"], rs=src:
+                (mail_set_status(rid, sk, source=rs), self._reload())
+            )
             menu.addAction(act)
         menu.addSeparator()
         act_del = QAction(tr("削除"), menu)
-        act_del.triggered.connect(lambda _=False, rid=r["id"]: self._delete_via_ctx(rid))
+        act_del.triggered.connect(
+            lambda _=False, rid=r["id"], rs=src: self._delete_via_ctx(rid, rs)
+        )
         menu.addAction(act_del)
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
-    def _delete_via_ctx(self, rid: str) -> None:
+    def _delete_via_ctx(self, rid: str, source: str = "gmail") -> None:
         short = str(rid)[-8:]
         if not LeeDialog.confirm(
             tr("削除の確認"),
-            tr("レポート #{0} を削除しますか?\n(Gmail 上のメールはそのまま残ります)").format(short),
+            tr("レポート #{0} を削除しますか?").format(short),
             ok_text=tr("削除"), destructive=True, parent=self,
         ): return
-        mail_set_deleted(rid)
+        mail_set_deleted(rid, source=source)
         self._reload()
 
 

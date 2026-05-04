@@ -154,14 +154,37 @@ class _LoginWorker(QThread):
 # ──────────────────────────────────────────────────────────────────────────
 # AccessRequestDialog — LeeDialog 베이스 + 폼 위젯
 # ──────────────────────────────────────────────────────────────────────────
+class _SubmitAccessRequestWorker(QThread):
+    """Google Sheets (AccessRequests シート) にアクセス申請を 1 行追加."""
+    success = Signal(str)   # request_id
+    error   = Signal(str)
+
+    def __init__(self, email: str, message: str, app_version: str):
+        super().__init__()
+        self._email = email
+        self._message = message
+        self._app_version = app_version
+
+    def run(self) -> None:
+        try:
+            from app.api.google.sheets import submit_access_request
+            request_id = submit_access_request(
+                self._email, self._message, self._app_version,
+            )
+            self.success.emit(request_id)
+        except Exception as e:
+            logger.error(f"AccessRequest submit failed: {e}", exc_info=True)
+            self.error.emit(str(e))
+
+
 class _AccessRequestDialog(LeeDialog):
-    """アクセス申請 폼 (内蔵 SMTP で管理者へ直接送信)."""
+    """アクセス申請 폼 (Google Sheets AccessRequests シートに登録)."""
 
     def __init__(self, prefill_email: str = "", parent=None):
         super().__init__(tr("アクセスを申請する"), kind="info", parent=parent)
         self._worker = None
 
-        self.set_message(tr("管理者 (jw.lee@shirokumapower.com) へアクセス申請メールを送信します。"))
+        self.set_message(tr("管理者宛の申請を Google スプレッドシートに登録します。承認されるとアクセスできるようになります。"))
 
         # ── 폼 필드 (본문 영역 추가) ──
         email_label = QLabel(tr("申請メールアドレス:"))
@@ -190,7 +213,7 @@ class _AccessRequestDialog(LeeDialog):
 
         # ── 푸터: 取消(reject) + 送信(custom) ──
         self.add_button(tr("キャンセル"), "secondary", role="reject")
-        self._btn_send = LeeButton(tr("メールを送信"), variant="primary", size="md")
+        self._btn_send = LeeButton(tr("申請する"), variant="primary", size="md")
         self._btn_send.clicked.connect(self._send)
         self._footer_layout.addWidget(self._btn_send)
 
@@ -208,19 +231,15 @@ class _AccessRequestDialog(LeeDialog):
             self._set_status(tr("⚠  メールアドレスの形式が正しくありません。"), "warn")
             return
 
-        subject = f"[LEE v{__version__}] アクセス申請: {email}"
-        body = (
-            f"【申請メールアドレス】{email}\n\n"
-            f"【メッセージ】\n{self._msg_edit.toPlainText().strip() or tr('(なし)')}\n\n"
-            "--- LEE 電力モニター アクセス申請 ---"
-        )
+        message = self._msg_edit.toPlainText().strip()
 
         self._btn_send.setEnabled(False)
         self._btn_send.setText(tr("送信中..."))
         self._set_status("", "")
 
-        from app.api.email_api import SendBugReportWorker
-        self._worker = SendBugReportWorker(subject, body)
+        # Sheets ベースの申請 — service_account.json (アプリ同梱) で書き込み.
+        # SMTP / Google アカウント認証 不要 (旧 SMTP 経由は資格情報配布問題で廃止).
+        self._worker = _SubmitAccessRequestWorker(email, message, f"v{__version__}")
         self._worker.success.connect(self._on_send_success)
         self._worker.error.connect(self._on_send_error)
         self._worker.finished.connect(self._worker.deleteLater)
@@ -238,14 +257,14 @@ class _AccessRequestDialog(LeeDialog):
             self._status_lbl.setStyleSheet("font-size: 11px; padding-top: 4px; background: transparent;")
         self._status_lbl.setText(text)
 
-    def _on_send_success(self) -> None:
-        self._set_status(tr("✅  申請メールを送信しました。管理者の承認をお待ちください。"), "ok")
+    def _on_send_success(self, request_id: str = "") -> None:
+        self._set_status(tr("✅  申請を登録しました。管理者の承認をお待ちください。"), "ok")
         self._btn_send.setText(tr("送信完了"))
         QTimer.singleShot(2000, self.accept)
 
     def _on_send_error(self, err: str) -> None:
         self._btn_send.setEnabled(True)
-        self._btn_send.setText(tr("メールを送信"))
+        self._btn_send.setText(tr("申請する"))
         self._set_status(f"❌  {tr('送信失敗:')} {err[:80]}", "err")
 
 

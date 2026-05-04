@@ -120,15 +120,38 @@ def _upsert_state(message_id: str, **fields) -> None:
         logger.warning(f"bug_mail_state upsert 실패: {e}")
 
 
-def set_status(message_id: str, status: str) -> None:
+def set_status(message_id: str, status: str, source: str = "gmail") -> None:
+    """status 갱신 — source 따라 백엔드 분기.
+
+    source="gmail": Gmail メッセージ ID → 로컬 SQLite 오버레이 (기존 경로)
+    source="sheet": Sheets request_id  → AccessRequests 시트 F 열 직접 갱신
+    """
+    if source == "sheet":
+        try:
+            from app.api.google.sheets import update_access_request_status
+            update_access_request_status(message_id, status)
+        except Exception as e:
+            logger.warning(f"AccessRequest status update failed: {e}")
+        return
     _upsert_state(message_id, status=status)
 
 
-def set_priority(message_id: str, priority: str) -> None:
+def set_priority(message_id: str, priority: str, source: str = "gmail") -> None:
+    """priority 갱신 — Sheets 기반 access 는 priority 컬럼 미보유, 무시."""
+    if source == "sheet":
+        return
     _upsert_state(message_id, priority=priority)
 
 
-def set_deleted(message_id: str) -> None:
+def set_deleted(message_id: str, source: str = "gmail") -> None:
+    """소프트 삭제 — source 따라 백엔드 분기."""
+    if source == "sheet":
+        try:
+            from app.api.google.sheets import delete_access_request
+            delete_access_request(message_id)
+        except Exception as e:
+            logger.warning(f"AccessRequest delete failed: {e}")
+        return
     _upsert_state(message_id, deleted=1)
 
 
@@ -281,6 +304,7 @@ def parse_bug_mail(msg: dict, state: Optional[dict] = None) -> dict:
     return {
         "id":             msg.get("id", ""),       # Gmail message_id (str)
         "thread_id":      msg.get("threadId", ""),
+        "source":         "gmail",                  # 상태 dispatch 용
         "kind":           kind,                     # "bug" | "access"
         "category":       category,
         "summary":        summary,
@@ -295,6 +319,42 @@ def parse_bug_mail(msg: dict, state: Optional[dict] = None) -> dict:
         "created_at":     created_at,
         "updated_at":     created_at,
     }
+
+
+def fetch_sheet_access_requests() -> list[dict]:
+    """Google Sheets AccessRequests 시트의 申請を Gmail 동일 dict 형식으로 반환.
+
+    parse_bug_mail 의 출력과 호환되도록 같은 키 구조 채움.
+    source="sheet" 로 표시 — 상태 갱신 시 Sheets 백엔드로 dispatch.
+    """
+    try:
+        from app.api.google.sheets import get_access_requests
+        rows = get_access_requests()
+    except Exception as e:
+        logger.warning(f"AccessRequests fetch from Sheet failed: {e}")
+        return []
+
+    out = []
+    for r in rows:
+        out.append({
+            "id":             r["request_id"],
+            "thread_id":      "",
+            "source":         "sheet",
+            "kind":           "access",
+            "category":       "access",
+            "summary":        r["email"],
+            "detail":         r["message"],
+            "log":            "",
+            "reporter_email": r["email"],
+            "app_version":    r["app_version"],
+            "os_info":        "",
+            "screenshot_path": "",
+            "status":         r["status"] or "open",
+            "priority":       "medium",
+            "created_at":     r["requested_at"],
+            "updated_at":     r["requested_at"],
+        })
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -373,6 +433,11 @@ class BugMailReadWorker(QThread):
                 if st.get("deleted"):
                     continue
                 records.append(parse_bug_mail(msg, st))
+
+            # Sheets 기반 アクセス申請 추가 — 신청 채널 메일 → 시트 이전.
+            # Gmail legacy access 申請 (source=gmail) 와 새 sheet 申請 (source=sheet)
+            # 모두 표시되며, 상태 변경 시 source 에 맞춰 백엔드 dispatch.
+            records.extend(fetch_sheet_access_requests())
 
             # 種別 (kind) は最上位フィルタ — stats も種別範囲内で計算
             if self.kind_f:
