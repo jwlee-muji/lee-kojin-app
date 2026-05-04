@@ -417,22 +417,6 @@ def collect_briefing_data(period: str, now: datetime) -> dict:
     except Exception as e:
         logger.debug(f"briefing imbalance: {e}")
 
-    # ── Gmail 未読メール (cache 기반, network 0) ────────────────────────────
-    # 시장 상황과 직접 무관하지만 사용자가 받은 직근 미읽음 메일 — 거래처 / 알림
-    # 메일 등 brief 와 함께 한눈에 파악할 수 있도록 포함.
-    try:
-        from app.api.google.gmail_cache import _db_path as _gmail_db, _ensure_db as _gmail_init
-        _gmail_init()
-        with sqlite3.connect(_gmail_db()) as gc:
-            rows = gc.execute(
-                "SELECT subject, from_addr, snippet, date FROM mail_metadata "
-                "WHERE is_unread = 1 ORDER BY cached_at DESC LIMIT 15"
-            ).fetchall()
-        if rows:
-            data["gmail_unread"] = rows
-    except Exception as e:
-        logger.debug(f"briefing gmail: {e}")
-
     # ── システム通知 (notifications.db) ──────────────────────────────────────
     try:
         from app.widgets.notification import list_notifications
@@ -445,24 +429,6 @@ def collect_briefing_data(period: str, now: datetime) -> dict:
             data["notifications"] = items
     except Exception as e:
         logger.debug(f"briefing notifications: {e}")
-
-    # ── Google Calendar 직근 예정 (live API, optional) ───────────────────────
-    try:
-        from app.api.google.auth import is_authenticated, build_service
-        if is_authenticated():
-            svc = build_service("calendar", "v3")
-            time_min = now.isoformat() + "Z"
-            time_max = (now + timedelta(days=7)).isoformat() + "Z"
-            result = svc.events().list(
-                calendarId="primary",
-                timeMin=time_min, timeMax=time_max,
-                maxResults=15, singleEvents=True, orderBy="startTime",
-            ).execute()
-            events = result.get("items", [])
-            if events:
-                data["calendar"] = events
-    except Exception as e:
-        logger.debug(f"briefing calendar: {e}")
 
     # ── 天気 ──────────────────────────────────────────────────────────────────
     try:
@@ -578,14 +544,6 @@ def _format_data_text(period: str, data: dict, now: datetime) -> str:
             for item in by_date[date_str][:5]:
                 lines.append(f"    {item}")
 
-    if data.get("calendar"):
-        lines.append("\n[Google Calendar 直近の予定 (7日間)]")
-        for ev in data["calendar"][:10]:
-            start = ev.get("start", {}) or {}
-            when = start.get("dateTime") or start.get("date") or ""
-            title = (ev.get("summary") or "(無題)")[:60]
-            lines.append(f"  {when[:16]}  {title}")
-
     if data.get("notifications"):
         from collections import Counter
         level_count = Counter(n.get("level", "info") for n in data["notifications"])
@@ -597,17 +555,6 @@ def _format_data_text(period: str, data: dict, now: datetime) -> str:
             ts = (n.get("timestamp") or "")[:16]
             title = (n.get("title") or "")[:50]
             lines.append(f"  {ts} [{n.get('level','info')}] {title}")
-
-    if data.get("gmail_unread"):
-        lines.append("\n[Gmail 未読メール (cache 上位)]")
-        for subject, from_addr, snippet, mdate in data["gmail_unread"][:8]:
-            sender = ((from_addr or "").split("<")[0].strip() or
-                      (from_addr or "").strip())[:32]
-            subj = (subject or "(件名なし)")[:55]
-            snip_short = ((snippet or "").replace("\n", " ").strip())[:60]
-            lines.append(f"  {sender} | {subj}")
-            if snip_short:
-                lines.append(f"    {snip_short}")
 
     return "\n".join(lines) if lines else "（データなし）"
 
