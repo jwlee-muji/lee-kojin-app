@@ -1043,6 +1043,7 @@ class _ChipToggleRow(QWidget):
 
         self._label_lbl = QLabel(label)
         self._label_lbl.setObjectName("chipRowLabel")
+        self._label_lbl.setAttribute(Qt.WA_TranslucentBackground, True)
         layout.addWidget(self._label_lbl)
 
         self._all_btn = QPushButton(tr("全選択"))
@@ -1296,6 +1297,9 @@ class HjksWidget(BaseWidget):
         row1 = QHBoxLayout(); row1.setSpacing(10)
         lab = QLabel(tr("期間"))
         lab.setObjectName("chipRowLabel")
+        # 라벨 background 를 명시적으로 부모 카드 색 follow (QSS transparent 만으로
+        # 일부 Qt 스타일에서 OS default 색이 노출되던 문제 차단)
+        lab.setAttribute(Qt.WA_TranslucentBackground, True)
         row1.addWidget(lab)
 
         self._start_input = LeeDateInput(accent=_C_HJKS, show_today_btn=False)
@@ -1304,6 +1308,7 @@ class HjksWidget(BaseWidget):
         row1.addWidget(self._start_input)
 
         sep_lbl = QLabel("〜"); sep_lbl.setObjectName("chipRowLabel")
+        sep_lbl.setAttribute(Qt.WA_TranslucentBackground, True)
         row1.addWidget(sep_lbl)
 
         self._end_input = LeeDateInput(accent=_C_HJKS, show_today_btn=False)

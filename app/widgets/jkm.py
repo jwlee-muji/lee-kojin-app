@@ -703,11 +703,14 @@ class JkmWidget(BaseWidget):
         border       = "rgba(255,255,255,0.08)" if is_dark else "rgba(11,18,32,0.10)"
         sep_color    = "rgba(255,255,255,0.10)" if is_dark else "rgba(11,18,32,0.10)"
 
+        # MA toggle 버튼 — 부모(카드 또는 페이지) 색 follow + border 만으로 경계
+        from app.ui.theme import ThemeManager
+        toggle_bg = ThemeManager.instance().tokens["bg_surface"]
         ma_qss = f"""
             QFrame#jkmFilterBar {{ background: transparent; }}
             QFrame#jkmFilterSep {{ background: {sep_color}; border: none; }}
             QPushButton#jkmMaToggle {{
-                background: {bg_surface_2};
+                background: {toggle_bg};
                 color: {fg_secondary};
                 border: 1px solid {border};
                 border-radius: 8px;
