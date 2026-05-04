@@ -159,7 +159,7 @@ class FetchMailListWorker(_BaseGmailWorker):
     def run(self):
         try:
             from app.api.google.gmail_cache import (
-                get_cached_metadata, cache_metadata,
+                get_cached_metadata, cache_metadata, update_metadata_flags,
             )
             svc = self._service()
             kwargs = dict(
@@ -212,11 +212,53 @@ class FetchMailListWorker(_BaseGmailWorker):
                 if fresh:
                     cache_metadata(fresh)
 
-            # 4. 원래 순서 보전 + 누락 (fetch 실패) 제외
-            mails = [mails_dict[mid] for mid in ids if mid in mails_dict]
+            # 4. 정확한 UNREAD / STARRED 동기화 — 가벼운 list 호출 2회 (각 ~200ms)
+            #    cache 에 stale 한 is_unread/is_starred 가 있어도 ground truth 로 override.
+            #    cause: 사용자가 Gmail Web 에서 read/unstar 시 cache TTL (6h) 까지
+            #           기다려야 했던 문제 → 매 list fetch 마다 정확히 동기.
+            unread_ids: set[str] = set()
+            starred_ids: set[str] = set()
+            try:
+                u = _execute_single(svc.users().messages().list(
+                    userId="me",
+                    labelIds=self.label_ids + ["UNREAD"],
+                    maxResults=self.max_results,
+                    fields="messages/id",
+                    **({"q": self.q} if self.q else {}),
+                ))
+                unread_ids = {m["id"] for m in u.get("messages", [])}
+                s = _execute_single(svc.users().messages().list(
+                    userId="me",
+                    labelIds=self.label_ids + ["STARRED"],
+                    maxResults=self.max_results,
+                    fields="messages/id",
+                    **({"q": self.q} if self.q else {}),
+                ))
+                starred_ids = {m["id"] for m in s.get("messages", [])}
+            except Exception as e:
+                logger.warning(f"unread/starred sync 실패 (무시하고 cache 사용): {e}")
+
+            # 5. 원래 순서 보전 + flag override (cache 동기화)
+            mails: list[dict] = []
+            for mid in ids:
+                m = mails_dict.get(mid)
+                if m is None:
+                    continue
+                # ground truth 적용 — list 호출 성공 시에만
+                if unread_ids or starred_ids or self.label_ids:
+                    new_unread  = mid in unread_ids
+                    new_starred = mid in starred_ids
+                    if m.get("is_unread") != new_unread or m.get("is_starred") != new_starred:
+                        update_metadata_flags(
+                            mid, is_unread=new_unread, is_starred=new_starred,
+                        )
+                    m["is_unread"]  = new_unread
+                    m["is_starred"] = new_starred
+                mails.append(m)
+
             logger.info(
                 f"FetchMailList: total={len(ids)} cache_hit={len(ids) - len(missing)} "
-                f"fetched={len(missing)}"
+                f"fetched={len(missing)} unread_sync={len(unread_ids)} starred_sync={len(starred_ids)}"
             )
             self.data_fetched.emit(mails, next_token)
         except Exception as e:

@@ -497,7 +497,7 @@ class _MailItemWidget(QFrame):
         initial, av = _sender_initial(sender_raw)
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 12, 8); root.setSpacing(8)
+        root.setContentsMargins(10, 10, 14, 10); root.setSpacing(10)
 
         # ── 좌측: 체크박스 + 안읽음 도트 + 아바타
         self._check = QCheckBox()
@@ -509,21 +509,24 @@ class _MailItemWidget(QFrame):
         )
         root.addWidget(self._check, 0, Qt.AlignVCenter)
 
-        # 안읽음 점 (3x10) — unread 만 표시
+        # 안읽음 도트 (8×8 원형) — unread 만 표시. 이전엔 막대형 3×28 이라
+        # 시각적 비중이 과해 라벨처럼 보이는 문제 → 작은 원으로 교체
         self._dot = QFrame()
-        self._dot.setFixedSize(3, 28)
+        self._dot.setFixedSize(8, 8)
         if is_unread:
-            self._dot.setStyleSheet(f"background: {_C_MAIL}; border-radius: 1px;")
+            self._dot.setStyleSheet(
+                f"background: {_C_MAIL}; border-radius: 4px;"
+            )
         else:
             self._dot.setStyleSheet("background: transparent;")
         root.addWidget(self._dot, 0, Qt.AlignVCenter)
 
-        # 아바타
+        # 아바타 — 살짝 줄여 다른 요소와 균형 (34→32)
         avatar = QLabel(initial)
-        avatar.setFixedSize(34, 34); avatar.setAlignment(Qt.AlignCenter)
+        avatar.setFixedSize(32, 32); avatar.setAlignment(Qt.AlignCenter)
         avatar.setStyleSheet(
-            f"QLabel {{ background: {av}; color: white; border-radius: 17px;"
-            f" font-size: 13px; font-weight: 800; }}"
+            f"QLabel {{ background: {av}; color: white; border-radius: 16px;"
+            f" font-size: 13px; font-weight: 700; }}"
         )
         root.addWidget(avatar, 0, Qt.AlignVCenter)
 
@@ -633,11 +636,12 @@ class _MailItemWidget(QFrame):
 # 5. MailListPanel — 검색 + 일괄 액션 + 무한 스크롤 + 다중 선택
 # ──────────────────────────────────────────────────────────────────────
 class MailListPanel(QWidget):
-    mail_selected       = Signal(dict)
-    load_more_requested = Signal(str)            # page_token
-    search_changed      = Signal(str)            # debounced
-    bulk_action         = Signal(str, list)      # action, mail_ids
-    star_toggled        = Signal(str, bool)      # mail_id, new_starred
+    mail_selected            = Signal(dict)
+    load_more_requested      = Signal(str)            # page_token
+    search_changed           = Signal(str)            # debounced
+    bulk_action              = Signal(str, list)      # action, mail_ids
+    star_toggled             = Signal(str, bool)      # mail_id, new_starred
+    mark_all_read_requested  = Signal()                # 현재 라벨 전체 기독
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -695,13 +699,21 @@ class MailListPanel(QWidget):
         v.addWidget(self._bulk_bar)
         self._bulk_bar.setVisible(False)
 
-        # 헤더 (라벨 / 카운트)
+        # 헤더 (라벨 / 카운트 / 모두 읽기)
         self._hdr = QFrame(); self._hdr.setObjectName("gmailMailHdr")
-        hr = QHBoxLayout(self._hdr); hr.setContentsMargins(12, 8, 12, 8); hr.setSpacing(8)
+        hr = QHBoxLayout(self._hdr); hr.setContentsMargins(14, 10, 10, 10); hr.setSpacing(8)
         self._hdr_lbl = QLabel(""); self._hdr_lbl.setObjectName("gmailMailHdrLbl")
         hr.addWidget(self._hdr_lbl, 1)
         self._count_pill = LeePill("0", variant="info")
         hr.addWidget(self._count_pill)
+        # 모두 읽기 — 현재 라벨의 모든 미읽음 메일을 일괄 기독
+        self._btn_mark_all = QPushButton("✓✓")
+        self._btn_mark_all.setObjectName("gmailHdrIconBtn")
+        self._btn_mark_all.setToolTip(tr("このラベルをすべて既読にする"))
+        self._btn_mark_all.setCursor(Qt.PointingHandCursor)
+        self._btn_mark_all.setFixedSize(28, 28)
+        self._btn_mark_all.clicked.connect(self.mark_all_read_requested.emit)
+        hr.addWidget(self._btn_mark_all)
         v.addWidget(self._hdr)
 
         # 메일 리스트
@@ -929,7 +941,7 @@ class MailPreviewPanel(QWidget):
 
         # 헤더 (제목 + 메타 + 액션)
         self._hdr_wrap = QFrame(); self._hdr_wrap.setObjectName("gmailPreviewHdr")
-        hl = QVBoxLayout(self._hdr_wrap); hl.setContentsMargins(20, 16, 20, 12); hl.setSpacing(6)
+        hl = QVBoxLayout(self._hdr_wrap); hl.setContentsMargins(22, 18, 22, 14); hl.setSpacing(8)
 
         self._subj_lbl = QLabel(""); self._subj_lbl.setObjectName("gmailPreviewSubj")
         self._subj_lbl.setWordWrap(True)
@@ -953,11 +965,10 @@ class MailPreviewPanel(QWidget):
         v.addWidget(self._hdr_wrap)
 
         # 본문 (HTML) — wrapper 로 감싸 inset card 효과 (디자인 톤 surface + 흰 letter)
-        # padding 12px 균일 (디자인 명세 정합)
         self._browser_wrap = QFrame()
         self._browser_wrap.setObjectName("gmailPreviewBrowserWrap")
         bw = QVBoxLayout(self._browser_wrap)
-        bw.setContentsMargins(12, 12, 12, 12); bw.setSpacing(0)
+        bw.setContentsMargins(14, 14, 14, 14); bw.setSpacing(0)
         self._browser = _SafeTextBrowser()
         self._browser.setObjectName("gmailPreviewBrowser")
         self._browser.setOpenExternalLinks(True)
@@ -972,7 +983,7 @@ class MailPreviewPanel(QWidget):
 
         # 액션 푸터
         self._actions = QFrame(); self._actions.setObjectName("gmailPreviewActions")
-        af = QHBoxLayout(self._actions); af.setContentsMargins(20, 10, 20, 12); af.setSpacing(6)
+        af = QHBoxLayout(self._actions); af.setContentsMargins(22, 12, 22, 14); af.setSpacing(8)
         self._btn_reply     = LeeButton("↩  " + tr("返信"),       variant="secondary", size="sm")
         self._btn_reply_all = LeeButton("↩↩  " + tr("全員に返信"), variant="secondary", size="sm")
         self._btn_forward   = LeeButton("↪  " + tr("転送"),        variant="secondary", size="sm")
@@ -1009,20 +1020,51 @@ class MailPreviewPanel(QWidget):
     def _build_body_css(self) -> str:
         """본문 HTML 에 inject 할 CSS — 테마 따라 색 토큰 변경.
 
-        메일 발신자가 색 지정 안 한 텍스트가 다크 모드에서도 가독되도록 화이트
-        톤으로 강제 (`color !important`). 인라인 스타일 / 발신자 지정 색은 그대로.
-        링크 색만 별도로 다크/라이트 친화 톤.
+        다크 모드 처리 전략:
+            - 발신자 하드코드 흰 배경 (`<div style="background:#fff">`, 표 셀 등)
+              을 무력화하여 다크 surface 가 그대로 노출 — 흰 영역 island 방지
+            - 모든 이미지에 흰 패드 배경 강제 — 투명 PNG 의 검은 아이콘 (다크
+              아이콘 / 회사 로고) 이 다크 배경과 겹쳐 보이지 않는 문제 해결
+            - 텍스트 색은 sender 인라인 색 우선 (브랜드 컬러 보존), 미지정 시
+              테마 primary 사용. `<span style="color:white">` 처럼 다크에서
+              안보이는 케이스는 어쩔 수 없으나 일반 메일은 거의 무사.
+            - blockquote / 서명 (보통 회색 텍스트) — 가독성 우선 톤
         """
         if self._is_dark:
             text_c = "#E8EAED"
             bg_c   = "#1B1E26"
             link_c = "#8AB4F8"
             quote_c = "#A8B0BD"
+            dark_extra = (
+                # 발신자 하드코드 bg 무력화 — 흰 island 방지 (다크 surface 노출)
+                "*:not(img):not(svg) { background-color: transparent !important;"
+                " background-image: none !important; }"
+                # 이미지는 흰 패드로 감싸 — 투명 PNG 검은 아이콘 가독 보장
+                "img { background-color: #FFFFFF !important;"
+                "  padding: 4px !important; border-radius: 4px !important; }"
+                # 표 / 셀 / 서명 영역의 검은 배경 (간혹 sender 가 다크모드 의도로 지정)
+                # 도 normalize — 우리 다크 surface 와 시각 충돌 방지
+                "table, tbody, thead, tr, td, th, div, p, span, section, article "
+                "{ background-color: transparent !important; }"
+                # 명시 색 미지정 텍스트 보강 (sender 가 검은 글씨 가정한 메일에서 효과)
+                f"body, body p, body div, body td, body th, body span, body li "
+                f"{{ color: {text_c}; }}"
+                # 인라인 검은색 텍스트는 흰톤으로 — 다크 surface 위에 검은 글씨 가독 보강
+                'span[style*="color:#000"], span[style*="color: rgb(0,0,0)"], '
+                'span[style*="color: black"], div[style*="color:#000"], '
+                'p[style*="color:#000"] '
+                f'{{ color: {text_c} !important; }}'
+                # 인라인 검은 가까운 텍스트 (회색 톤) 도 가독 톤
+                'span[style*="color:#222"], span[style*="color:#333"], '
+                'span[style*="color:#444"] '
+                f'{{ color: {text_c} !important; }}'
+            )
         else:
             text_c = "#202124"
             bg_c   = "#FFFFFF"
             link_c = "#1A73E8"
             quote_c = "#5F6368"
+            dark_extra = ""
         return (
             "<style>"
             "html, body {"
@@ -1042,6 +1084,8 @@ class MailPreviewPanel(QWidget):
             "td, th { word-wrap: break-word; max-width: 100%; }"
             f"blockquote {{ border-left: 3px solid {quote_c}; padding-left: 12px;"
             f"  color: {quote_c}; margin: 8px 0; }}"
+            "hr { border: none; border-top: 1px solid rgba(128,128,128,0.25); margin: 14px 0; }"
+            f"{dark_extra}"
             "</style>"
         )
 
@@ -1316,6 +1360,7 @@ class GmailWidget(BaseWidget):
         self._mail_panel.load_more_requested.connect(self._load_more_mails)
         self._mail_panel.search_changed.connect(self._on_search_changed)
         self._mail_panel.bulk_action.connect(self._on_bulk_action)
+        self._mail_panel.mark_all_read_requested.connect(self._on_mark_all_read_current)
 
         # 우측: 미리보기
         self._preview_panel = MailPreviewPanel()
@@ -1444,13 +1489,27 @@ class GmailWidget(BaseWidget):
             QLabel#gmailMailHdrLbl {{
                 color: {tokens['fg_primary']}; background: transparent;
                 font-size: 13px; font-weight: 800;
+                letter-spacing: 0.02em;
+            }}
+            QPushButton#gmailHdrIconBtn {{
+                background: transparent; color: {tokens['fg_secondary']};
+                border: 1px solid {tokens['border_subtle']}; border-radius: 8px;
+                font-size: 11px; font-weight: 700;
+                padding: 0;
+            }}
+            QPushButton#gmailHdrIconBtn:hover {{
+                background: {hover_bg}; color: {_C_MAIL};
+                border-color: {_C_MAIL};
             }}
             QListWidget#gmailMailList {{
                 background: {tokens['bg_surface']};
                 border: none; outline: 0;
+                padding: 4px 6px;
             }}
             QListWidget#gmailMailList::item {{
-                border-bottom: 1px solid {tokens['border_subtle']};
+                border: none;
+                margin: 1px 0;
+                border-radius: 8px;
                 padding: 0;
             }}
             QListWidget#gmailMailList::item:selected {{
@@ -1777,6 +1836,28 @@ class GmailWidget(BaseWidget):
         w.finished.connect(w.deleteLater)
         w.start()
         self.track_worker(w)
+
+    def _on_mark_all_read_current(self) -> None:
+        """헤더의 ✓✓ 버튼 — 현재 선택 라벨 전체 기독.
+
+        다중 라벨 선택 시 첫 번째만 (drill-down 시 가장 좁은 라벨이 의도).
+        """
+        if not self._selected_label_ids:
+            return
+        target = self._selected_label_ids[0]
+        # 확인 다이얼로그 — 실수 방지
+        label_name = ""
+        for lbl in getattr(self, "_labels", []):
+            if lbl.get("id") == target:
+                label_name = lbl.get("name", target).split("/")[-1]
+                break
+        if not LeeDialog.confirm(
+            tr("すべて既読"),
+            tr("「{0}」のすべての未読メールを既読にしますか?").format(label_name or target),
+            ok_text=tr("既読にする"), parent=self,
+        ):
+            return
+        self._on_mark_label_all_read(target)
 
     def _on_mark_all_read_done(self, _count: int) -> None:
         self._set_status("")
