@@ -1164,6 +1164,9 @@ class _IndicatorTile(QFrame):
         # 살구색 박스처럼 보였음. 라인만으로 깔끔하게 표현.
         self._spark = LeeSparkline(indicator.get("color", "#F4B740"), height=28, fill_alpha=0)
         layout.addWidget(self._spark)
+        # 초기 active 면 라인 두께 강조 (가시성 보장)
+        if self._active:
+            self._spark.set_emphasis(True)
 
         self._apply_qss()
 
@@ -1190,13 +1193,16 @@ class _IndicatorTile(QFrame):
             return
         self._active = active
         self._apply_qss()
+        # active 시 sparkline 라인 강조 (transparent 배경 위에서 가시성 확보)
+        self._spark.set_emphasis(active)
         # 강제 재스타일 — sizeHint 변동 없이 색깔만 즉시 반영
         self.style().unpolish(self); self.style().polish(self)
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
-        bg_surface = "#14161C" if is_dark else "#FFFFFF"
-        self._spark.set_card_bg(bg_surface)
+        # set_card_bg(bg_surface) 호출 X — LeeSparkline 의 auto-transparent 모드를
+        # 무력화하여 active 카드 (rgba 합성색) 와 단색 sparkline 의 색차 발생.
+        # ThemeManager.theme_changed 시그널 자동 구독으로 충분 (transparent 유지).
         self._apply_qss()
 
     def mousePressEvent(self, event):

@@ -204,26 +204,49 @@ class LeeSparkline(pg.PlotWidget):
         self.setBackground(color)
         self.setStyleSheet(f"background: {color}; border: none;")
 
+    # 선 두께 — set_emphasis(True) 시 더 두껍게 그려 active 카드 강조
+    _LINE_WIDTH_NORMAL = 2
+    _LINE_WIDTH_EMPHASIS = 3
+
     def set_data(self, values: list[float]) -> None:
         self.clear()
+        self._last_values = list(values) if values else []   # set_emphasis 재 plot 용
         if not values or len(values) < 2:
             return
+        self._draw(values)
+
+    def _draw(self, values: list[float]) -> None:
         x = list(range(len(values)))
         c = QColor(self._color)
+        line_w = getattr(self, "_line_width", self._LINE_WIDTH_NORMAL)
         # fill_alpha=0 이면 fill 자체 비활성화 (라인만)
         if self._fill_alpha <= 0:
             self.plot(
                 x, values,
-                pen=pg.mkPen(self._color, width=2),
+                pen=pg.mkPen(self._color, width=line_w),
             )
         else:
             self.plot(
                 x, values,
-                pen=pg.mkPen(self._color, width=2),
+                pen=pg.mkPen(self._color, width=line_w),
                 fillLevel=min(values) - (max(values) - min(values)) * 0.1,
                 brush=pg.mkBrush(c.red(), c.green(), c.blue(), self._fill_alpha),
             )
         self.enableAutoRange()
+
+    def set_emphasis(self, emphasized: bool) -> None:
+        """active 시 line width 를 두껍게 (가시성 보강).
+
+        transparent 배경에서 active 상태 강조 시 라인이 묻히지 않도록.
+        """
+        self._line_width = (
+            self._LINE_WIDTH_EMPHASIS if emphasized else self._LINE_WIDTH_NORMAL
+        )
+        # 기존 데이터 재 plot
+        last = getattr(self, "_last_values", None)
+        if last:
+            self.clear()
+            self._draw(last)
 
     def set_color(self, color: str) -> None:
         self._color = color
