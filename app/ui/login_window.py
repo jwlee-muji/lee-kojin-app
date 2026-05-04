@@ -781,7 +781,7 @@ class LoginWindow(QMainWindow):
         # 디자인 토큰 (TOKENS_DARK) 으로 hex 자동 동기화 — 토큰 변경 시 propagate
         from app.ui.theme import TOKENS_DARK as _T
         qss = ("""
-        /* ── 배경 투명화 (QWidget 글로벌 #1e1e1e 오버라이드) ── */
+        /* ── 배경 투명화 (QWidget 글로벌 dark bg 오버라이드) ── */
         QWidget#loginCentral,
         QWidget#loginContent,
         QWidget#loginPage,

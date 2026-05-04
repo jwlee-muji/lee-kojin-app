@@ -471,19 +471,22 @@ QLabel#topBarKbdBadge {{
 }}
 
 /* ── 우측 ── */
+/* 온라인 pill — 탑바 우측의 다른 pill (테마/유저) 와 톤 통일 (bg_surface_2).
+   강조는 border + text color (c_ok / c_bad) 로만 표현해 "독립 색상으로 떠있는 느낌" 제거. */
 QLabel#topBarOnlinePill {{
     color: {c_ok};
-    background: rgba(48,209,88,0.12);
-    border: 1px solid rgba(48,209,88,0.25);
+    background: {bg_surface_2};
+    border: 1px solid rgba(48,209,88,0.45);
     border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 11px;
+    padding: 6px 14px;
+    font-size: 11.5px;
     font-weight: 700;
+    min-height: 16px;
 }}
 QLabel#topBarOnlinePill[net="offline"] {{
     color: {c_bad};
-    background: rgba(255,69,58,0.12);
-    border-color: rgba(255,69,58,0.25);
+    background: {bg_surface_2};
+    border-color: rgba(255,69,58,0.45);
 }}
 
 QPushButton#topBarThemeBtn {{
