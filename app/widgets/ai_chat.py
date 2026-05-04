@@ -449,7 +449,9 @@ class AiChatCard(LeeCard):
                 background: transparent; font-style: italic;
             }}
             QFrame#aiCardPh {{
-                background: {bg_surface_2};
+                /* placeholder 영역 — 카드 root 와 톤 통일 (border 만으로 경계 표시) */
+                background: transparent;
+                border: 1px solid {border};
                 border-radius: 12px;
             }}
             QLabel#aiCardPhLbl {{

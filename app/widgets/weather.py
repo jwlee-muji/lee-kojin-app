@@ -383,14 +383,16 @@ class _HourCard(QFrame):
 
     def _apply_qss(self):
         is_dark = self._is_dark
-        bg_surface_2 = "#1B1E26" if is_dark else "#F0F2F5"
+        # 미니 시간 카드 — 페이지(bg_app) 위에 직접 놓이므로 bg_surface (1단계 surface)
+        # 사용. 이전엔 bg_surface_2 (#1B1E26) 가 페이지(#0A0B0F) 와 색차가 커
+        # "떠 있는" 인상.
+        bg_surface   = "#14161C" if is_dark else "#FFFFFF"
         fg_primary   = "#F2F4F7" if is_dark else "#0B1220"
-        fg_secondary = "#A8B0BD" if is_dark else "#4A5567"
         fg_tertiary  = "#6B7280" if is_dark else "#8A93A6"
         border_subtle = "rgba(255,255,255,0.04)" if is_dark else "rgba(11,18,32,0.06)"
         self.setStyleSheet(f"""
             QFrame#weaHourCard {{
-                background: {bg_surface_2};
+                background: {bg_surface};
                 border: 1px solid {border_subtle};
                 border-radius: 12px;
             }}
@@ -469,13 +471,14 @@ class _DayCard(QFrame):
 
     def _apply_qss(self):
         is_dark = self._is_dark
-        bg_surface_2 = "#1B1E26" if is_dark else "#F0F2F5"
+        # 미니 일자 카드 — 페이지(bg_app) 위에 직접 놓이므로 bg_surface (1단계 surface)
+        bg_surface   = "#14161C" if is_dark else "#FFFFFF"
         fg_primary   = "#F2F4F7" if is_dark else "#0B1220"
         fg_tertiary  = "#6B7280" if is_dark else "#8A93A6"
         border_subtle = "rgba(255,255,255,0.04)" if is_dark else "rgba(11,18,32,0.06)"
         self.setStyleSheet(f"""
             QFrame#weaDayCard {{
-                background: {bg_surface_2};
+                background: {bg_surface};
                 border: 1px solid {border_subtle};
                 border-radius: 14px;
             }}
@@ -674,6 +677,9 @@ class WeatherWidget(BaseWidget):
 
     def _mini_stat(self, label: str, value: str) -> QWidget:
         wrap = QWidget()
+        # 부모 카드 배경을 그대로 노출 (wrap 자체는 색 안 가짐)
+        wrap.setAttribute(Qt.WA_TranslucentBackground)
+        wrap.setStyleSheet("background: transparent;")
         v = QVBoxLayout(wrap); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(2)
         head = QLabel(label); head.setObjectName("weaMiniHead")
         val  = QLabel(value); val.setObjectName("weaMiniVal")
