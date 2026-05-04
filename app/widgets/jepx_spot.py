@@ -29,7 +29,7 @@ from PySide6.QtCore import Qt, QDate, QTime, QTimer, QPoint, QThread, Signal, QO
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout,
-    QLabel, QPushButton, QScrollArea, QSizePolicy, QToolTip,
+    QLabel, QPushButton, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
@@ -48,8 +48,8 @@ from app.core.i18n import tr
 from app.ui.common import BaseWidget
 from app.ui.components import (
     LeeButton, LeeCard, LeeChartFrame, LeeCountValue, LeeDateInput,
-    LeeDetailHeader, LeeDialog, LeeIconTile, LeeKPI, LeePivotTable,
-    LeeSegment, LeeSparkline, LeeTrend,
+    LeeDetailHeader, LeeDialog, LeeHoverPopup, LeeIconTile, LeeKPI,
+    LeePivotTable, LeeSegment, LeeSparkline, LeeTrend,
 )
 
 pg.setConfigOptions(antialias=True)
@@ -514,6 +514,9 @@ class _SpotMultiAreaChart(pg.PlotWidget):
         self._curves: list[pg.PlotDataItem] = []
         self._curve_meta: list[tuple[str, str]] = []  # (name, color)
 
+        # Modern hover popup (QToolTip 대체) — parent=self 로 lifecycle 묶음
+        self._hover_popup = LeeHoverPopup(self)
+
         self._apply_theme_colors()
 
     # ── 외관 ─────────────────────────────────────────────────
@@ -533,6 +536,7 @@ class _SpotMultiAreaChart(pg.PlotWidget):
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_theme_colors()
+        self._hover_popup.set_theme(is_dark)
 
     def set_x_label(self, label: str) -> None:
         text_c = "#A8B0BD" if self._is_dark else "#4A5567"
@@ -546,7 +550,7 @@ class _SpotMultiAreaChart(pg.PlotWidget):
         scene_pos = evt[0]
         if not self.sceneBoundingRect().contains(scene_pos):
             self._tracker.setData([])
-            QToolTip.hideText()
+            self._hover_popup.hide_popup()
             return
         mp = self.plotItem.vb.mapSceneToView(scene_pos)
         self._vline.setPos(mp.x())
@@ -556,9 +560,9 @@ class _SpotMultiAreaChart(pg.PlotWidget):
         if text:
             vp = self.mapFromScene(scene_pos)
             gp = self.mapToGlobal(QPoint(int(vp.x()), int(vp.y())))
-            QToolTip.showText(gp + QPoint(14, -10), text, self)
+            self._hover_popup.show_at(text, gp)
         else:
-            QToolTip.hideText()
+            self._hover_popup.hide_popup()
 
     def _nearest_x(self, x: float) -> Optional[float]:
         best_x = None

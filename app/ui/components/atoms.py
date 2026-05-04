@@ -17,8 +17,11 @@ from PySide6.QtCore import (
     Qt, QTimer, QSize, QEasingCurve, QVariantAnimation,
     QPropertyAnimation, Property,
 )
-from PySide6.QtGui import QIcon, QPixmap, QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtGui import QIcon, QPixmap, QColor, QPainter, QPen, QGuiApplication
+from PySide6.QtWidgets import (
+    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QSizePolicy,
+    QVBoxLayout, QWidget,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -255,6 +258,106 @@ class LeeSparkline(pg.PlotWidget):
 
     def set_color(self, color: str) -> None:
         self._color = color
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 2.5 LeeHoverPopup — 차트 hover 정보용 modern popup (QToolTip 대체)
+# ──────────────────────────────────────────────────────────────────────
+class LeeHoverPopup(QFrame):
+    """차트 hover 시 표시되는 정보 popup — QToolTip.showText 대체.
+
+    QToolTip 의 시스템 룩앤필 / 깜빡임 / 지연 문제 해결:
+        - 둥근 모서리 + 그림자 + 테마 색상 (다크/라이트)
+        - HTML rich text 지원
+        - smooth move (show/hide cycle 없이 위치만 갱신)
+        - 화면 경계 회피 (마우스 우측 공간 부족 시 좌측 표시)
+
+    사용 패턴:
+        self._hover = LeeHoverPopup()  # __init__ 에서 1회 생성
+        self._hover.show_at("<b>09:00</b><br>30.5", global_pos)  # 호버 시
+        self._hover.hide_popup()  # leave 시
+    """
+
+    _OFFSET = (14, -10)   # cursor 우상단 살짝 떨어진 기본 위치
+
+    def __init__(self, parent=None):
+        # parent 가 있으면 ownership 으로 묶어 chart 파괴 시 popup 도 자동 정리
+        # Qt.ToolTip | Qt.FramelessWindowHint = top-level borderless overlay
+        # WA_TranslucentBackground = 둥근 모서리 + 그림자 위해 필수
+        # WA_ShowWithoutActivating = focus 빼앗지 않음 (hover 중 chart 입력 보존)
+        # WA_TransparentForMouseEvents = popup 위로 마우스 가도 chart 이벤트 유지
+        super().__init__(
+            parent,
+            Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus,
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+        self._is_dark = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)   # 그림자 여백
+        outer.setSpacing(0)
+
+        self._lbl = QLabel(self)
+        self._lbl.setObjectName("leeHoverLbl")
+        self._lbl.setTextFormat(Qt.RichText)
+        self._lbl.setWordWrap(False)
+        outer.addWidget(self._lbl)
+
+        shadow = QGraphicsDropShadowEffect(self._lbl)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 160))
+        self._lbl.setGraphicsEffect(shadow)
+
+        self._apply_theme()
+
+    def set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        bg = "#1F2228" if self._is_dark else "#FFFFFF"
+        fg = "#F2F4F7" if self._is_dark else "#0B1220"
+        border = "rgba(255,255,255,0.10)" if self._is_dark else "rgba(11,18,32,0.10)"
+        self._lbl.setStyleSheet(f"""
+            QLabel#leeHoverLbl {{
+                background: {bg};
+                color: {fg};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 10px 13px;
+                font-size: 11px;
+                font-family: "Inter", "Segoe UI", "Yu Gothic UI", sans-serif;
+            }}
+        """)
+
+    def show_at(self, html: str, global_pos) -> None:
+        """global_pos: QPoint — 마우스 글로벌 좌표 (보통 chart 핸들러에서 mapToGlobal)."""
+        self._lbl.setText(html)
+        self._lbl.adjustSize()
+        self.adjustSize()
+        # 화면 경계 회피
+        screen = QGuiApplication.screenAt(global_pos) or QGuiApplication.primaryScreen()
+        screen_rect = screen.availableGeometry()
+        ox, oy = self._OFFSET
+        x = global_pos.x() + ox
+        y = global_pos.y() + oy
+        if x + self.width() > screen_rect.right():
+            x = global_pos.x() - self.width() - ox       # 좌측 표시
+        if y < screen_rect.top():
+            y = screen_rect.top() + 4
+        if y + self.height() > screen_rect.bottom():
+            y = screen_rect.bottom() - self.height() - 4
+        self.move(x, y)
+        if not self.isVisible():
+            self.show()
+
+    def hide_popup(self) -> None:
+        if self.isVisible():
+            self.hide()
 
 
 # ──────────────────────────────────────────────────────────────────────

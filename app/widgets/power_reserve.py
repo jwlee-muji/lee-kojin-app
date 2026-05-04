@@ -39,8 +39,8 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal, QTimer, QDate
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QScrollArea,
-    QSizePolicy, QSplitter, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from app.api.market.power_reserve import (
@@ -640,6 +640,14 @@ class PowerReserveWidget(BaseWidget):
         )
         self._tokyo_chart.setMinimumHeight(160)  # splitter 가 동적 조정 가능하게
         self._tokyo_frame.set_content(self._tokyo_chart)
+        # ビュー初期化 — 차트 카드 상단 actions
+        self._btn_reset_view = QPushButton("↻")
+        self._btn_reset_view.setObjectName("chartIconBtn")
+        self._btn_reset_view.setToolTip(tr("ビュー初期化"))
+        self._btn_reset_view.setCursor(Qt.PointingHandCursor)
+        self._btn_reset_view.setFixedSize(32, 32)
+        self._btn_reset_view.clicked.connect(self._tokyo_chart.fit_view)
+        self._tokyo_frame.add_action(self._btn_reset_view)
 
         row.addWidget(self._bars_frame, 14)
         row.addWidget(self._tokyo_frame, 10)

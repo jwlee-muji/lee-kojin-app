@@ -26,20 +26,69 @@ from PySide6.QtWidgets import (
 
 # ── 행/열 hover crosshair delegate (LeePivotTable 용) ────────────────
 class _PivotCrosshairDelegate(QStyledItemDelegate):
-    """현재 호버 row/col 과 일치하는 셀에 accent 오버레이를 덧칠."""
+    """완전 커스텀 paint — QSS 간섭 없이 setBackground(QBrush) 색상 보장 + crosshair.
+
+    why custom paint:
+        QSS 가 적용된 QTableWidget 의 default delegate 는 QStyledItemDelegate.paint() 의
+        cascade 가 stylesheet bg 를 우선시해 QTableWidgetItem.setBackground() 으로
+        지정한 색상을 무시 → 셀 강조 색이 표시되지 않음. delegate 에서 bg/text/border 를
+        직접 그려 stylesheet 우회.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.hover_row = -1
         self.hover_col = -1
-        self.overlay_color = QColor(255, 122, 69, 28)   # accent 11%
+        self._is_dark = True
+        self.overlay_color = QColor(255, 122, 69, 28)         # accent 11% (crosshair)
+        self.border_color  = QColor(255, 255, 255, 10)        # row 구분선 (dark default)
+        self._padding_x = 6
+
+    def set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        # row 구분선 색만 테마 따라 갱신
+        if is_dark:
+            self.border_color = QColor(255, 255, 255, 10)
+        else:
+            self.border_color = QColor(11, 18, 32, 16)
 
     def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        if index.row() == self.hover_row or index.column() == self.hover_col:
+        rect = option.rect
+
+        # 1. 셀 배경 — setBackground(QBrush) 색상 직접 paint (QSS bypass)
+        bg = index.data(Qt.BackgroundRole)
+        if isinstance(bg, QBrush):
+            color = bg.color()
+            if color.alpha() > 0:
+                painter.fillRect(rect, color)
+
+        # 2. 텍스트 — fontRole / foregroundRole / textAlignmentRole 직접 사용
+        text = index.data(Qt.DisplayRole)
+        if text is not None and str(text) != "":
             painter.save()
-            painter.fillRect(option.rect, self.overlay_color)
+            font = index.data(Qt.FontRole)
+            painter.setFont(font if font is not None else option.font)
+            fg = index.data(Qt.ForegroundRole)
+            if isinstance(fg, QBrush):
+                painter.setPen(QPen(fg.color()))
+            else:
+                painter.setPen(option.palette.text().color())
+            align = index.data(Qt.TextAlignmentRole)
+            if align is None or align == 0:
+                align = int(Qt.AlignCenter)
+            text_rect = rect.adjusted(self._padding_x, 0, -self._padding_x, 0)
+            painter.drawText(text_rect, align, str(text))
             painter.restore()
+
+        # 3. row 하단 구분선
+        painter.save()
+        painter.setPen(QPen(self.border_color, 1))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        painter.restore()
+
+        # 4. crosshair 오버레이 (현재 hover row/col 위)
+        if index.row() == self.hover_row or index.column() == self.hover_col:
+            painter.fillRect(rect, self.overlay_color)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -198,6 +247,16 @@ class LeeBigChart(pg.PlotWidget):
 
     def set_color(self, color: str) -> None:
         self._color = color
+
+    def fit_view(self) -> None:
+        """X 0~1440min + Y auto-range 로 초기화 (set_data 와 동일한 view 복원)."""
+        self.setXRange(0, 1440, padding=0.02)
+        if self._y_data:
+            ymax = max(self._y_data) * 1.1
+            ymin = min(self._y_data) * 0.9
+            if ymax - ymin < 1:
+                ymax = ymin + 1
+            self.setYRange(max(0, ymin), max(ymax, 30 if self._y_unit == "%" else ymax), padding=0)
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
@@ -374,6 +433,7 @@ class LeePivotTable(QFrame):
         self._table.setMouseTracking(True)
         self._table.viewport().setMouseTracking(True)
         self._crosshair = _PivotCrosshairDelegate(self._table)
+        self._crosshair.set_theme(self._is_dark)
         self._table.setItemDelegate(self._crosshair)
         self._table.cellEntered.connect(self._on_cell_hovered)
         self._table.viewport().installEventFilter(self)
@@ -523,6 +583,9 @@ class LeePivotTable(QFrame):
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_qss()
+        # row 구분선 색도 테마 따라 갱신 — delegate 가 직접 paint 하므로 호출 필수
+        self._crosshair.set_theme(is_dark)
+        self._table.viewport().update()
         # 데이터 그대로 두고 색만 갱신 (set_data 재호출 없이) — 테마 전환 시 lag 큰폭 감소
         if self._headers and self._rows:
             self._recolor_cells()
@@ -641,13 +704,7 @@ class LeePivotTable(QFrame):
                 border-bottom: 1px solid {border_subtle};
                 padding: 8px 6px;
             }}
-            QTableWidget#pivotTable::item {{
-                padding: 5px 6px;
-                border-bottom: 1px solid {border_subtle};
-            }}
-            QTableWidget#pivotTable::item:hover {{
-                background: {bg_surface_3};
-            }}
+            /* ::item bg/border 는 _PivotCrosshairDelegate.paint 로 이관 — QSS 와 setBackground 충돌 회피 */
         """)
 
 

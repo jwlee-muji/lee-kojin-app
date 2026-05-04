@@ -25,7 +25,10 @@ from .sidebar import LeeSidebar
 from .segment import LeeSegment
 
 # Phase 1 신규 atom 들
-from .atoms import LeeIconTile, LeeSparkline, LeeTrend, LeeCountValue, LeeRingSpinner
+from .atoms import (
+    LeeIconTile, LeeSparkline, LeeTrend, LeeCountValue, LeeRingSpinner,
+    LeeHoverPopup,
+)
 from .detail import LeeKPI, LeeDetailHeader, LeeChartFrame
 from .charts import LeeBigChart, LeePivotTable, LeeReserveBars, price_color, PivotMode
 from .inputs import LeeDateInput
@@ -57,6 +60,7 @@ __all__ = [
     "LeeTrend",
     "LeeCountValue",
     "LeeRingSpinner",
+    "LeeHoverPopup",
     "LeeKPI",
     "LeeDetailHeader",
     "LeeChartFrame",

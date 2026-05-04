@@ -38,7 +38,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QToolTip, QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from app.api.market.hjks import FetchHjksWorker
@@ -49,7 +49,8 @@ from app.core.i18n import tr
 from app.ui.common import BaseWidget
 from app.ui.components import (
     LeeButton, LeeCard, LeeChartFrame, LeeCountValue, LeeDateInput,
-    LeeDetailHeader, LeeDialog, LeeIconTile, LeeKPI, LeeSparkline,
+    LeeDetailHeader, LeeDialog, LeeHoverPopup, LeeIconTile, LeeKPI,
+    LeeSparkline,
 )
 
 pg.setConfigOptions(antialias=True)
@@ -545,6 +546,10 @@ class _StackedBarChart(pg.PlotWidget):
         self._proxy = pg.SignalProxy(
             self.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse,
         )
+
+        # Modern hover popup (QToolTip 대체) — parent=self 로 lifecycle 묶음
+        self._hover_popup = LeeHoverPopup(self)
+
         self._apply_theme_colors()
 
     def set_theme(self, is_dark: bool) -> None:
@@ -552,6 +557,7 @@ class _StackedBarChart(pg.PlotWidget):
         # axis/text/bg 색만 갱신 (막대 색은 method 토큰으로 다크/라이트 무관 동일)
         # 이전엔 _render() 호출로 모든 bar 재생성 → 데이터 재구성 비용
         self._apply_theme_colors()
+        self._hover_popup.set_theme(is_dark)
 
     def _apply_theme_colors(self) -> None:
         bg = "#14161C" if self._is_dark else "#FFFFFF"
@@ -667,7 +673,7 @@ class _StackedBarChart(pg.PlotWidget):
     def _on_mouse(self, evt) -> None:
         scene_pos = evt[0]
         if not self.sceneBoundingRect().contains(scene_pos):
-            self._vline.hide(); QToolTip.hideText()
+            self._vline.hide(); self._hover_popup.hide_popup()
             self._hover_idx = None
             return
         if not self._rows:
@@ -675,7 +681,7 @@ class _StackedBarChart(pg.PlotWidget):
         mp = self.plotItem.vb.mapSceneToView(scene_pos)
         idx = int(round(mp.x()))
         if not (0 <= idx < len(self._rows)):
-            self._vline.hide(); QToolTip.hideText()
+            self._vline.hide(); self._hover_popup.hide_popup()
             return
         self._vline.setPos(idx); self._vline.show()
         self._hover_idx = idx
@@ -685,7 +691,6 @@ class _StackedBarChart(pg.PlotWidget):
         row = self._rows[idx]
         # filtered total
         total_g = sum(self._filtered_value(row, m) for m in self._sel_methods) / 1000.0
-        text_c = "#A8B0BD" if self._is_dark else "#4A5567"
         lines = [f"<b>{row['date']}</b>"]
         for m in self._sel_methods:
             v = self._filtered_value(row, m) / 1000.0
@@ -700,7 +705,7 @@ class _StackedBarChart(pg.PlotWidget):
         text = "<br>".join(lines)
         vp = self.mapFromScene(scene_pos)
         gp = self.mapToGlobal(QPoint(int(vp.x()), int(vp.y())))
-        QToolTip.showText(gp + QPoint(14, -10), text, self)
+        self._hover_popup.show_at(text, gp)
 
 
 # ──────────────────────────────────────────────────────────────────────
