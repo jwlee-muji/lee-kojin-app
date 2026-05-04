@@ -549,8 +549,9 @@ class _StackedBarChart(pg.PlotWidget):
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
+        # axis/text/bg 색만 갱신 (막대 색은 method 토큰으로 다크/라이트 무관 동일)
+        # 이전엔 _render() 호출로 모든 bar 재생성 → 데이터 재구성 비용
         self._apply_theme_colors()
-        self._render()
 
     def _apply_theme_colors(self) -> None:
         bg = "#14161C" if self._is_dark else "#FFFFFF"

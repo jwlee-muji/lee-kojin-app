@@ -440,9 +440,31 @@ class LeePivotTable(QFrame):
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_qss()
-        # 셀 색상 재적용
+        # 데이터 그대로 두고 색만 갱신 (set_data 재호출 없이) — 테마 전환 시 lag 큰폭 감소
         if self._headers and self._rows:
-            self.set_data(self._headers, self._rows)
+            self._recolor_cells()
+
+    def _recolor_cells(self) -> None:
+        """기존 cell 들의 background/foreground 색만 다크/라이트 토큰에 맞춰 갱신.
+
+        set_data 와 달리 QTableWidgetItem 재생성/재배치 없이 색상만 즉시 변경.
+        대량 setItem 의 cascade 비용 (수백 회) 을 피해 lag 가 크게 감소.
+        """
+        time_fg = QColor("#A8B0BD" if self._is_dark else "#4A5567")
+        for ri, row_data in enumerate(self._rows):
+            for ci, cell in enumerate(row_data):
+                item = self._table.item(ri, ci)
+                if item is None:
+                    continue
+                if ci == 0:
+                    item.setForeground(time_fg)
+                else:
+                    val = self._parse_value(cell)
+                    c = price_color(val, self._mode)
+                    if c is not None:
+                        bg_qc = self._rgba_to_qcolor(c[0])
+                        item.setBackground(QBrush(bg_qc))
+                        item.setForeground(QColor(c[1]))
 
     # ── 내부 ─────────────────────────────────────────────────
     def _parse_value(self, cell: str) -> Optional[float]:
@@ -591,8 +613,15 @@ class LeeReserveBars(QFrame):
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_qss()
-        if self._rows:
-            self.set_data(self._rows)
+        # 데이터 그대로 두고 _BarTrack 의 track_color 만 갱신 (set_data 재호출 X)
+        new_track = "rgba(255,255,255,0.06)" if is_dark else "rgba(11,18,32,0.08)"
+        for i in range(self._layout.count()):
+            row_w = self._layout.itemAt(i).widget()
+            if row_w is None:
+                continue
+            for tr in row_w.findChildren(_BarTrack):
+                tr._track_color = new_track
+                tr.update()
 
     # ── 내부 ─────────────────────────────────────────────────
     def _color_for(self, status: Optional[str]) -> str:
