@@ -787,6 +787,13 @@ class SpotDashCard(QFrame):
 
     def set_data(self, area: str, avg: float, max_v: float, min_v: float,
                  val_color: str | None = None):
+        # 동일 데이터 + 색이면 라벨/QSS 재설정 생략 (bus 이벤트 중복 방출 cascade 차단)
+        # NOTE: is_dark 도 sig 에 포함 — 다크/라이트 전환 시 색은 재계산되어야 함
+        new_sig = (str(area), float(avg), float(max_v), float(min_v),
+                   val_color, bool(self.is_dark))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self._val_color = val_color
         self.area_lbl.setText(area)
         self.value_lbl.setText(f"{avg:.2f} 円/kWh")
@@ -803,6 +810,8 @@ class SpotDashCard(QFrame):
         )
 
     def set_no_data(self):
+        # set_data sig cache 무효화 — 다음 set_data 가 정상 동작
+        self._data_sig = None
         self._val_color = None
         self.area_lbl.setText(tr("データなし"))
         self.value_lbl.setText("-- 円/kWh")

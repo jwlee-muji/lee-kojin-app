@@ -161,6 +161,11 @@ class LeeBigChart(pg.PlotWidget):
 
     # ── 외부 API ─────────────────────────────────────────────
     def set_data(self, x_minutes: list[float], y_values: list[float]) -> None:
+        # 동일 데이터면 redraw 생략 (5분 주기 refresh 시 중복 호출 cascade 차단)
+        new_sig = (tuple(x_minutes), tuple(y_values))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         if self._curve is not None:
             self.removeItem(self._curve)
             self._curve = None
@@ -391,9 +396,39 @@ class LeePivotTable(QFrame):
         headers: list[str],
         rows: list[list[str]],
     ) -> None:
-        """headers: ["時刻", "北海道", "東北", ...] / rows: [[time, v1, v2, ...], ...]"""
+        """headers: ["時刻", "北海道", "東北", ...] / rows: [[time, v1, v2, ...], ...]
+
+        Stage 1: 입력 동일하면 즉시 return (5분 주기 refresh cascade 차단).
+        Stage 2: 같은 shape (헤더+행 수+열 수) 면 변경된 셀만 in-place 갱신,
+                 shape 다르면 full rebuild fallback.
+        """
+        new_sig = (tuple(headers), tuple(tuple(r) for r in rows))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        prev_headers = self._headers
+        prev_rows = self._rows
+        same_shape = (
+            prev_headers == headers
+            and len(prev_rows) == len(rows)
+            and self._table.rowCount() == len(rows)
+            and self._table.columnCount() == len(headers)
+            and all(len(prev_rows[i]) == len(r) for i, r in enumerate(rows))
+        )
         self._headers = headers
         self._rows = rows
+        self._data_sig = new_sig
+
+        if same_shape:
+            self._update_cells_inplace(prev_rows, rows)
+        else:
+            self._full_rebuild(headers, rows)
+
+    def _full_rebuild(
+        self,
+        headers: list[str],
+        rows: list[list[str]],
+    ) -> None:
+        """헤더 변경 또는 행/열 수 변경 시: 기존 경로 — 전체 setItem."""
         self._table.clear()
         self._table.setColumnCount(len(headers))
         self._table.setHorizontalHeaderLabels([self._row_header_label if i == 0 else h for i, h in enumerate(headers)])
@@ -424,9 +459,6 @@ class LeePivotTable(QFrame):
                     val = self._parse_value(cell)
                     c = price_color(val, self._mode)
                     if c is not None:
-                        item.setBackground(QColor(c[0].replace("rgba(", "rgba(").replace(")", ")"))) \
-                            if False else None
-                        # QTableWidgetItem 은 rgba 직접 안 받음 → setData 로 처리하거나 setBackground(QBrush(QColor))
                         bg_qc = self._rgba_to_qcolor(c[0])
                         item.setBackground(QBrush(bg_qc))
                         item.setForeground(QColor(c[1]))
@@ -436,6 +468,49 @@ class LeePivotTable(QFrame):
         # 첫 컬럼 (시간) 폭 좁게
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setMinimumSectionSize(64)
+
+    def _update_cells_inplace(
+        self,
+        prev_rows: list[list[str]],
+        rows: list[list[str]],
+    ) -> None:
+        """같은 shape 시 변경된 셀만 setText/setBackground/setForeground 갱신.
+
+        QTableWidgetItem 재생성 없이 기존 item 의 속성만 갱신 — 수백 셀 cascade 비용
+        대부분 차단. paint 1 회로 묶기 위해 setUpdatesEnabled batch.
+        """
+        time_fg = QColor("#A8B0BD" if self._is_dark else "#4A5567")
+        viewport = self._table.viewport()
+        viewport.setUpdatesEnabled(False)
+        try:
+            for ri, row_data in enumerate(rows):
+                prev_row = prev_rows[ri]
+                for ci, cell in enumerate(row_data):
+                    if cell == prev_row[ci]:
+                        continue   # 변경 없는 셀: skip
+                    item = self._table.item(ri, ci)
+                    if item is None:
+                        item = QTableWidgetItem()
+                        item.setTextAlignment(Qt.AlignCenter)
+                        self._table.setItem(ri, ci, item)
+                    item.setText(str(cell))
+                    if ci == 0:
+                        item.setForeground(time_fg)
+                        f = item.font(); f.setBold(ri % 4 == 0); item.setFont(f)
+                    else:
+                        val = self._parse_value(cell)
+                        c = price_color(val, self._mode)
+                        if c is not None:
+                            bg_qc = self._rgba_to_qcolor(c[0])
+                            item.setBackground(QBrush(bg_qc))
+                            item.setForeground(QColor(c[1]))
+                            f = item.font(); f.setBold(True); item.setFont(f)
+                        else:
+                            # 이전 색 잔존 방지
+                            item.setBackground(QBrush(QColor(0, 0, 0, 0)))
+                            item.setForeground(QColor("#F2F4F7" if self._is_dark else "#0B1220"))
+        finally:
+            viewport.setUpdatesEnabled(True)
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
@@ -599,6 +674,11 @@ class LeeReserveBars(QFrame):
 
     # ── 외부 API ─────────────────────────────────────────────
     def set_data(self, rows: list[tuple[str, float, Optional[str]]]) -> None:
+        # 동일 데이터면 row 위젯 재구축 생략 (PowerReserve 5분 주기 cascade 차단)
+        new_sig = tuple((str(l), float(v), s) for l, v, s in rows)
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self._rows = list(rows)
         # 기존 자식 제거
         while self._layout.count():

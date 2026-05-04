@@ -741,6 +741,11 @@ class _SpotAreaBars(QFrame):
         self._apply_qss()
 
     def set_data(self, area_avgs: list[tuple[str, float]]) -> None:
+        # 동일 area×평균 시 redraw 생략 (기간 변경 시에만 데이터 변동)
+        new_sig = tuple((str(n), float(v)) for n, v in (area_avgs or []))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         # 기존 자식 제거
         for col in (self._left_col, self._right_col):
             while col.count():

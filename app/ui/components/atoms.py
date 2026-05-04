@@ -209,6 +209,11 @@ class LeeSparkline(pg.PlotWidget):
     _LINE_WIDTH_EMPHASIS = 3
 
     def set_data(self, values: list[float]) -> None:
+        # 동일 시계열이면 redraw 생략 (JKM 9 tile × 30 point cascade 차단)
+        new_sig = tuple(values) if values else ()
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self.clear()
         self._last_values = list(values) if values else []   # set_emphasis 재 plot 용
         if not values or len(values) < 2:

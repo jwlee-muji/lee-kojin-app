@@ -1176,6 +1176,12 @@ class _IndicatorTile(QFrame):
         self._apply_qss()
 
     def set_data(self, *, value: float, dod_pct: Optional[float], sparkline: list[float]) -> None:
+        # 동일 데이터면 라벨/sparkline redraw 생략
+        # (JKM 9 tile × refresh — DB hit 후 동일 결과 시 cascade 차단)
+        new_sig = (value, dod_pct, tuple(sparkline or []))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self._value_lbl.setText(f"{value:.2f}" if value is not None else "--")
         if dod_pct is None or abs(dod_pct) < 0.01:
             self._dod_lbl.setText("")
@@ -1189,6 +1195,8 @@ class _IndicatorTile(QFrame):
         self._spark.set_data(sparkline or [])
 
     def set_no_data(self) -> None:
+        # 무데이터 상태로 강제 — 다음 set_data 가 동일 sig 라도 정상 갱신되도록 cache 무효화
+        self._data_sig = None
         self._value_lbl.setText("--")
         self._dod_lbl.setText("")
         self._spark.set_data([])

@@ -571,6 +571,18 @@ class _StackedBarChart(pg.PlotWidget):
         sel_methods: list[str],
         sel_regions: list[str],
     ) -> None:
+        # 데이터 + 필터 (method/region) 동일하면 redraw 생략
+        # — HJKS 차트는 BarGraphItem 누적 생성 비용이 커서 효과 큼
+        rows_key = tuple(
+            (r.get("date"),
+             tuple(sorted((r.get("methods") or {}).items())),
+             tuple(sorted((r.get("regions") or {}).items())))
+            for r in (rows or [])
+        )
+        new_sig = (rows_key, tuple(sel_methods), tuple(sel_regions))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self._rows = rows or []
         self._dates = [r["date"] for r in self._rows]
         self._sel_methods = list(sel_methods)
@@ -741,6 +753,10 @@ class _RegionBarsPanel(QFrame):
 
     def set_data(self, averages: dict[str, float]) -> None:
         """averages: {region: avg op MW}."""
+        new_sig = tuple(sorted((averages or {}).items()))
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         self._averages = averages or {}
         self._max = max(self._averages.values()) if self._averages else 1.0
         self._max = max(self._max, 1.0)
@@ -913,6 +929,13 @@ class _StoppedListPanel(QFrame):
         self._apply_qss()
 
     def set_data(self, items: list[dict]) -> None:
+        # dict 는 unhashable 이므로 sorted-tuple 로 정규화
+        new_sig = tuple(
+            tuple(sorted(d.items())) for d in (items or [])
+        )
+        if getattr(self, "_data_sig", None) == new_sig:
+            return
+        self._data_sig = new_sig
         # 기존 카드 제거
         while self._grid.count():
             it = self._grid.takeAt(0)
