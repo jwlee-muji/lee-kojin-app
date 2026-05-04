@@ -1524,19 +1524,38 @@ class DashboardWidget(BaseWidget):
 
     # ── 테마 ─────────────────────────────────────────────────
     def apply_theme_custom(self):
+        """16+ 카드의 테마 적용을 chunked 방식으로 처리.
+
+        성능: 모든 카드 set_theme 를 동시에 호출하면 setStyleSheet cascade 가
+        UI thread 를 점유하여 spinner anim / 사용자 인지가 멈춤. QTimer
+        singleShot 으로 chunked 하여 main loop 가 paint 처리 가능.
+        """
         is_dark = self.is_dark
         self._apply_dashboard_qss(is_dark)
-        for c in self._cards.values():
-            if hasattr(c, "set_theme"):
-                try: c.set_theme(is_dark)
-                except Exception: pass
+        # skeleton + overlay 는 가벼움 — 즉시
         for sk in self._skeletons.values():
             sk.set_theme(is_dark)
-        # 편집 모드 overlay 도 테마 갱신
         for ov in self._overlays.values():
             if hasattr(ov, "set_theme"):
                 try: ov.set_theme(is_dark)
                 except Exception: pass
+        # 카드들은 chunked — 한 카드씩 처리 후 yield
+        cards_queue = [c for c in self._cards.values() if hasattr(c, "set_theme")]
+
+        def _process_next(remaining: list, dark: bool) -> None:
+            if not remaining:
+                return
+            card = remaining[0]
+            try:
+                card.set_theme(dark)
+            except Exception:
+                pass
+            if len(remaining) > 1:
+                # 16ms ≈ 60fps — main loop 가 paint 처리할 여유
+                QTimer.singleShot(0, lambda r=remaining[1:], d=dark: _process_next(r, d))
+
+        if cards_queue:
+            _process_next(cards_queue, is_dark)
 
     def _apply_dashboard_qss(self, is_dark: bool) -> None:
         fg_primary   = "#F2F4F7" if is_dark else "#0B1220"

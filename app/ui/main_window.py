@@ -584,25 +584,33 @@ class MainWindow(QMainWindow):
         self._theme_overlay.setGeometry(self.rect())
         self._theme_overlay.show(); self._theme_overlay.raise_()
 
-        # 진행 indicator — overlay 위에 spinner 표시 (사용자에게 처리 중 안내)
+        # 진행 indicator — overlay 의 CHILD 로 (overlay pixmap 위에 paint 보장,
+        # opacity fade 시 spinner 도 함께 사라짐)
         try:
             from app.ui.components import LeeRingSpinner
             from app.ui.theme import TOKENS_DARK
             self._theme_spinner = LeeRingSpinner(
-                size=56, color=TOKENS_DARK["accent"], parent=self,
+                size=56, color=TOKENS_DARK["accent"], parent=self._theme_overlay,
             )
             sx = (self.width() - 56) // 2
             sy = (self.height() - 56) // 2
             self._theme_spinner.move(sx, sy)
-            self._theme_spinner.raise_()
             self._theme_spinner.show()
+            self._theme_spinner.raise_()
         except Exception:
             self._theme_spinner = None
 
+        # ★ 중요 — 무거운 ThemeManager.set_theme 호출 직전에 paint 강제
+        # 이걸 안 하면 overlay/spinner 가 paint 되기 전에 set_theme 가 main thread 를
+        # 점유하여 사용자가 transition 시작을 시각적으로 인지하지 못함
+        QApplication.processEvents()
+
         self.is_dark = not self.is_dark
         from app.ui.theme import ThemeManager
-        # 1) 글로벌 QSS 만 즉시 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
+        # 1) 글로벌 QSS 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
         ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        # set_theme 후에도 한번 더 yield → spinner anim 작동 보장
+        QApplication.processEvents()
         self.topbar.set_theme_glyph(self.is_dark)
 
         self._theme_effect = QGraphicsOpacityEffect(self._theme_overlay)
