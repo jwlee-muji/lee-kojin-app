@@ -30,11 +30,11 @@ from PySide6.QtCore import (
     QAbstractTableModel, QFileSystemWatcher, QModelIndex, QPoint, QTimer,
     Qt, Signal,
 )
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMenu, QSplitter, QTableView,
-    QTextEdit, QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QLineEdit, QMenu, QSplitter, QStyle,
+    QStyledItemDelegate, QTableView, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.core.config import LOG_FILE
@@ -163,6 +163,79 @@ def load_all_records(base: Path, max_records: int = 100_000) -> list[LogRecord]:
 # ──────────────────────────────────────────────────────────────────────
 COL_TIME, COL_LEVEL, COL_MODULE, COL_MESSAGE = range(4)
 _HEADERS = ["時刻", "レベル", "モジュール", "メッセージ"]
+
+
+class _LogRowDelegate(QStyledItemDelegate):
+    """완전 커스텀 paint — QSS ::item:selected cascade 잔존 highlight 버그 회피.
+
+    why custom paint:
+        QSS 의 `::item:selected` + `setAlternatingRowColors(True)` 조합에서
+        Qt stylesheet 엔진이 deselect 시 paint invalidation 을 누락 → 새 행
+        클릭 후에도 이전 행 하이라이트가 잠시 남아있는 버그가 보고됨.
+        delegate 가 bg/text 를 painter 로 직접 그려 Qt 의 cascade 우회.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._is_dark = True
+        # 색상 — set_theme 에서 갱신
+        self._bg_surface = QColor("#14161C")
+        self._bg_alt     = QColor("#1F2128")
+        self._fg_primary = QColor("#F2F4F7")
+        self._sel_bg     = QColor("#2C313D")
+        self._border     = QColor(255, 255, 255, 12)
+
+    def set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        if is_dark:
+            self._bg_surface = QColor("#14161C")   # row 0 — 그대로 (블랙)
+            self._bg_alt     = QColor("#1F2128")   # row 1 — 거의 블랙인 그레이
+            self._fg_primary = QColor("#F2F4F7")
+            self._sel_bg     = QColor("#2C313D")
+            self._border     = QColor(255, 255, 255, 12)
+        else:
+            self._bg_surface = QColor("#FFFFFF")
+            self._bg_alt     = QColor("#F7F8FA")
+            self._fg_primary = QColor("#0B1220")
+            self._sel_bg     = QColor("#DDE3EC")
+            self._border     = QColor(11, 18, 32, 16)
+
+    def paint(self, painter, option, index):
+        rect = option.rect
+        is_selected = bool(option.state & QStyle.State_Selected)
+        is_alt = (index.row() % 2 == 1)
+
+        # 1. Background — 선택 우선, 그 외 alt/surface
+        if is_selected:
+            bg = self._sel_bg
+        elif is_alt:
+            bg = self._bg_alt
+        else:
+            bg = self._bg_surface
+        painter.fillRect(rect, bg)
+
+        # 2. Text
+        text = index.data(Qt.DisplayRole)
+        if text is not None and str(text) != "":
+            painter.save()
+            font = index.data(Qt.FontRole)
+            painter.setFont(font if font is not None else option.font)
+            fg = index.data(Qt.ForegroundRole)
+            if isinstance(fg, QBrush):
+                painter.setPen(QPen(fg.color()))
+            else:
+                painter.setPen(QPen(self._fg_primary))
+            text_rect = rect.adjusted(8, 0, -8, 0)
+            painter.drawText(
+                text_rect, int(Qt.AlignVCenter | Qt.AlignLeft), str(text),
+            )
+            painter.restore()
+
+        # 3. row 하단 구분선 (subtle)
+        painter.save()
+        painter.setPen(QPen(self._border, 1))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        painter.restore()
 
 
 class LogTableModel(QAbstractTableModel):
@@ -422,7 +495,8 @@ class LogViewerWidget(BaseWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        # setAlternatingRowColors(True) 미사용 — _LogRowDelegate 가 row index
+        # 기준으로 alt color 직접 paint (QSS cascade 우회로 잔존 highlight 버그 fix)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
@@ -430,6 +504,10 @@ class LogViewerWidget(BaseWidget):
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
+        # row delegate — QSS ::item:selected cascade 우회 (잔존 highlight 버그 fix)
+        self._row_delegate = _LogRowDelegate(self.table)
+        self._row_delegate.set_theme(self.is_dark)
+        self.table.setItemDelegate(self._row_delegate)
         self._splitter.addWidget(self.table)
 
         # 상세 패널
@@ -465,6 +543,8 @@ class LogViewerWidget(BaseWidget):
         self.level_seg.set_theme(self.is_dark)
         self.period_seg.set_theme(self.is_dark)
         self._model.set_theme(self.is_dark)
+        self._row_delegate.set_theme(self.is_dark)
+        self.table.viewport().update()   # delegate 색 즉시 반영
         self._apply_qss()
 
     def _apply_qss(self) -> None:
@@ -472,18 +552,14 @@ class LogViewerWidget(BaseWidget):
         bg_app        = "#0A0B0F" if d else "#F5F6F8"
         bg_surface    = "#14161C" if d else "#FFFFFF"
         bg_surface_2  = "#1B1E26" if d else "#F0F2F5"
-        # 다크 모드 행 구분색 — 이전 #161922 (hue 살짝 푸른 쪽으로 shift) 가
-        # 자극적이라는 피드백 → bg_surface 와 동일 hue, 약간만 밝게 조정.
-        bg_alt        = "#171920" if d else "#F7F8FA"
+        # 행 구분색 / 선택 색 → _LogRowDelegate 가 직접 paint
+        # (QSS ::item:selected 잔존 highlight 버그 회피).
+        # 다크: row=#14161C(블랙) / row_alt=#1F2128(거의 블랙 그레이)
         fg_primary    = "#F2F4F7" if d else "#0B1220"
         fg_secondary  = "#A8B0BD" if d else "#4A5567"
         fg_tertiary   = "#6B7280" if d else "#8A93A6"
         border_subtle = "rgba(255,255,255,0.06)" if d else "rgba(11,18,32,0.06)"
         border        = "rgba(255,255,255,0.10)" if d else "rgba(11,18,32,0.10)"
-        # 선택 하이라이트 — 불투명 솔리드. 이전엔 rgba alpha 가 alternate row
-        # 와 일반 row 위에서 다르게 blending 되어 "행마다 색이 다른 하이라이트"
-        # / "잔존 하이라이트" 로 보이는 버그 발생.
-        sel_bg        = "#2C313D" if d else "#DDE3EC"
 
         self.setStyleSheet(f"""
             QFrame#logToolbar {{
@@ -507,14 +583,11 @@ class LogViewerWidget(BaseWidget):
                 background: {bg_surface};
                 color: {fg_primary};
                 border: 1px solid {border_subtle}; border-radius: 14px;
-                gridline-color: {border_subtle};
-                alternate-background-color: {bg_alt};
+                gridline-color: transparent;
                 font-size: 11.5px;
             }}
-            QTableView#logTable::item:selected {{
-                background: {sel_bg};
-                color: {fg_primary};
-            }}
+            /* alternate-background-color / ::item:selected 는 _LogRowDelegate
+               가 직접 paint — QSS cascade 잔존 highlight 버그 회피 */
             QHeaderView::section {{
                 background: {bg_surface_2};
                 color: {fg_secondary};
