@@ -246,6 +246,8 @@ DEFAULT_SETTINGS = {
     "gmail_poll_interval": 5,
     "gmail_alarm_labels": ["INBOX"],
     "gmail_max_results": 50,
+    # UI 設定
+    "theme": "dark",   # "dark" | "light" — 마지막 사용자 선택, 다음 실행에 복원
 }
 
 def _validate_settings(settings: dict) -> dict:

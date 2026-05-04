@@ -114,7 +114,12 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.is_dark = True
+        # 사용자가 마지막으로 선택한 테마 복원 (settings.theme), 미설정 시 dark.
+        from app.core.config import load_settings
+        try:
+            self.is_dark = (load_settings().get("theme", "dark") != "light")
+        except Exception:
+            self.is_dark = True
         self._is_quitting = False
         self._theme_transitioning = False
 
@@ -633,6 +638,14 @@ class MainWindow(QMainWindow):
         from app.ui.theme import ThemeManager
         # 1) 글로벌 QSS 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
         ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        # 다음 실행 시 복원 — settings.theme 영구 저장
+        try:
+            from app.core.config import save_settings, load_settings
+            s = load_settings()
+            s["theme"] = "dark" if self.is_dark else "light"
+            save_settings(s)
+        except Exception as e:
+            logger.warning(f"theme 설정 저장 실패: {e}")
         # set_theme 후에도 한번 더 yield → spinner anim 작동 보장
         QApplication.processEvents()
         self.topbar.set_theme_glyph(self.is_dark)

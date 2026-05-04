@@ -1301,6 +1301,12 @@ class GmailWidget(BaseWidget):
         self._auto_refresh_timer.timeout.connect(self._auto_refresh)
 
         self._build_ui()
+        # 첫 진입 시 디자인이 default (구식) 으로 보이는 문제 fix.
+        # MainWindow._ensure_widget_created → set_theme(initial) 가 아직 hidden
+        # 인 위젯에 _pending_theme 만 마킹. showEvent 의 pending != is_dark 비교는
+        # 초기값이 같으면 (둘 다 dark) skip → apply_theme_custom 이 호출되지 않음.
+        # 명시 호출로 token 기반 QSS 를 보장.
+        self.apply_theme_custom()
         bus.google_auth_changed.connect(self._on_auth_changed)
         QTimer.singleShot(2250, self._check_auth_and_load)
 
