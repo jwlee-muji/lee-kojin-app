@@ -14,7 +14,7 @@ from typing import Optional, Callable, Literal
 
 import pyqtgraph as pg
 from PySide6.QtCore import (
-    Qt, QTimer, QSize, QEasingCurve, QVariantAnimation,
+    Qt, QEvent, QTimer, QSize, QEasingCurve, QVariantAnimation,
     QPropertyAnimation, Property,
 )
 from PySide6.QtGui import QIcon, QPixmap, QColor, QPainter, QPen, QGuiApplication
@@ -295,6 +295,10 @@ class LeeHoverPopup(QFrame):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         self._is_dark = True
+        # parent 추적 — eventFilter 에서 leaveEvent 감지 시 popup 자동 hide
+        self._tracked_parent = parent
+        if parent is not None:
+            parent.installEventFilter(self)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)   # 그림자 여백
@@ -313,6 +317,14 @@ class LeeHoverPopup(QFrame):
         self._lbl.setGraphicsEffect(shadow)
 
         self._apply_theme()
+
+    def eventFilter(self, obj, ev):
+        # parent (chart) 에서 마우스가 빠져나가면 popup 자동 hide.
+        # pg.SignalProxy.sigMouseMoved 는 scene 내부에서만 fire 되므로 위젯 경계
+        # 밖으로 빠르게 이동하면 hide 호출이 누락 — leaveEvent 로 보강.
+        if obj is self._tracked_parent and ev.type() == QEvent.Leave:
+            self.hide_popup()
+        return super().eventFilter(obj, ev)
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark

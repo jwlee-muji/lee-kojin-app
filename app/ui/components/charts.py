@@ -100,31 +100,33 @@ PivotMode = Literal["spot", "imb", "reserve"]
 def price_color(value: Optional[float], mode: PivotMode = "spot") -> Optional[tuple[str, str]]:
     """value → (bg_strong, accent) tuple. None 이면 기본색.
 
-    bg_strong: 셀 배경색 — 강조 의미 그대로 표현 (alpha 0.40~0.65)
+    bg_strong: 셀 배경색 — 강조 의미 그대로 표현 (alpha 0.50~0.85)
     accent:    legend 테두리/지표용 짙은 hue (셀 텍스트 색상으로는 사용하지 않음)
 
     셀 텍스트 색상은 호출자에서 theme primary (neutral) 로 적용 — 강조는 배경으로만.
+
+    구간:
+      spot/imb (단가 ¥/kWh, 7단계): lavender → red gradient
+        < 1, 1~5, 5~10, 10~15, 15~20, 20~40, ≥40
+      reserve (예비율 %, 3단계): 단순 신호등
+        ≤ 8 빨강 / 8 < x < 10 노랑 / ≥ 10 초록
     """
     if value is None:
         return None
-    if mode == "spot":
-        if value < 5:   return ("rgba(52,168,83,0.50)",  "#0b8043")
-        if value < 10:  return ("rgba(251,188,5,0.45)",  "#a87100")
-        if value < 15:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
-        if value < 25:  return ("rgba(234,67,53,0.55)",  "#c5221f")
-        return                ("rgba(213,0,0,0.65)",     "#9b0000")
-    if mode == "imb":
-        if value < 0:   return ("rgba(52,168,83,0.50)",  "#0b8043")
-        if value < 8:   return ("rgba(251,188,5,0.45)",  "#a87100")
-        if value < 16:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
-        return                ("rgba(234,67,53,0.60)",   "#c5221f")
+    if mode == "spot" or mode == "imb":
+        # 단가 7단계 — 가장 낮은 = 밝은 파스텔 보라, 가장 높은 = 짙은 빨강
+        if value < 1:   return ("rgba(199,184,252,0.55)",  "#6650D8")  # 파스텔 라벤더
+        if value < 5:   return ("rgba(155,195,240,0.55)",  "#2E5FB0")  # 파스텔 스카이
+        if value < 10:  return ("rgba(150,215,195,0.55)",  "#2C8870")  # 파스텔 민트
+        if value < 15:  return ("rgba(220,230,165,0.60)",  "#6E8030")  # 파스텔 라임
+        if value < 20:  return ("rgba(255,200,145,0.60)",  "#B26B22")  # 파스텔 피치
+        if value < 40:  return ("rgba(245,160,160,0.65)",  "#B03030")  # 파스텔 레드
+        return                ("rgba(160,25,25,0.85)",     "#6E0000")   # 짙은 빨강
     if mode == "reserve":
-        # 낮을수록 위험
-        if value < 3:   return ("rgba(213,0,0,0.65)",    "#9b0000")
-        if value < 8:   return ("rgba(234,67,53,0.55)",  "#c5221f")
-        if value < 15:  return ("rgba(255,109,0,0.50)",  "#bf4f00")
-        if value < 25:  return ("rgba(251,188,5,0.45)",  "#a87100")
-        return                ("rgba(52,168,83,0.50)",   "#0b8043")
+        # 예비율 신호등 3단계 (낮을수록 위험)
+        if value <= 8:  return ("rgba(220,50,50,0.65)",    "#A02020")  # 빨강
+        if value < 10:  return ("rgba(255,200,60,0.55)",   "#B07020")  # 노랑
+        return                ("rgba(60,200,100,0.55)",    "#208030")  # 초록
     return None
 
 
@@ -392,15 +394,21 @@ class LeePivotTable(QFrame):
         title.setObjectName("pivotHeaderTitle")
         h.addWidget(title); h.addStretch()
 
-        # 컬러 범례
-        legend_lbl = QLabel("単価別カラー")
+        # 컬러 범례 — mode 별 라벨 / 샘플값 (각 버킷 1개씩 → 표 색상과 1:1 매칭)
+        if mode == "reserve":
+            legend_text = "予備率別カラー"
+            legend_samples = [5.0, 9.0, 15.0]                # ≤ 8 / 8< x <10 / ≥ 10
+        else:  # spot / imb
+            legend_text = "単価別カラー"
+            legend_samples = [0.5, 3.0, 7.5, 12.5, 17.5, 30.0, 50.0]  # 7 버킷 중간값
+        legend_lbl = QLabel(legend_text)
         legend_lbl.setObjectName("pivotLegendLbl")
         h.addWidget(legend_lbl)
 
         legend_box = QHBoxLayout(); legend_box.setSpacing(3)
-        for v in [2, 7, 12, 20, 30]:
+        for v in legend_samples:
             sw = QFrame(); sw.setFixedSize(22, 14); sw.setObjectName("pivotLegendSwatch")
-            c = price_color(float(v), mode)
+            c = price_color(v, mode)
             if c is not None:
                 sw.setStyleSheet(
                     f"QFrame#pivotLegendSwatch {{ background: {c[0]}; border: 1px solid {c[1]}33; border-radius: 3px; }}"
