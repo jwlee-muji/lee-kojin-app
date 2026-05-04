@@ -455,14 +455,16 @@ class _NotifPreviewRow(QFrame):
         fg_primary   = "#F2F4F7" if is_dark else "#0B1220"
         fg_secondary = "#A8B0BD" if is_dark else "#4A5567"
         fg_tertiary  = "#6B7280" if is_dark else "#8A93A6"
-        bg_surface_2 = "#1B1E26" if is_dark else "#F0F2F5"
+        border_subtle = "rgba(255,255,255,0.04)" if is_dark else "rgba(11,18,32,0.06)"
         r, g, b = _hex_to_rgb(self._color)
+        # 카드 root 와 융화 — bg transparent, 구분은 border 만으로
+        # unread 는 강조된 컬러 border, read 는 옅은 surface border
         if self._unread:
-            bg = f"rgba({r},{g},{b},0.08)"
+            bg = "transparent"
             border = f"1px solid rgba({r},{g},{b},0.30)"
         else:
-            bg = bg_surface_2
-            border = "1px solid transparent"
+            bg = "transparent"
+            border = f"1px solid {border_subtle}"
         self.setStyleSheet(f"""
             QFrame#notifPreviewRow {{
                 background: {bg};

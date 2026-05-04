@@ -210,12 +210,19 @@ class LeeSparkline(pg.PlotWidget):
             return
         x = list(range(len(values)))
         c = QColor(self._color)
-        self.plot(
-            x, values,
-            pen=pg.mkPen(self._color, width=2),
-            fillLevel=min(values) - (max(values) - min(values)) * 0.1,
-            brush=pg.mkBrush(c.red(), c.green(), c.blue(), self._fill_alpha),
-        )
+        # fill_alpha=0 이면 fill 자체 비활성화 (라인만)
+        if self._fill_alpha <= 0:
+            self.plot(
+                x, values,
+                pen=pg.mkPen(self._color, width=2),
+            )
+        else:
+            self.plot(
+                x, values,
+                pen=pg.mkPen(self._color, width=2),
+                fillLevel=min(values) - (max(values) - min(values)) * 0.1,
+                brush=pg.mkBrush(c.red(), c.green(), c.blue(), self._fill_alpha),
+            )
         self.enableAutoRange()
 
     def set_color(self, color: str) -> None:

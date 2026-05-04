@@ -314,6 +314,9 @@ class AiChatCard(LeeCard):
 
         # 미리보기 — User 버블 + AI 버블
         preview_wrap = QWidget()
+        # 부모 카드 배경 그대로 노출 (시스템 default 색 침투 차단)
+        preview_wrap.setAttribute(Qt.WA_TranslucentBackground, True)
+        preview_wrap.setStyleSheet("background: transparent;")
         prev_lay = QVBoxLayout(preview_wrap)
         prev_lay.setContentsMargins(0, 0, 0, 0); prev_lay.setSpacing(8)
 
@@ -426,18 +429,21 @@ class AiChatCard(LeeCard):
                 background: rgba(88,86,214,0.14);
                 border: 1px solid {_C_AI};
             }}
+            /* User bubble — c_ai alpha 14% (옅은 인디고 띠), 카드와 융화 */
             QLabel#aiCardUserBubble {{
-                background: {_C_AI};
-                color: white;
+                background: rgba(88,86,214,0.14);
+                color: {_C_AI};
                 border-radius: 14px;
                 border-top-right-radius: 4px;
                 padding: 8px 12px;
                 font-size: 12px;
                 line-height: 1.5;
             }}
+            /* AI bubble — transparent + border 만으로 경계 (카드 융화) */
             QLabel#aiCardAiBubble {{
-                background: {bg_surface_2};
+                background: transparent;
                 color: {fg_primary};
+                border: 1px solid {border};
                 border-radius: 14px;
                 border-top-left-radius: 4px;
                 padding: 8px 12px;

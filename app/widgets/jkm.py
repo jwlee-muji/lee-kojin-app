@@ -1159,8 +1159,10 @@ class _IndicatorTile(QFrame):
         num_row.addStretch()
         layout.addLayout(num_row)
 
-        # mini sparkline
-        self._spark = LeeSparkline(indicator.get("color", "#F4B740"), height=28, fill_alpha=60)
+        # mini sparkline — fill_alpha=0 (라인만, fill 없음)
+        # 이전엔 fill_alpha=60 이라 카드 색 위에 indicator color alpha 가 합성되어
+        # 살구색 박스처럼 보였음. 라인만으로 깔끔하게 표현.
+        self._spark = LeeSparkline(indicator.get("color", "#F4B740"), height=28, fill_alpha=0)
         layout.addWidget(self._spark)
 
         self._apply_qss()
