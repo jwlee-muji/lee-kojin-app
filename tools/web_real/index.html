@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<title>LEE Web — PowerReserve Real</title>
+
+<!-- ECharts CDN — 차트 -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<!-- Qt WebChannel — Python ↔ JS bridge -->
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+<style>
+:root[data-theme="dark"] {
+    --bg-app:        #0A0B0F;
+    --bg-surface:    #14161C;
+    --bg-surface-2:  #1B1E26;
+    --bg-surface-3:  #232730;
+    --fg-primary:    #F2F4F7;
+    --fg-secondary:  #A8B0BD;
+    --fg-tertiary:   #6B7280;
+    --border:        rgba(255,255,255,0.06);
+    --accent:        #5B8DEF;
+    --bad:           #FF453A;
+    --warn:          #FF9F0A;
+}
+:root[data-theme="light"] {
+    --bg-app:        #F5F6F8;
+    --bg-surface:    #FFFFFF;
+    --bg-surface-2:  #F0F2F5;
+    --bg-surface-3:  #E6E9EE;
+    --fg-primary:    #0B1220;
+    --fg-secondary:  #4A5567;
+    --fg-tertiary:   #8A93A6;
+    --border:        rgba(11,18,32,0.06);
+    --accent:        #5B8DEF;
+    --bad:           #FF453A;
+    --warn:          #FF9F0A;
+}
+
+* { box-sizing: border-box; }
+html, body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg-app);
+    color: var(--fg-primary);
+    transition: background 250ms cubic-bezier(0.4, 0, 0.2, 1),
+                color 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 헤더 */
+.header {
+    height: 60px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 24px;
+    gap: 14px;
+    transition: background 250ms, border-color 250ms;
+}
+.brand {
+    width: 32px; height: 32px; border-radius: 9px;
+    background: var(--accent);
+    color: white; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+}
+.title { font-size: 16px; font-weight: 700; }
+.subtitle { font-size: 11px; color: var(--fg-tertiary); }
+.spacer { flex: 1; }
+.btn {
+    background: var(--bg-surface-2);
+    color: var(--fg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0 14px; height: 36px;
+    cursor: pointer;
+    font-size: 12px; font-weight: 600;
+    transition: background 120ms, color 120ms, transform 100ms, border-color 250ms;
+}
+.btn:hover { background: var(--bg-surface-3); color: var(--fg-primary); }
+.btn:active { transform: scale(0.96); }
+.theme-btn {
+    width: 36px; height: 36px; padding: 0;
+    font-size: 16px;
+}
+
+/* body */
+.body {
+    padding: 18px;
+    display: flex; flex-direction: column;
+    gap: 14px;
+    height: calc(100vh - 60px);
+}
+
+/* KPI cards */
+.kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.kpi {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    transition: background 250ms, border-color 250ms;
+}
+.kpi-title { color: var(--fg-secondary); font-size: 12px; font-weight: 600; }
+.kpi-value {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 30px; font-weight: 700;
+    margin-top: 4px;
+}
+.kpi-unit { color: var(--fg-tertiary); font-size: 12px; margin-left: 6px; }
+
+/* main split */
+.main-split {
+    display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px;
+    flex: 1; min-height: 0;
+}
+.panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    transition: background 250ms, border-color 250ms;
+}
+
+/* pivot grid */
+.pivot {
+    display: grid;
+    grid-template-columns: 56px repeat(10, 1fr);
+    gap: 1px;
+    overflow-y: auto; overflow-x: hidden;
+    flex: 1;
+    padding-right: 4px;
+}
+.pivot-h, .pivot-t {
+    background: var(--bg-surface-2);
+    color: var(--fg-secondary);
+    font-size: 10px; font-weight: 700;
+    text-align: center;
+    padding: 5px 2px;
+    border-radius: 3px;
+    transition: background 250ms, color 250ms;
+}
+.pivot-t { font-family: "Consolas", monospace; font-weight: 500; }
+.pivot-c {
+    border-radius: 3px;
+    text-align: center;
+    padding: 5px 2px;
+    font-size: 10px; font-weight: 700;
+    font-family: "Consolas", monospace;
+    transition: background 200ms cubic-bezier(0.4, 0, 0.2, 1),
+                color 200ms;
+}
+
+/* chart */
+.chart-wrap { display: flex; flex-direction: column; gap: 8px; }
+.chart-title { color: var(--fg-primary); font-size: 13px; font-weight: 600; }
+#chart { flex: 1; min-height: 200px; }
+
+/* spinner — freeze 검출 */
+.spinner {
+    position: fixed; left: 12px; bottom: 12px;
+    width: 24px; height: 24px; border-radius: 5px;
+    background: var(--accent); opacity: 0.85;
+    animation: rotate 1.5s linear infinite;
+}
+@keyframes rotate { to { transform: rotate(360deg); } }
+
+/* metrics overlay */
+.metrics {
+    position: fixed; right: 12px; bottom: 12px;
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--fg-secondary);
+    font-size: 11px;
+    font-family: "Consolas", monospace;
+    transition: background 250ms;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div class="brand">⚡</div>
+    <div>
+        <div class="title">電力予備率</div>
+        <div class="subtitle">OCCTO 30分単位 — 10 area (mock data)</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" id="refresh-btn">↻ Refresh</button>
+    <button class="btn theme-btn" id="theme-btn">☀</button>
+</div>
+
+<div class="body">
+    <!-- KPI -->
+    <div class="kpi-row">
+        <div class="kpi">
+            <div class="kpi-title">全国平均</div>
+            <div><span class="kpi-value" id="kpi-avg" style="color: #5B8DEF">--</span><span class="kpi-unit">%</span></div>
+        </div>
+        <div class="kpi">
+            <div class="kpi-title">最低予備率</div>
+            <div><span class="kpi-value" id="kpi-min" style="color: #FF453A">--</span><span class="kpi-unit">%</span></div>
+        </div>
+        <div class="kpi">
+            <div class="kpi-title">注意エリア</div>
+            <div><span class="kpi-value" id="kpi-warn" style="color: #FF9F0A">--</span><span class="kpi-unit">件</span></div>
+        </div>
+    </div>
+
+    <!-- main split -->
+    <div class="main-split">
+        <div class="panel">
+            <div class="pivot" id="pivot"></div>
+        </div>
+        <div class="panel chart-wrap">
+            <div class="chart-title">東京 — 24h</div>
+            <div id="chart"></div>
+        </div>
+    </div>
+</div>
+
+<div class="spinner"></div>
+<div class="metrics" id="metrics">FPS: -- | refresh: -- ms | toggle: -- ms</div>
+
+<script>
+let bridge = null;
+let chart = null;
+let lastRefreshMs = 0, lastToggleMs = 0;
+let _refreshStart = 0, _toggleStart = 0;
+let fps = 60, _fpsCount = 0, _fpsLast = 0;
+
+// reserve color (실 LEE app 의 price_color reserve 모드 동일)
+function reserveColor(v) {
+    if (v <= 8)  return 'rgba(220,50,50,0.65)';
+    if (v < 10)  return 'rgba(255,200,60,0.55)';
+    return 'rgba(60,200,100,0.55)';
+}
+
+// pivot 렌더 — 480 cell DOM 직접 구성
+function renderPivot(areas, rows) {
+    const grid = document.getElementById('pivot');
+    const dark = document.documentElement.dataset.theme === 'dark';
+    const cellTextColor = dark ? '#FFFFFF' : '#0B1220';
+    const html = [];
+    // 헤더
+    html.push('<div class="pivot-h">時刻</div>');
+    for (const a of areas) html.push(`<div class="pivot-h">${a}</div>`);
+    // rows
+    for (const row of rows) {
+        html.push(`<div class="pivot-t">${row[0]}</div>`);
+        for (let i = 1; i < row.length; i++) {
+            const v = row[i];
+            html.push(
+                `<div class="pivot-c" style="background:${reserveColor(v)}; color:${cellTextColor}">${v.toFixed(1)}</div>`
+            );
+        }
+    }
+    grid.innerHTML = html.join('');
+}
+
+function renderKpi(rows) {
+    let sum = 0, n = 0, min = 999, warn = 0;
+    for (const row of rows) {
+        for (let i = 1; i < row.length; i++) {
+            const v = row[i];
+            sum += v; n += 1;
+            if (v < min) min = v;
+            if (v < 10) warn += 1;
+        }
+    }
+    document.getElementById('kpi-avg').textContent = (sum/n).toFixed(1);
+    document.getElementById('kpi-min').textContent = min.toFixed(1);
+    document.getElementById('kpi-warn').textContent = warn;
+}
+
+function renderChart(rows) {
+    if (chart === null) {
+        chart = echarts.init(document.getElementById('chart'));
+    }
+    const dark = document.documentElement.dataset.theme === 'dark';
+    const fgT = dark ? '#6B7280' : '#8A93A6';
+    const accent = '#5B8DEF';
+
+    // 東京 = areas[2] → row[3]
+    const data = rows.map((r, i) => [i, r[3]]);
+    chart.setOption({
+        animation: true, animationDuration: 300,
+        backgroundColor: 'transparent',
+        grid: { left: 36, right: 16, top: 12, bottom: 28 },
+        xAxis: {
+            type: 'value', min: 0, max: 47,
+            axisLabel: { color: fgT, fontSize: 9, fontFamily: 'Consolas' },
+            axisLine: { lineStyle: { color: fgT } },
+            splitLine: { lineStyle: { color: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' } },
+        },
+        yAxis: {
+            type: 'value', min: 0, max: 35,
+            axisLabel: { color: fgT, fontSize: 9, fontFamily: 'Consolas' },
+            axisLine: { lineStyle: { color: fgT } },
+            splitLine: { lineStyle: { color: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' } },
+        },
+        series: [{
+            type: 'line', smooth: true,
+            data: data,
+            lineStyle: { color: accent, width: 2 },
+            areaStyle: { color: accent, opacity: 0.18 },
+            symbol: 'none',
+        }],
+    });
+}
+
+function setData(payload) {
+    const { areas, rows } = payload;
+    renderPivot(areas, rows);
+    renderKpi(rows);
+    renderChart(rows);
+    // 다음 frame paint 후 elapsed 측정 + Python 으로 통보
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_refreshStart > 0) {
+            lastRefreshMs = performance.now() - _refreshStart;
+            _refreshStart = 0;
+        }
+        if (bridge) bridge.markRefreshEnd();
+    }));
+}
+
+function setupBridge() {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        bridge = channel.objects.bridge;
+        // 초기 데이터
+        bridge.initial_data().then(json => setData(JSON.parse(json)));
+        // refresh push
+        bridge.dataPushed.connect(json => setData(JSON.parse(json)));
+    });
+}
+
+// Theme toggle
+function toggleTheme() {
+    _toggleStart = performance.now();
+    if (bridge) bridge.toggleStart();
+    const cur = document.documentElement.dataset.theme;
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    document.getElementById('theme-btn').textContent = next === 'dark' ? '☀' : '☾';
+    // CSS transition (250ms) 끝난 뒤 측정
+    setTimeout(() => {
+        lastToggleMs = performance.now() - _toggleStart;
+        _toggleStart = 0;
+        if (bridge) bridge.markToggleEnd();
+    }, 260);
+}
+
+// FPS — requestAnimationFrame 기반
+function fpsLoop() {
+    _fpsCount += 1;
+    const now = performance.now();
+    if (_fpsLast === 0) _fpsLast = now;
+    if (now - _fpsLast >= 1000) {
+        fps = _fpsCount * 1000 / (now - _fpsLast);
+        _fpsCount = 0; _fpsLast = now;
+    }
+    document.getElementById('metrics').textContent =
+        `FPS: ${fps.toFixed(1)}  |  refresh: ${lastRefreshMs.toFixed(0)} ms  |  toggle: ${lastToggleMs.toFixed(0)} ms`;
+    requestAnimationFrame(fpsLoop);
+}
+
+// 시작
+document.getElementById('refresh-btn').addEventListener('click', () => {
+    _refreshStart = performance.now();
+    if (bridge) bridge.refresh();
+});
+document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+
+// Bridge ready 후 콜백
+window.addEventListener('load', () => {
+    setupBridge();
+    requestAnimationFrame(fpsLoop);
+
+    // Python signal listener for elapsed measurements (옵션)
+    // refresh / toggle 시간은 콘솔에 출력
+});
+</script>
+</body>
+</html>
