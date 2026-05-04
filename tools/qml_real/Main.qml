@@ -9,7 +9,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import QtCharts
 
 ApplicationWindow {
     id: root
@@ -303,54 +302,97 @@ ApplicationWindow {
                         text: "東京 — 24h"
                         color: fgPrimary; font.pixelSize: 13; font.weight: Font.DemiBold
                     }
-                    ChartView {
+                    Canvas {
+                        id: chartCanvas
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         antialiasing: true
-                        legend.visible: false
-                        backgroundColor: bgSurface
-                        plotAreaColor: "transparent"
-                        margins.top: 0; margins.bottom: 0
-                        margins.left: 0; margins.right: 0
-                        Behavior on backgroundColor { ColorAnimation { duration: 250 } }
 
-                        ValueAxis {
-                            id: axX
-                            min: 0; max: 47
-                            tickCount: 7
-                            labelsColor: fgTertiary
-                            gridLineColor: borderSubtle
-                            labelsFont.family: "Consolas"
-                            labelsFont.pixelSize: 9
-                        }
-                        ValueAxis {
-                            id: axY
-                            min: 0; max: 35
-                            tickCount: 6
-                            labelsColor: fgTertiary
-                            gridLineColor: borderSubtle
-                            labelsFont.family: "Consolas"
-                            labelsFont.pixelSize: 9
-                        }
-                        LineSeries {
-                            id: tokyoSeries
-                            axisX: axX; axisY: axY
-                            color: accent
-                            width: 2
-                        }
-                        // 데이터 갱신 시 line series 재구성
+                        property real yMin: 0
+                        property real yMax: 35
+                        property color lineColor: accent
+                        property color gridColor: borderSubtle
+                        property color labelColor: fgTertiary
+                        property color fillColor: Qt.rgba(91/255, 141/255, 239/255, 0.18)
+
                         Connections {
                             target: dataBridge
-                            function onRowsChanged() { rebuildSeries() }
+                            function onRowsChanged() { chartCanvas.requestPaint() }
                         }
-                        Component.onCompleted: rebuildSeries()
-                        function rebuildSeries() {
-                            tokyoSeries.clear()
-                            const rows = dataBridge.rows
-                            // 東京 = areas index 2 → row[3] (시간 + 10 area, 동경=index 2)
-                            for (let i = 0; i < rows.length; i++) {
-                                tokyoSeries.append(i, rows[i][3])
+                        // 테마 색 변경 시 repaint
+                        onLineColorChanged: requestPaint()
+                        onGridColorChanged: requestPaint()
+                        onLabelColorChanged: requestPaint()
+
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            const w = width, h = height
+                            ctx.clearRect(0, 0, w, h)
+
+                            const padL = 36, padR = 8, padT = 8, padB = 24
+                            const plotW = w - padL - padR
+                            const plotH = h - padT - padB
+
+                            // ── grid ─────────────────────────────────
+                            ctx.strokeStyle = gridColor
+                            ctx.lineWidth = 1
+                            ctx.fillStyle = labelColor
+                            ctx.font = "9px Consolas"
+
+                            // X grid (6 segments)
+                            for (let i = 0; i <= 6; i++) {
+                                const x = padL + (plotW * i / 6)
+                                ctx.beginPath()
+                                ctx.moveTo(x, padT)
+                                ctx.lineTo(x, padT + plotH)
+                                ctx.stroke()
+                                const hr = Math.round(i * 4)
+                                ctx.fillText(hr.toString().padStart(2, "0") + ":00",
+                                             x - 12, padT + plotH + 14)
                             }
+                            // Y grid (5 segments, 0..35)
+                            for (let i = 0; i <= 5; i++) {
+                                const y = padT + (plotH * i / 5)
+                                ctx.beginPath()
+                                ctx.moveTo(padL, y)
+                                ctx.lineTo(padL + plotW, y)
+                                ctx.stroke()
+                                const yv = Math.round(yMax - (yMax * i / 5))
+                                ctx.fillText(yv.toString(), 4, y + 3)
+                            }
+
+                            // ── line + fill ──────────────────────────
+                            const rows = dataBridge.rows
+                            if (!rows || rows.length === 0) return
+                            const n = rows.length
+                            const xStep = plotW / (n - 1)
+
+                            // fill path
+                            ctx.beginPath()
+                            ctx.moveTo(padL, padT + plotH)
+                            for (let i = 0; i < n; i++) {
+                                const v = rows[i][3]
+                                const x = padL + i * xStep
+                                const y = padT + plotH - (v / yMax) * plotH
+                                ctx.lineTo(x, y)
+                            }
+                            ctx.lineTo(padL + plotW, padT + plotH)
+                            ctx.closePath()
+                            ctx.fillStyle = fillColor
+                            ctx.fill()
+
+                            // line path
+                            ctx.beginPath()
+                            for (let i = 0; i < n; i++) {
+                                const v = rows[i][3]
+                                const x = padL + i * xStep
+                                const y = padT + plotH - (v / yMax) * plotH
+                                if (i === 0) ctx.moveTo(x, y)
+                                else ctx.lineTo(x, y)
+                            }
+                            ctx.strokeStyle = lineColor
+                            ctx.lineWidth = 2
+                            ctx.stroke()
                         }
                     }
                 }
