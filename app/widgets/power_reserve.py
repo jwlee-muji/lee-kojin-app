@@ -741,15 +741,20 @@ class PowerReserveWidget(BaseWidget):
         bus.toast_requested.emit(tr("⚠ 予備率 取得失敗"), "error")
 
     def _on_data_fetched(self, headers: list[str], rows: list[list[str]]) -> None:
-        self.set_loading(False)
-        self._last_headers = headers
-        self._last_rows = rows
-        self.refresh_btn.setEnabled(True)
-        self.status_label.setText(tr("更新完了"))
-        self._render(headers, rows)
-        date_str = self._date_input.date().toString("yyyy-MM-dd")
-        self._save_to_db(date_str, headers, rows)
-        QTimer.singleShot(0, self._refresh_yesterday_baseline)
+        from app.core.profiler import measure_block, section
+        section(f"power_reserve.refresh_complete: {len(rows)}rows × {len(headers)}cols")
+        with measure_block("power_reserve.on_data_fetched.full", slow_ms=120):
+            self.set_loading(False)
+            self._last_headers = headers
+            self._last_rows = rows
+            self.refresh_btn.setEnabled(True)
+            self.status_label.setText(tr("更新完了"))
+            with measure_block("power_reserve.render", slow_ms=80):
+                self._render(headers, rows)
+            with measure_block("power_reserve.save_db", slow_ms=50):
+                date_str = self._date_input.date().toString("yyyy-MM-dd")
+                self._save_to_db(date_str, headers, rows)
+            QTimer.singleShot(0, self._refresh_yesterday_baseline)
 
     # ──────────────────────────────────────────────────────────
     # 렌더링 (PivotTable + Bars + BigChart + KPI + DetailHeader)
@@ -765,6 +770,7 @@ class PowerReserveWidget(BaseWidget):
             self.setUpdatesEnabled(True)
 
     def _render_inner(self, headers: list[str], rows: list[list[str]]) -> None:
+        from app.core.profiler import measure_block
         low_th  = float(self.settings.get("reserve_low",  _DEFAULT_LOW))
         warn_th = float(self.settings.get("reserve_warn", _DEFAULT_WARN))
 
@@ -773,7 +779,8 @@ class PowerReserveWidget(BaseWidget):
             self._pivot_skel.stop(); self._pivot_skel.deleteLater(); self._pivot_skel = None
 
         # 1) PivotTable
-        self._pivot.set_data(headers, rows)
+        with measure_block("power_reserve.render.pivot.set_data", slow_ms=40):
+            self._pivot.set_data(headers, rows)
 
         # 2) 데이터 통계
         areas, _times = _extract_areas(headers, rows)
@@ -815,7 +822,8 @@ class PowerReserveWidget(BaseWidget):
         for s in stats:
             cur = s.get("cur") or s["avg"]
             bars_data.append((tr(s["area"]), cur, s["status"]))
-        self._bars.set_data(bars_data)
+        with measure_block("power_reserve.render.bars.set_data", slow_ms=20):
+            self._bars.set_data(bars_data)
 
         # 7) BigChart — 도쿄 시계열
         tokyo_vals = areas.get("東京", [])
@@ -825,7 +833,8 @@ class PowerReserveWidget(BaseWidget):
             if tmin >= 0 and val is not None:
                 x_minutes.append(tmin)
                 y_values.append(val)
-        self._tokyo_chart.set_data(x_minutes, y_values)
+        with measure_block("power_reserve.render.chart.set_data", slow_ms=30):
+            self._tokyo_chart.set_data(x_minutes, y_values)
 
         # 8) bus.occto_updated emit (대시보드 동기화 — 본일 최저)
         today_min_info = self._find_today_min(headers, rows)

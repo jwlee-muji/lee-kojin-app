@@ -231,6 +231,16 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
         self._restore_group_states()
 
+        # 프로파일링 (LEE_PROFILE=1 일 때만 실제 동작) — 이벤트 루프 지연 자동 모니터
+        try:
+            from app.core.profiler import EventLoopLatencyMonitor, is_enabled, section
+            if is_enabled():
+                section("LEE app started")
+                self._latency_monitor = EventLoopLatencyMonitor(self)
+                self._latency_monitor.start()
+        except Exception:
+            pass
+
         # 초기 페이지: dashboard
         self._activate_key("dashboard")
 
@@ -424,11 +434,15 @@ class MainWindow(QMainWindow):
         self.sidebar.set_active(key)
 
     def _on_item_clicked(self, key: str) -> None:
-        idx = self._key_to_idx.get(key)
-        if idx is None:
-            return
-        self._ensure_widget_created(idx)
-        self.content_stack.setCurrentIndex(idx)
+        from app.core.profiler import measure_block
+        with measure_block(f"page_nav[{key}]", slow_ms=80):
+            idx = self._key_to_idx.get(key)
+            if idx is None:
+                return
+            with measure_block(f"page_nav[{key}].ensure_widget", slow_ms=200):
+                self._ensure_widget_created(idx)
+            with measure_block(f"page_nav[{key}].set_current_index", slow_ms=50):
+                self.content_stack.setCurrentIndex(idx)
         # 사이드바 아이템 클릭은 페이지 이동만. Top 탭 / 그룹 필터는 변경하지 않음
         # (사용자가 Top 탭을 직접 클릭한 경우에만 필터링)
 
@@ -575,8 +589,10 @@ class MainWindow(QMainWindow):
     # 테마
     # ──────────────────────────────────────────────────────────────
     def _toggle_theme(self) -> None:
+        from app.core.profiler import section
         if self._theme_transitioning:
             return
+        section(f"theme_toggle: → {'light' if self.is_dark else 'dark'}")
         self._theme_transitioning = True
 
         if hasattr(self, "_theme_anim"):
@@ -636,8 +652,10 @@ class MainWindow(QMainWindow):
 
         self.is_dark = not self.is_dark
         from app.ui.theme import ThemeManager
+        from app.core.profiler import measure_block
         # 1) 글로벌 QSS 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
-        ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
+        with measure_block("theme_toggle.global_qss", slow_ms=150):
+            ThemeManager.instance().set_theme("dark" if self.is_dark else "light")
         # 다음 실행 시 복원 — settings.theme 영구 저장
         try:
             from app.core.config import save_settings, load_settings
@@ -683,21 +701,32 @@ class MainWindow(QMainWindow):
              자동으로 _pending_theme 마킹 (적용은 다음 show 시점)
           3. 결과: 1+α 위젯만 무거운 setStyleSheet 호출 → UI freeze 없음
         """
-        d = self.is_dark
-        # 1) 현재 활성 페이지 — 즉시 적용
-        cur = self.content_stack.currentWidget()
-        if cur is not None and hasattr(cur, "set_theme"):
-            cur.set_theme(d)
-        # 2) 항상 보이는 element (사이드바 / 알림 패널) — 즉시 적용
-        self.sidebar.set_theme(d)
-        self.w_notifications.setStyleSheet(UIColors.get_notification_list_style(d))
+        from app.core.profiler import measure_block
+        with measure_block("theme_toggle.sync_theme.full", slow_ms=200):
+            d = self.is_dark
+            # 1) 현재 활성 페이지 — 즉시 적용
+            cur = self.content_stack.currentWidget()
+            if cur is not None and hasattr(cur, "set_theme"):
+                cur_name = type(cur).__name__
+                with measure_block(f"theme_toggle.set_theme[{cur_name}]", slow_ms=80):
+                    cur.set_theme(d)
+            # 2) 항상 보이는 element (사이드바 / 알림 패널) — 즉시 적용
+            with measure_block("theme_toggle.sidebar", slow_ms=30):
+                self.sidebar.set_theme(d)
+            with measure_block("theme_toggle.notifications_qss", slow_ms=20):
+                self.w_notifications.setStyleSheet(
+                    UIColors.get_notification_list_style(d)
+                )
         # 3) 나머지 페이지들 — set_theme 호출 (hidden 이므로 BaseWidget 자동 lazy)
         for i in range(self.content_stack.count()):
             w = self.content_stack.widget(i)
             if w is cur:
                 continue
             if hasattr(w, "set_theme"):
-                w.set_theme(d)   # hidden → _pending_theme 마킹만 (즉시 반환)
+                with measure_block(
+                    f"theme_toggle.lazy_mark[{type(w).__name__}]", slow_ms=10,
+                ):
+                    w.set_theme(d)   # hidden → _pending_theme 마킹만 (즉시 반환)
 
     # ──────────────────────────────────────────────────────────────
     # 설정 반영 / 네트워크 / 위치
