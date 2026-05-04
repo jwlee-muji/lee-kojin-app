@@ -10,7 +10,8 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Callable, Literal
+import weakref
+from typing import ClassVar, Optional, Callable, Literal
 
 import pyqtgraph as pg
 from PySide6.QtCore import (
@@ -279,6 +280,8 @@ class LeeHoverPopup(QFrame):
     """
 
     _OFFSET = (14, -10)   # cursor 우상단 살짝 떨어진 기본 위치
+    # 활성 instance 전역 추적 — page 이동 등에서 hide_all() 일괄 호출용
+    _instances: ClassVar = weakref.WeakSet()
 
     def __init__(self, parent=None):
         # parent 가 있으면 ownership 으로 묶어 chart 파괴 시 popup 도 자동 정리
@@ -296,9 +299,22 @@ class LeeHoverPopup(QFrame):
 
         self._is_dark = True
         # parent 추적 — eventFilter 에서 leaveEvent 감지 시 popup 자동 hide
+        # pg.PlotWidget 은 QGraphicsView → mouse event 가 viewport 에서 발생하므로
+        # 둘 다 filter 대상에 포함시켜 누락 방지
         self._tracked_parent = parent
+        self._tracked_viewport = None
         if parent is not None:
             parent.installEventFilter(self)
+            if hasattr(parent, "viewport"):
+                try:
+                    vp = parent.viewport()
+                    if vp is not None:
+                        self._tracked_viewport = vp
+                        vp.installEventFilter(self)
+                except Exception:
+                    pass
+
+        LeeHoverPopup._instances.add(self)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)   # 그림자 여백
@@ -319,12 +335,27 @@ class LeeHoverPopup(QFrame):
         self._apply_theme()
 
     def eventFilter(self, obj, ev):
-        # parent (chart) 에서 마우스가 빠져나가면 popup 자동 hide.
-        # pg.SignalProxy.sigMouseMoved 는 scene 내부에서만 fire 되므로 위젯 경계
-        # 밖으로 빠르게 이동하면 hide 호출이 누락 — leaveEvent 로 보강.
-        if obj is self._tracked_parent and ev.type() == QEvent.Leave:
-            self.hide_popup()
+        # parent (chart) / viewport 에서 마우스가 빠져나가거나 위젯이 hide 되면
+        # popup 자동 hide. pg.SignalProxy.sigMouseMoved 는 scene 내부에서만 fire
+        # 되므로 위젯 경계 밖으로 빠르게 이동하면 hide 호출이 누락 — 이중 안전망.
+        if obj is self._tracked_parent or obj is self._tracked_viewport:
+            t = ev.type()
+            if t == QEvent.Leave or t == QEvent.HoverLeave or t == QEvent.Hide:
+                self.hide_popup()
         return super().eventFilter(obj, ev)
+
+    @classmethod
+    def hide_all(cls) -> None:
+        """모든 활성 LeeHoverPopup 즉시 hide — page 이동 / 모드 전환 등에서 호출.
+
+        WeakSet 사용 — Qt 가 widget 파괴 후 자동 GC 되어 stale instance 누적 없음.
+        """
+        for popup in list(cls._instances):
+            try:
+                popup.hide_popup()
+            except RuntimeError:
+                # Qt 가 underlying C++ widget 을 이미 파괴 — 무시
+                pass
 
     def set_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark

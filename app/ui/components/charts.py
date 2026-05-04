@@ -115,13 +115,14 @@ def price_color(value: Optional[float], mode: PivotMode = "spot") -> Optional[tu
         return None
     if mode == "spot" or mode == "imb":
         # 단가 7단계 — 가장 낮은 = 밝은 파스텔 보라, 가장 높은 = 짙은 빨강
-        if value < 1:   return ("rgba(199,184,252,0.55)",  "#6650D8")  # 파스텔 라벤더
-        if value < 5:   return ("rgba(155,195,240,0.55)",  "#2E5FB0")  # 파스텔 스카이
-        if value < 10:  return ("rgba(150,215,195,0.55)",  "#2C8870")  # 파스텔 민트
-        if value < 15:  return ("rgba(220,230,165,0.60)",  "#6E8030")  # 파스텔 라임
-        if value < 20:  return ("rgba(255,200,145,0.60)",  "#B26B22")  # 파스텔 피치
-        if value < 40:  return ("rgba(245,160,160,0.65)",  "#B03030")  # 파스텔 레드
-        return                ("rgba(160,25,25,0.85)",     "#6E0000")   # 짙은 빨강
+        # 채도 살짝 ↑ (이전보다 hue 가 또렷)
+        if value < 1:   return ("rgba(178,150,255,0.62)",  "#5B3FD0")  # 파스텔 라벤더
+        if value < 5:   return ("rgba(108,170,255,0.62)",  "#1E55B8")  # 파스텔 스카이
+        if value < 10:  return ("rgba(95,220,180,0.62)",   "#1E8A6E")  # 파스텔 민트
+        if value < 15:  return ("rgba(210,238,115,0.65)",  "#6A8020")  # 파스텔 라임
+        if value < 20:  return ("rgba(255,180,90,0.68)",   "#B86018")  # 파스텔 피치
+        if value < 40:  return ("rgba(255,120,120,0.72)",  "#B82828")  # 파스텔 레드
+        return                ("rgba(170,15,15,0.88)",     "#700000")   # 짙은 빨강
     if mode == "reserve":
         # 예비율 신호등 3단계 (낮을수록 위험)
         if value <= 8:  return ("rgba(220,50,50,0.65)",    "#A02020")  # 빨강
@@ -395,25 +396,33 @@ class LeePivotTable(QFrame):
         h.addWidget(title); h.addStretch()
 
         # 컬러 범례 — mode 별 라벨 / 샘플값 (각 버킷 1개씩 → 표 색상과 1:1 매칭)
+        # reserve: swatch + 텍스트 라벨 (한 눈에 어떤 색이 어떤 구간인지)
+        # spot/imb: swatch 만 (7개)
         if mode == "reserve":
-            legend_text = "予備率別カラー"
-            legend_samples = [5.0, 9.0, 15.0]                # ≤ 8 / 8< x <10 / ≥ 10
+            legend_text = "予備率"
+            legend_items = [(5.0, "≤8%"), (9.0, "8〜10%"), (15.0, "≥10%")]
         else:  # spot / imb
-            legend_text = "単価別カラー"
-            legend_samples = [0.5, 3.0, 7.5, 12.5, 17.5, 30.0, 50.0]  # 7 버킷 중간값
+            legend_text = "単価"
+            legend_items = [(v, None) for v in [0.5, 3.0, 7.5, 12.5, 17.5, 30.0, 50.0]]
         legend_lbl = QLabel(legend_text)
         legend_lbl.setObjectName("pivotLegendLbl")
         h.addWidget(legend_lbl)
 
-        legend_box = QHBoxLayout(); legend_box.setSpacing(3)
-        for v in legend_samples:
-            sw = QFrame(); sw.setFixedSize(22, 14); sw.setObjectName("pivotLegendSwatch")
+        legend_box = QHBoxLayout(); legend_box.setSpacing(4)
+        for v, item_text in legend_items:
+            sw = QFrame(); sw.setFixedSize(20, 14); sw.setObjectName("pivotLegendSwatch")
             c = price_color(v, mode)
             if c is not None:
                 sw.setStyleSheet(
                     f"QFrame#pivotLegendSwatch {{ background: {c[0]}; border: 1px solid {c[1]}33; border-radius: 3px; }}"
                 )
             legend_box.addWidget(sw)
+            if item_text:
+                tl = QLabel(item_text)
+                tl.setObjectName("pivotLegendItem")
+                legend_box.addWidget(tl)
+                # 항목 사이 간격 — 다음 swatch 앞에 작은 공간
+                legend_box.addSpacing(4)
         h.addLayout(legend_box)
 
         copy_btn = QPushButton("コピー")
@@ -684,6 +693,12 @@ class LeePivotTable(QFrame):
                 font-size: 11px;
                 color: {fg_tertiary};
                 background: transparent;
+            }}
+            QLabel#pivotLegendItem {{
+                font-size: 10px; font-weight: 600;
+                color: {fg_secondary};
+                background: transparent;
+                padding: 0 2px;
             }}
             QPushButton#pivotCopyBtn {{
                 background: {bg_surface_2};

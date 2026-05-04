@@ -165,6 +165,10 @@ class MainWindow(QMainWindow):
 
         self.content_stack = FadeStackedWidget()
         self.content_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 페이지 전환 시 모든 hover popup 강제 hide — 이전 페이지에 남아있던
+        # 차트 hover 가 implicitly hidden 후에도 화면에 표시되는 문제 차단
+        from app.ui.components.atoms import LeeHoverPopup
+        self.content_stack.currentChanged.connect(lambda _i: LeeHoverPopup.hide_all())
 
         body_layout.addWidget(self.sidebar)
         body_layout.addWidget(self.content_stack, 1)
