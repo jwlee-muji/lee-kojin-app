@@ -92,6 +92,9 @@ class LeeTopBar(QFrame):
     # ──────────────────────────────────────────────────────────
     def _build_brand(self) -> QWidget:
         box = QWidget()
+        # 탑바 (leeTopBar) bg 그대로 노출 (시스템 default 색 침투 차단)
+        box.setAttribute(Qt.WA_TranslucentBackground, True)
+        box.setStyleSheet("background: transparent;")
         h = QHBoxLayout(box)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(10)
@@ -241,6 +244,7 @@ class LeeTopBar(QFrame):
 
     def _build_right(self) -> QWidget:
         wrap = QFrame()
+        wrap.setObjectName("topBarRightWrap")
         h = QHBoxLayout(wrap)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(8)
@@ -391,6 +395,8 @@ QFrame#leeTopBar {{
     background: {bg_surface};
     border-bottom: 1px solid {border_subtle};
 }}
+/* leeTopBar 의 직접 자식 컨테이너 — 시스템 default 색 침투 차단 */
+QFrame#topBarRightWrap {{ background: transparent; }}
 
 /* ── 브랜드 ── */
 QLabel#topBarLogo {{ background: transparent; }}

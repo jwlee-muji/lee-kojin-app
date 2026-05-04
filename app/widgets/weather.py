@@ -171,6 +171,9 @@ class WeatherCard(LeeCard):
 
         # 도시 페이저 (●○○...)
         self._pager_box = QWidget()
+        # 부모 카드 배경 그대로 노출 (시스템 default 색 침투 차단)
+        self._pager_box.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._pager_box.setStyleSheet("background: transparent;")
         pager_lay = QHBoxLayout(self._pager_box)
         pager_lay.setContentsMargins(0, 8, 0, 0); pager_lay.setSpacing(4)
         pager_lay.setAlignment(Qt.AlignCenter)

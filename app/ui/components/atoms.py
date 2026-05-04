@@ -162,15 +162,21 @@ class LeeSparkline(pg.PlotWidget):
         super().__init__(parent)
         self._color = color
         self._fill_alpha = fill_alpha
-        self._explicit_card_bg = card_bg   # None 이면 ThemeManager 자동 follow
+        self._explicit_card_bg = card_bg   # None 이면 부모 카드 색 자동 follow (transparent)
         # 카드 surface 컬러 자동 결정 (명시값 우선, 없으면 현재 테마의 bg_surface)
         from app.ui.theme import ThemeManager
         tm = ThemeManager.instance()
         self._card_bg = card_bg or tm.tokens["bg_surface"]
         self.setFixedHeight(height)
-        # pyqtgraph scene + Qt viewport 모두 카드 surface 컬러로 통일 (붕뜨는 느낌 방지)
-        self.setBackground(self._card_bg)
-        self.setStyleSheet(f"background: {self._card_bg}; border: none;")
+        if card_bg is None:
+            # 자동 follow 모드 — pyqtgraph viewport / Qt 배경 모두 transparent
+            # → 부모 카드 색 (active 시 rgba 합성 포함) 그대로 노출, 모든 상태에서
+            # 색차 없음. 명시 카드 색을 강제하고 싶을 땐 set_card_bg() 호출.
+            self.setBackground(QColor(0, 0, 0, 0))
+            self.setStyleSheet("background: transparent; border: none;")
+        else:
+            self.setBackground(self._card_bg)
+            self.setStyleSheet(f"background: {self._card_bg}; border: none;")
         self.hideAxis('bottom')
         self.hideAxis('left')
         self.setMouseEnabled(False, False)
@@ -178,15 +184,19 @@ class LeeSparkline(pg.PlotWidget):
         self.getPlotItem().getViewBox().setMouseEnabled(False, False)
         self.getPlotItem().setContentsMargins(0, 0, 0, 0)
         self.getPlotItem().hideButtons()
-        # 테마 전환 시 자동으로 카드 배경 follow (명시값이 없을 때만)
+        # 테마 전환 시 자동으로 카드 배경 follow (명시값이 없을 때만 호환 유지용)
         if card_bg is None:
             tm.theme_changed.connect(self._on_theme_changed)
 
     def _on_theme_changed(self, theme: str) -> None:
-        """ThemeManager.theme_changed 시그널 핸들러 — bg_surface 자동 갱신."""
-        from app.ui.theme import TOKENS_DARK, TOKENS_LIGHT
-        bg = (TOKENS_DARK if theme == "dark" else TOKENS_LIGHT)["bg_surface"]
-        self.set_card_bg(bg)
+        """ThemeManager.theme_changed 시그널 핸들러 — auto-follow 모드는 transparent 유지."""
+        if self._explicit_card_bg is not None:
+            # 명시 색이 있으면 그 색 유지 (호환)
+            return
+        # 자동 follow 모드 — 부모 카드 배경 그대로 노출하므로 갱신 불필요
+        # 단 일부 환경에서 transparent 가 풀리는 경우를 대비해 재적용
+        self.setBackground(QColor(0, 0, 0, 0))
+        self.setStyleSheet("background: transparent; border: none;")
 
     def set_card_bg(self, color: str) -> None:
         """카드 surface 컬러로 sparkline 배경 통일 (수동 override 시 호출)."""
