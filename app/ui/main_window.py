@@ -120,6 +120,13 @@ class MainWindow(QMainWindow):
             self.is_dark = (load_settings().get("theme", "dark") != "light")
         except Exception:
             self.is_dark = True
+        # ★ ThemeManager 동기화 — 위젯 생성 전에 반드시 한 번 호출.
+        # 이전엔 ThemeManager._current_theme 가 항상 "dark" 로 시작해서 라이트
+        # 모드로 종료/재시작 시 ThemeManager.tokens 를 읽는 위젯들 (TopBar /
+        # Sidebar 일부 / Gmail 등) 이 dark 토큰으로 빌드됨. _sync_theme 은
+        # widget.set_theme 만 호출할 뿐 ThemeManager 를 갱신하지 않음.
+        from app.ui.theme import ThemeManager as _TM
+        _TM.instance().set_theme("dark" if self.is_dark else "light")
         self._is_quitting = False
         self._theme_transitioning = False
 
