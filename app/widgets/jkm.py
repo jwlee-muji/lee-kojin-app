@@ -751,6 +751,10 @@ class JkmWidget(BaseWidget):
         self._header.set_theme(d)
         for k in (self._kpi_latest, self._kpi_dod, self._kpi_wow, self._kpi_mom, self._kpi_ma4, self._kpi_ma12):
             k.set_theme(d)
+        # 6 개 지표 타일 (JKM/Henry Hub/Brent/WTI/USD-JPY/EUR-JPY) — 누락 시
+        # 내부 sparkline 의 viewport bg 가 다크 그대로 유지되어 라이트모드에서 어색
+        for tile in self._tiles.values():
+            tile.set_theme(d)
         self._seg.set_theme(d)
         self._chart_frame.set_theme(d)
         self._chart.set_theme(d)

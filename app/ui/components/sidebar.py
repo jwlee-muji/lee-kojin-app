@@ -300,9 +300,15 @@ class LeeSidebar(QFrame):
             return
         for k, info in self._items.items():
             icon_name = self._item_icons.get(k)
-            if icon_name and info.get("icon_active") is False:
-                # inactive 일 때만 테마에 따라 tinting 갱신
-                info["icon_label"].setPixmap(self._tinted_pix(icon_name, is_dark, info["color"], active=False))
+            if not icon_name:
+                continue
+            # active / inactive 모두 테마 변경 시 픽셀 다시 tinting
+            # (이전엔 inactive 만 갱신하여 라이트모드 전환 후 active 아이콘이
+            # 다크 그대로 유지되던 버그)
+            is_active = bool(info.get("icon_active"))
+            info["icon_label"].setPixmap(
+                self._tinted_pix(icon_name, is_dark, info["color"], active=is_active)
+            )
 
     # ──────────────────────────────────────────────────────────
     # 내부 — 아이템 빌더
