@@ -151,6 +151,8 @@ class ImbalanceCard(LeeCard):
 
         # ── Sparkline ─────────────────────────────────────────
         self._chart_box = QWidget()
+        self._chart_box.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._chart_box.setStyleSheet("background: transparent;")
         chart_lay = QVBoxLayout(self._chart_box)
         chart_lay.setContentsMargins(0, 8, 0, 0)
         chart_lay.setSpacing(2)

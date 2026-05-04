@@ -288,6 +288,8 @@ class PowerReserveCard(LeeCard):
 
         # ── 컬럼 헤더 ─────────────────────────────────────────────
         col_hdr = QWidget()
+        col_hdr.setAttribute(Qt.WA_TranslucentBackground, True)
+        col_hdr.setStyleSheet("background: transparent;")
         col_hdr_layout = QHBoxLayout(col_hdr)
         col_hdr_layout.setContentsMargins(0, 0, 0, 4)
         col_hdr_layout.setSpacing(10)
@@ -307,6 +309,8 @@ class PowerReserveCard(LeeCard):
 
         # ── Bar rows 컨테이너 ─────────────────────────────────────
         self._rows_box = QWidget()
+        self._rows_box.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._rows_box.setStyleSheet("background: transparent;")
         self._rows_layout = QVBoxLayout(self._rows_box)
         self._rows_layout.setContentsMargins(0, 5, 0, 0)
         self._rows_layout.setSpacing(4)

@@ -329,12 +329,16 @@ class LeeTopBar(QFrame):
         self._user_name.setText(name)
 
     def set_online(self, online: bool) -> None:
-        if online:
-            self._online_pill.setText("●  オンライン")
-            self._online_pill.setProperty("net", "online")
-        else:
-            self._online_pill.setText("●  オフライン")
-            self._online_pill.setProperty("net", "offline")
+        # Rich text — dot 는 시맨틱 컬러 (c_ok / c_bad), 텍스트는 fg_secondary 톤
+        from app.ui.theme import ThemeManager
+        t = ThemeManager.instance().tokens
+        dot_color = t["c_ok"] if online else t["c_bad"]
+        text = "オンライン" if online else "オフライン"
+        self._online_pill.setText(
+            f'<span style="color:{dot_color}">●</span>'
+            f'&nbsp;&nbsp;<span style="color:{t["fg_secondary"]}">{text}</span>'
+        )
+        self._online_pill.setProperty("net", "online" if online else "offline")
         self._online_pill.style().unpolish(self._online_pill)
         self._online_pill.style().polish(self._online_pill)
 
@@ -405,9 +409,10 @@ QLabel#topBarTitleSub {{
     letter-spacing: 0.1em;
 }}
 
-/* ── Top tabs (sunken pill 컨테이너) ── */
+/* ── Top tabs — flat (탑바 색과 통일, active 만 raised) ── */
 QFrame#topBarTabWrap {{
-    background: {bg_surface_2};
+    background: transparent;
+    border: 1px solid {border_subtle};
     border-radius: 12px;
 }}
 QPushButton#topTabBtn {{
@@ -417,7 +422,7 @@ QPushButton#topTabBtn {{
     padding: 0;
 }}
 QPushButton#topTabBtn[tabActive="true"] {{
-    background: {bg_surface};
+    background: {bg_surface_2};
 }}
 QPushButton#topTabBtn:hover[tabActive="false"] {{
     background: rgba(255,255,255,0.04);
@@ -438,14 +443,15 @@ QLabel#topTabHint {{
     background: transparent;
 }}
 
-/* ── 검색 ── */
+/* ── 검색 — 평평하게 (탑바와 톤 통일) ── */
 QFrame#topBarSearchWrap {{
-    background: {bg_surface_2};
-    border: 1px solid {border};
+    background: transparent;
+    border: 1px solid {border_subtle};
     border-radius: 10px;
 }}
 QFrame#topBarSearchWrap:focus-within {{
     border-color: {accent};
+    background: {bg_surface_2};
 }}
 QLabel#topBarSearchIcon {{
     color: {fg_tertiary};
@@ -471,22 +477,18 @@ QLabel#topBarKbdBadge {{
 }}
 
 /* ── 우측 ── */
-/* 온라인 pill — 탑바 우측의 다른 pill (테마/유저) 와 톤 통일 (bg_surface_2).
-   강조는 border + text color (c_ok / c_bad) 로만 표현해 "독립 색상으로 떠있는 느낌" 제거. */
+/* 온라인 pill — 모던 minimal: dot + text 만, 배경/테두리 없음 (탑바와 융화).
+   강조는 dot 의 컬러로만 표현 (c_ok / c_bad). */
 QLabel#topBarOnlinePill {{
-    color: {c_ok};
-    background: {bg_surface_2};
-    border: 1px solid rgba(48,209,88,0.45);
-    border-radius: 999px;
-    padding: 6px 14px;
+    color: {fg_secondary};
+    background: transparent;
+    border: none;
+    padding: 6px 10px;
     font-size: 11.5px;
-    font-weight: 700;
-    min-height: 16px;
+    font-weight: 600;
 }}
 QLabel#topBarOnlinePill[net="offline"] {{
-    color: {c_bad};
-    background: {bg_surface_2};
-    border-color: rgba(255,69,58,0.45);
+    color: {fg_secondary};
 }}
 
 QPushButton#topBarThemeBtn {{

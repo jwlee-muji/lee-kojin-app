@@ -605,6 +605,9 @@ class LeeReserveBars(QFrame):
     def _build_row(self, label: str, value: float, status: Optional[str]) -> QWidget:
         large = self._large
         row = QWidget(); row.setObjectName("rsBarRow")
+        # 부모 카드 배경 그대로 노출 (시스템 default 색 침투 차단)
+        row.setAttribute(Qt.WA_TranslucentBackground, True)
+        row.setStyleSheet("background: transparent;")
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(12)

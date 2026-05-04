@@ -371,18 +371,27 @@ class LeeSidebar(QFrame):
         info = self._items.get(item_key)
         if info is None:
             return
-        # 이미 같은 상태면 skip
+
+        def _repolish(*widgets) -> None:
+            """QSS 재적용 — property 변경 후 Qt style cascade 강제 갱신.
+
+            label 은 button 의 child 이지만 일부 환경에서 polish 가 자동
+            전파되지 않아 active 색이 inactive 전환 후에도 유지되던 문제 차단.
+            """
+            for w in widgets:
+                w.style().unpolish(w)
+                w.style().polish(w)
+
+        # 이미 같은 상태면 skip (단 button property 만 sync)
         if info.get("icon_active") == active:
-            # 그래도 button property 는 갱신
             info["btn"].setProperty("itemActive", active)
-            info["btn"].style().unpolish(info["btn"]); info["btn"].style().polish(info["btn"])
+            _repolish(info["btn"], info["label_widget"])
             return
 
         info["btn"].setProperty("itemActive", active)
-        info["btn"].style().unpolish(info["btn"]); info["btn"].style().polish(info["btn"])
-
         info["icon_label"].setProperty("itemActive", active)
-        info["icon_label"].style().unpolish(info["icon_label"]); info["icon_label"].style().polish(info["icon_label"])
+        # button + icon + label 모두 명시적 polish (label 색 잔재 차단)
+        _repolish(info["btn"], info["icon_label"], info["label_widget"])
         info["icon_active"] = active
 
         # 아이콘 픽스맵 갱신 (active 일 때 white tint, inactive 일 때 secondary)

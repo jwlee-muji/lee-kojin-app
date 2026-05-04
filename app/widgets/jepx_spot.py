@@ -204,6 +204,9 @@ class JepxSpotCard(LeeCard):
 
         # ── Sparkline + Y range 인디케이터 (오늘 모드 전용) ─────────
         self._chart_box = QWidget()
+        # 부모 LeeCard 의 배경색을 그대로 노출 (시스템 default 색 침투 차단)
+        self._chart_box.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._chart_box.setStyleSheet("background: transparent;")
         chart_layout = QVBoxLayout(self._chart_box)
         chart_layout.setContentsMargins(0, 0, 0, 0)
         chart_layout.setSpacing(2)

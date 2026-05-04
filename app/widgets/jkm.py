@@ -151,6 +151,8 @@ class JkmCard(LeeCard):
 
         # Sparkline + range
         chart_box = QWidget()
+        chart_box.setAttribute(Qt.WA_TranslucentBackground, True)
+        chart_box.setStyleSheet("background: transparent;")
         chart_lay = QVBoxLayout(chart_box)
         chart_lay.setContentsMargins(0, 8, 0, 0); chart_lay.setSpacing(2)
 
