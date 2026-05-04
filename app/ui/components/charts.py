@@ -673,6 +673,9 @@ class _BarTrack(QWidget):
         self._track_color = track_color
         self.setFixedHeight(height + 4)  # threshold 마커 여유
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # 부모 카드 배경을 그대로 노출 (paintEvent 가 background 그리지 않음)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAutoFillBackground(False)
 
     def paintEvent(self, event):
         from PySide6.QtGui import QPainter, QColor, QBrush

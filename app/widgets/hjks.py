@@ -292,8 +292,11 @@ class _MethodStackBar(QWidget):
         rect = self.rect()
         radius = rect.height() / 2.0
 
-        # 배경 (track)
-        track = QColor("#1B1E26") if self._is_dark else QColor("#F0F2F5")
+        # 배경 (track) — 카드보다 살짝 더 어두운 톤 (bg_app) 으로 inset 느낌.
+        # 이전엔 bg_surface_2 (#1B1E26 dark) 가 카드(#14161C)보다 밝아 "떠있는" 인상.
+        from app.ui.theme import ThemeManager
+        t = ThemeManager.instance().tokens
+        track = QColor(t["bg_app"])
         p.setPen(Qt.NoPen)
         p.setBrush(track)
         p.drawRoundedRect(rect, radius, radius)

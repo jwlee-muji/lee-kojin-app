@@ -156,17 +156,21 @@ class LeeSparkline(pg.PlotWidget):
         *,
         height: int = 28,
         fill_alpha: int = 38,
-        card_bg: str = "#14161C",
+        card_bg: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._color = color
         self._fill_alpha = fill_alpha
-        self._card_bg = card_bg
+        self._explicit_card_bg = card_bg   # None 이면 ThemeManager 자동 follow
+        # 카드 surface 컬러 자동 결정 (명시값 우선, 없으면 현재 테마의 bg_surface)
+        from app.ui.theme import ThemeManager
+        tm = ThemeManager.instance()
+        self._card_bg = card_bg or tm.tokens["bg_surface"]
         self.setFixedHeight(height)
         # pyqtgraph scene + Qt viewport 모두 카드 surface 컬러로 통일 (붕뜨는 느낌 방지)
-        self.setBackground(card_bg)
-        self.setStyleSheet(f"background: {card_bg}; border: none;")
+        self.setBackground(self._card_bg)
+        self.setStyleSheet(f"background: {self._card_bg}; border: none;")
         self.hideAxis('bottom')
         self.hideAxis('left')
         self.setMouseEnabled(False, False)
@@ -174,9 +178,18 @@ class LeeSparkline(pg.PlotWidget):
         self.getPlotItem().getViewBox().setMouseEnabled(False, False)
         self.getPlotItem().setContentsMargins(0, 0, 0, 0)
         self.getPlotItem().hideButtons()
+        # 테마 전환 시 자동으로 카드 배경 follow (명시값이 없을 때만)
+        if card_bg is None:
+            tm.theme_changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, theme: str) -> None:
+        """ThemeManager.theme_changed 시그널 핸들러 — bg_surface 자동 갱신."""
+        from app.ui.theme import TOKENS_DARK, TOKENS_LIGHT
+        bg = (TOKENS_DARK if theme == "dark" else TOKENS_LIGHT)["bg_surface"]
+        self.set_card_bg(bg)
 
     def set_card_bg(self, color: str) -> None:
-        """카드 surface 컬러로 sparkline 배경 통일 (테마 전환 시 호출)."""
+        """카드 surface 컬러로 sparkline 배경 통일 (수동 override 시 호출)."""
         self._card_bg = color
         self.setBackground(color)
         self.setStyleSheet(f"background: {color}; border: none;")
