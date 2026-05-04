@@ -470,6 +470,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _prefetch_all_widgets(self) -> None:
+        """백그라운드 페이지 위젯 prefetch — UI 응답성 유지를 위해 step 사이 yield."""
         pending = sorted(self._idx_factories.keys())
 
         def _step(remaining: list[int]) -> None:
@@ -477,7 +478,9 @@ class MainWindow(QMainWindow):
                 return
             idx = remaining[0]
             if idx in self._idx_factories:
+                # 한 위젯 인스턴스화 직후 즉시 paint 처리 (block 없이 다음 step 으로)
                 self._ensure_widget_created(idx)
+                QApplication.processEvents()   # paint 강제 → 다음 위젯 전 UI 응답 보장
             if len(remaining) > 1:
                 QTimer.singleShot(Timers.PREFETCH_INTERVAL_MS, lambda r=remaining[1:]: _step(r))
 
@@ -581,6 +584,21 @@ class MainWindow(QMainWindow):
         self._theme_overlay.setGeometry(self.rect())
         self._theme_overlay.show(); self._theme_overlay.raise_()
 
+        # 진행 indicator — overlay 위에 spinner 표시 (사용자에게 처리 중 안내)
+        try:
+            from app.ui.components import LeeRingSpinner
+            from app.ui.theme import TOKENS_DARK
+            self._theme_spinner = LeeRingSpinner(
+                size=56, color=TOKENS_DARK["accent"], parent=self,
+            )
+            sx = (self.width() - 56) // 2
+            sy = (self.height() - 56) // 2
+            self._theme_spinner.move(sx, sy)
+            self._theme_spinner.raise_()
+            self._theme_spinner.show()
+        except Exception:
+            self._theme_spinner = None
+
         self.is_dark = not self.is_dark
         from app.ui.theme import ThemeManager
         # 1) 글로벌 QSS 만 즉시 교체 (스냅샷 overlay 가 덮고 있어 사용자에게 보이지 않음)
@@ -596,17 +614,44 @@ class MainWindow(QMainWindow):
         self._theme_anim.finished.connect(self._theme_overlay.deleteLater)
         # 2) 무거운 per-widget set_theme 는 fade-out 완료 후에 (transition 중 stutter 방지)
         self._theme_anim.finished.connect(self._sync_theme)
+        self._theme_anim.finished.connect(self._teardown_theme_spinner)
         self._theme_anim.finished.connect(lambda: setattr(self, "_theme_transitioning", False))
         self._theme_anim.start()
 
+    def _teardown_theme_spinner(self) -> None:
+        """테마 전환 spinner 정리."""
+        sp = getattr(self, "_theme_spinner", None)
+        if sp is not None:
+            try:
+                sp.deleteLater()
+            except RuntimeError:
+                pass
+            self._theme_spinner = None
+
     def _sync_theme(self) -> None:
+        """테마 변경 시 위젯들의 set_theme 적용.
+
+        성능 최적화 (P1-7~12):
+          1. 현재 표시 중인 페이지 + sidebar + notifications 만 즉시 적용
+          2. 다른 페이지들은 BaseWidget.set_theme 가 hidden 감지하여
+             자동으로 _pending_theme 마킹 (적용은 다음 show 시점)
+          3. 결과: 1+α 위젯만 무거운 setStyleSheet 호출 → UI freeze 없음
+        """
         d = self.is_dark
+        # 1) 현재 활성 페이지 — 즉시 적용
+        cur = self.content_stack.currentWidget()
+        if cur is not None and hasattr(cur, "set_theme"):
+            cur.set_theme(d)
+        # 2) 항상 보이는 element (사이드바 / 알림 패널) — 즉시 적용
+        self.sidebar.set_theme(d)
+        self.w_notifications.setStyleSheet(UIColors.get_notification_list_style(d))
+        # 3) 나머지 페이지들 — set_theme 호출 (hidden 이므로 BaseWidget 자동 lazy)
         for i in range(self.content_stack.count()):
             w = self.content_stack.widget(i)
+            if w is cur:
+                continue
             if hasattr(w, "set_theme"):
-                w.set_theme(d)
-        self.w_notifications.setStyleSheet(UIColors.get_notification_list_style(d))
-        self.sidebar.set_theme(d)
+                w.set_theme(d)   # hidden → _pending_theme 마킹만 (즉시 반환)
 
     # ──────────────────────────────────────────────────────────────
     # 설정 반영 / 네트워크 / 위치

@@ -16,8 +16,8 @@ class Timers:
     TRAY_MESSAGE_MS         = 4000   # トレイ通知表示時間
     NETWORK_TIMEOUT_MS      = 10_000 # ネットワークリクエストタイムアウト
     RATE_LIMIT_COOLDOWN_MS  = 60_000 # AI チャットレートリミット後クールダウン
-    PREFETCH_DELAY_MS       = 5_000  # 起動後プリフェッチ開始遅延
-    PREFETCH_INTERVAL_MS    = 400    # プリフェッチ間隔 (ウィジェット間)
+    PREFETCH_DELAY_MS       = 6_500  # 起動後プリフェッチ開始遅延 (첫 dashboard paint 완료 + 여유)
+    PREFETCH_INTERVAL_MS    = 700    # プリフェッチ間隔 — 위젯 인스턴스화 사이 yield 늘려 UI 응답성 유지
 
 
 class Animations:

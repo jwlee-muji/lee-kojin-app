@@ -379,6 +379,12 @@ class BaseWidget(QWidget):
         super().showEvent(event)
         if getattr(self, '_settings_dirty', False):
             self.apply_settings()
+        # 보류 중인 테마 적용 (set_theme 가 hidden 시 dirty 마킹만 했던 경우)
+        pending = getattr(self, "_pending_theme", None)
+        if pending is not None and pending != self.is_dark:
+            self.is_dark = pending
+            self.apply_theme_custom()
+            self._pending_theme = None
         # P1-8 — hideEvent 에서 멈춘 timer 들 재개
         for t in self._auto_pause_timers:
             try:
@@ -389,7 +395,17 @@ class BaseWidget(QWidget):
                 pass
 
     def set_theme(self, is_dark: bool):
+        """테마 적용. 위젯이 hidden 상태면 dirty 마킹만 + 다음 show 시 적용 (성능).
+
+        대형 페이지 위젯 16+ 가 동시에 set_theme 호출되면 UI freeze 가 발생.
+        현재 보이지 않는 페이지는 어차피 paint 안 되므로 적용을 지연.
+        showEvent 가 _pending_theme 와 self.is_dark 비교 후 다르면 적용.
+        """
+        if not self.isVisible():
+            self._pending_theme = is_dark   # 마킹만 (self.is_dark 는 변경 X)
+            return
         self.is_dark = is_dark
+        self._pending_theme = None
         self.apply_theme_custom()
 
     def apply_theme_custom(self):
